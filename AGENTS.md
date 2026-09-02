@@ -16,15 +16,15 @@ This repository is not a throwaway prototype. Architectural decisions must favor
 2. **Every external side effect goes through the Tool Gateway.**
 3. **Every agent has an explicit identity, mission, permissions, tool set, memory scope, budget, and version.**
 4. **PostgreSQL is the primary system of record.** Google Sheets, Excel, dashboards, and exports are views/integrations, not databases.
-5. **Agents do not call each other directly.** Coordination happens through durable workflows, typed domain events, and approved shared state.
+5. **Agents do not call each other directly.** Deterministic application workflows coordinate agents through the Agent Runtime, durable workflows, typed domain events, and approved shared state.
 6. **Deterministic business logic stays deterministic.** Scheduling, permissions, inventory arithmetic, retries, idempotency, validation, billing, and security controls must not depend on LLM judgment.
-7. **All AI/model/media vendors sit behind provider abstractions.**
+7. **All AI/model/media vendors sit behind provider abstractions with explicit capability discovery.** Providers are not assumed to be interchangeable.
 8. **All consequential actions are auditable.**
 9. **Research and external content are untrusted input.**
 10. **Insights are not facts by default.** AI-generated insights require evidence, scope, confidence, timestamps, provenance, and expiration/revalidation.
 11. **Human approval is a first-class primitive.**
 12. **Multi-tenancy is designed from day one.**
-13. **Use explicit typed contracts.**
+13. **Use explicit typed contracts with one canonical source per boundary.**
 14. **Prefer modular monolith boundaries before premature microservices.**
 15. **Context minimization is mandatory.**
 16. **PII is isolated from unrelated agents.**
@@ -64,9 +64,13 @@ Before meaningful implementation work:
 
 Preferred direction:
 
-`UI/API → Application Services/Workflows → Domain → Ports/Interfaces`
+`Delivery adapters → Application services/use cases → Domain`
 
-Infrastructure implements ports and may depend inward. Domain modules must not import provider SDKs, database drivers, web frameworks, or vendor-specific code.
+Application/domain boundaries own outbound ports. Infrastructure implements those ports and may depend inward. Domain modules depend only on domain code and a deliberately small pure shared kernel. They must not import FastAPI, SQLAlchemy or database drivers, the OpenAI SDK, provider SDKs, the Temporal SDK, or external service clients.
+
+Workers import reusable application packages, never FastAPI route modules. Cross-context access uses public application interfaces or versioned contracts; one context must not write another context's tables directly.
+
+API contracts originate from backend OpenAPI and generate TypeScript clients/types. Event and tool contracts originate from versioned language-neutral canonical schemas. Parallel handwritten Python and TypeScript DTOs are not authoritative contracts.
 
 ## Required Agent Definition
 
@@ -96,6 +100,8 @@ Outputs used downstream must be structured and schema validated.
 
 Agents request tools; agents do not execute external APIs directly.
 
+The Tool Gateway is a logical enforcement protocol, not necessarily one deployable service. It governs external side effects and privileged connector operations. Ordinary internal domain/application reads and writes do not pass through it.
+
 The Tool Gateway enforces:
 
 - tenant identity
@@ -115,6 +121,16 @@ The Tool Gateway enforces:
 - normalized response
 - error classification
 
+These responsibilities may be separated into policy decision, approval validation, invocation orchestration, idempotency, connector execution, credential resolution, audit, and event recording components while preserving one end-to-end contract.
+
+## Commands and Events
+
+- Commands express an intent and may be rejected; events are immutable facts that already occurred.
+- Events must not be used as disguised commands.
+- Deterministic application workflows may invoke an Agent Runtime synchronously, validate and persist the result, and publish resulting facts transactionally.
+- Not every internal function call should become asynchronous.
+- Cross-context event publication uses a transactional outbox; consumers assume duplicate delivery and use an idempotent inbox or equivalent deduplication.
+
 ## Action Risk Levels
 
 - **R0:** read-only internal data
@@ -127,6 +143,33 @@ The Tool Gateway enforces:
 - **R7:** credentials, permissions, tenant/security administration
 
 R6/R7 require explicit human approval by default. R4/R5 may be tenant-configurable but remain policy controlled and auditable.
+
+## Phase 0 Security Invariants
+
+### Tenant relationships and RLS
+
+- Tenant-owned relationships must not reference resources owned by another tenant. Use same-tenant composite constraints and foreign keys where practical.
+- Tenant context is explicit and transaction scoped. Missing tenant context fails closed.
+- Pooled database connections must not leak tenant context between requests or jobs.
+- Runtime database roles are separate from migration, maintenance, and administrative roles.
+
+### Authoritative identity
+
+- Tenant, actor, agent-version, and run identity come from trusted authenticated runtime state.
+- Prompts, model output, tool arguments, and browser-controlled fields are never authoritative identity sources.
+
+### Approval and idempotency
+
+- Approval binds to the canonical normalized action, tenant, tool/version, resource, environment, policy context, and expiry so that replay and time-of-check/time-of-use changes fail closed.
+- Reauthorization occurs immediately before execution.
+- Reusing an idempotency key with a different request digest fails.
+- Execution state represents unknown external outcomes and supports reconciliation.
+
+### Research and credentials
+
+- Sanitization reduces risk but is not a complete security boundary.
+- Research ingestion and credentialed connector execution are separate trust zones.
+- Secrets are resolved only inside the connector execution boundary and never enter prompts, agent context, general events, standard logs, or tool results returned to agents.
 
 ## Architectural Change Discipline
 

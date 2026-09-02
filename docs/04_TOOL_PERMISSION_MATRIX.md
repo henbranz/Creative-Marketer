@@ -73,6 +73,8 @@ A decision should consider:
 - environment
 - feature flags
 
+Tenant, actor, agent-version, and run identity are supplied from trusted runtime state and are not accepted from prompts, model output, tool arguments, or browser-controlled fields. Risk level is an input to policy, not a complete authorization decision by itself.
+
 ## Deny by Default
 
 Unknown agent, unknown tool, unknown resource scope, malformed input, missing approval, or ambiguous tenant must result in denial.

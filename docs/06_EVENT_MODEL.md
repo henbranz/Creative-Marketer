@@ -4,6 +4,16 @@
 
 Agents must not form a brittle call chain. Domain events create loose coupling, replayability, auditability, and future extensibility.
 
+Events are not a replacement for ordinary application calls. Deterministic workflows may synchronously invoke an Agent Runtime, validate and persist the result, and then record the resulting facts. Agents still do not call other agents directly.
+
+## Commands Versus Events
+
+- A command requests work and may be rejected.
+- An event records a fact that already occurred.
+- Event consumers must not infer that an event is an imperative command.
+- Not every internal function call or state transition requires asynchronous messaging.
+- Cross-context event propagation uses transactional publication.
+
 ## Event Envelope
 
 Every event should include:
@@ -94,6 +104,19 @@ Every event should include:
 8. Sensitive payloads must be minimized; prefer references.
 9. PII should not be broadcast on the general event bus.
 10. Correlation and causation IDs are required for traceability.
+11. Tenant, actor, agent-version, and run identity are supplied by trusted runtime state, never accepted from a model-produced payload as authoritative.
+
+## Transactional Publication and Consumption
+
+PostgreSQL is the initial durability mechanism:
+
+1. an application use case writes aggregate state and an outbox record in one database transaction
+2. a publisher delivers the outbox record at least once
+3. each consumer records `(consumer_name, event_id)` in an inbox or equivalent idempotency store
+4. consumer state change and inbox acknowledgement commit atomically
+5. retries, poison messages, and terminal failures remain observable
+
+Exactly-once delivery is not assumed. Event payloads minimize PII and secrets and prefer stable references.
 
 ## Example Flow
 

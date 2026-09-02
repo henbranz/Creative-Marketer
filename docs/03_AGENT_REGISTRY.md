@@ -218,3 +218,23 @@ Each agent version should preserve:
 - rollout status
 
 Performance changes should be attributable to versions.
+
+## Definition Ownership
+
+Agent ownership is explicit; nullable `tenant_id` alone must not distinguish platform and tenant definitions.
+
+Each definition declares:
+
+- `scope_kind`: `platform` or `tenant`
+- `tenant_id`: forbidden for platform definitions and required for tenant definitions
+- optional `platform_template_id`: the platform template from which a tenant definition derives
+
+Database constraints enforce the valid combinations. Platform definitions are immutable templates, not ambient global records silently returned by tenant queries.
+
+Resolution precedence is explicit:
+
+1. an active tenant-owned definition/version selected by tenant policy
+2. an explicitly referenced active platform template/version
+3. denial when neither is configured
+
+Tenant definitions never override a platform template merely by sharing an agent type or display name. Version selection and rollout remain historically traceable.

@@ -21,6 +21,19 @@ No Researcher, Creative Strategist, Producer, Marketer, Commerce Agent, or Intel
 - configuration loading
 - development Docker compose if useful
 
+Status: completed by TASK-001.
+
+## Workstream 1.5 — Architecture Consolidation
+
+- clarify dependency direction
+- distinguish commands, synchronous application calls, and domain events
+- define Tool Gateway as a logical enforcement protocol
+- document Phase 0 security invariants
+- establish contract ownership
+- update required ADRs before persistence and governance implementation
+
+Status: completed by TASK-001.5.
+
 ## Workstream 2 — Database Foundation
 
 - PostgreSQL
@@ -132,6 +145,18 @@ Request flow:
 - error taxonomy
 - agent/tool cost fields even before real agents exist
 
+## Workstream 10.5 — Temporal Adoption Spike
+
+Keep ADR-004 proposed until a bounded spike demonstrates:
+
+- pause/resume for human approval
+- long-running media generation polling
+- durable scheduled publishing
+- crash/restart recovery
+- retry and terminal failure behavior
+
+Do not use Temporal for simple synchronous operations.
+
 ## Workstream 11 — Architectural Tests
 
 Mandatory:
@@ -147,18 +172,23 @@ Mandatory:
 
 ## Suggested Task Order
 
-1. `TASK-001` Repository and CI foundation
-2. `TASK-002` Database and tenancy
-3. `TASK-003` Agent Registry
-4. `TASK-004` Tool Registry
-5. `TASK-005` Permission Engine
-6. `TASK-006` Approval Engine
-7. `TASK-007` Audit infrastructure
-8. `TASK-008` Event contracts
-9. `TASK-009` Tool Gateway skeleton
-10. `TASK-010` Observability
-11. `TASK-011` Phase 0 architecture test suite
-12. `TASK-012` Phase 0 review and ADR updates
+1. Repository Foundation — completed by `TASK-001`
+2. Architecture Consolidation — completed by `TASK-001.5`
+3. Database + Multi-Tenancy
+4. Actor/Auth Identity Boundary
+5. Audit Foundation
+6. Agent Registry
+7. Tool Registry
+8. Permission Engine
+9. Approval + Idempotency
+10. Transactional Outbox/Inbox + Events
+11. Tool Gateway
+12. Observability
+13. Temporal Adoption Spike
+14. Architecture/Security Test Suite
+15. Phase 0 Review
+
+This sequence supersedes the earlier numeric task ordering. Detailed implementation task identifiers should be assigned without changing these dependencies. No business agent is implemented during Phase 0.
 
 ## Exit Criteria
 

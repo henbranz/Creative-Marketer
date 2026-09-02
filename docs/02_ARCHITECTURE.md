@@ -47,21 +47,55 @@ apps/
 
 services/
   worker/
-  agent-runtime/
+  research-ingestion/     # only when trust-zone isolation is needed
+  connector-executor/     # before credentialed integrations
 
 packages/
-  domain/
-  schemas/
-  events/
-  permissions/
-  provider-interfaces/
-  observability/
+  backend/
+    src/creative_marketer/
+      contexts/
+      platform/
+      bootstrap/
+  contracts/
+    openapi/
+    events/
+    tools/
+  web-client/
+
+migrations/
+tests/
+  architecture/
+  integration/
+  security/
+  contract/
+  e2e/
 
 infra/
 docs/
 ```
 
 Exact structure may evolve after Phase 0 review. Avoid service-per-agent.
+
+## Dependency Direction
+
+```text
+Delivery adapters → Application services/use cases → Domain
+Infrastructure adapters ───────────────────────────────┘
+                         implement outbound ports owned inward
+```
+
+Rules:
+
+- domain code depends only on domain code and a small pure shared kernel
+- application code depends on domain code and defines the outbound ports it needs
+- infrastructure implements ports and depends inward
+- delivery adapters, including FastAPI routes and worker entrypoints, call application use cases
+- workers import reusable application packages, never FastAPI route modules
+- cross-context access uses public application interfaces or versioned contracts
+- one context does not write another context's tables directly
+- provider and workflow SDK types never appear in domain contracts
+
+Domain modules must not import FastAPI, SQLAlchemy/database drivers, the OpenAI SDK, provider SDKs, the Temporal SDK, or external service clients. Architecture tests should enforce these rules.
 
 ## Bounded Contexts
 
@@ -114,6 +148,10 @@ ResearchSourceProvider
 
 Provider-specific fields must be contained in adapter/config layers.
 
+Provider abstraction does not imply full interchangeability. Each adapter exposes capability metadata including supported operations, models and versions, aspect ratios, synchronous/asynchronous behavior, moderation requirements, regions, cost metadata, rate limits, and feature limitations. Application services select only providers whose declared capabilities satisfy the request.
+
+Important invocations persist the selected provider, model/version, relevant capability decision, cost, external job reference, and input/output lineage. Stable domain concepts remain provider neutral; narrowly scoped provider extension data may exist only at adapter/configuration boundaries.
+
 ## Workflow Orchestration
 
 Use durable workflow orchestration for processes that:
@@ -126,6 +164,16 @@ Use durable workflow orchestration for processes that:
 - need reliable resumability
 
 Temporal is the current recommended candidate.
+
+ADR-004 remains proposed. Temporal is adopted only after a Phase 0 spike demonstrates:
+
+- pause and durable resume for human approval
+- long-running media-generation polling
+- durable scheduled publishing
+- crash/restart recovery
+- retry and non-retryable error behavior
+
+Simple synchronous operations must not use Temporal merely because it is available.
 
 ## Agent Orchestration
 
@@ -147,9 +195,32 @@ It may not:
 - grant permissions
 - perform privileged external writes by itself
 
+Deterministic application workflows may synchronously invoke a bounded Agent Runtime when that is the simplest safe operation. The workflow validates and persists the result before publishing any resulting domain facts. The agent does not directly invoke another business agent.
+
+## Tool Gateway Boundary
+
+The Tool Gateway is a logical enforcement protocol for external side effects and privileged connector operations. It may begin in the modular monolith and later be split across deployments without changing its contract.
+
+Conceptual responsibilities are:
+
+1. policy decision
+2. approval validation
+3. invocation orchestration
+4. idempotency
+5. connector execution
+6. credential resolution
+7. audit
+8. event recording
+
+Ordinary internal domain/application reads and writes do not pass through the Tool Gateway.
+
 ## Event Driven Collaboration
 
 Agents publish/consume typed domain events rather than direct calls.
+
+Commands express intent and may be rejected. Events describe immutable facts that have occurred; events must not be used as disguised commands. Not every in-process call should become asynchronous.
+
+Cross-context facts are published transactionally with the state change, using a PostgreSQL outbox initially. Consumers assume at-least-once delivery and use an inbox or equivalent idempotent deduplication. Global event ordering is not assumed.
 
 Example:
 
@@ -166,3 +237,25 @@ intelligence.insight.validated.v1
 Start with PostgreSQL.
 
 Move high-volume event/performance analytics to ClickHouse/BigQuery only when scale justifies the complexity.
+
+## Contract Ownership
+
+- Backend API contracts are the source for generated OpenAPI.
+- TypeScript API clients and DTO types are generated from that OpenAPI artifact.
+- Event and tool schemas use versioned language-neutral JSON Schema or an equivalent canonical representation.
+- Generated artifacts are reproducible and checked for drift in CI.
+- Python and TypeScript DTOs are not maintained independently as parallel sources of truth.
+
+## Explicitly Deferred Decisions
+
+Phase 0 does not yet select or fully specify:
+
+- a permanent authentication vendor
+- a production cloud or deployment topology
+- a dedicated analytics database
+- a specialized vector database beyond the initial pgvector direction
+- cross-tenant learning or aggregation
+- final object-storage vendor and topology
+- provider-specific commerce, social, research, or media integrations
+
+These decisions require product, compliance, scale, or provider evidence not yet available. Their boundaries must still be preserved during Phase 0.

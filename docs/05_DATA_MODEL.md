@@ -30,11 +30,19 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 
 ### AgentDefinition
 - id
-- tenant_id nullable for platform defaults
+- scope_kind (`platform` or `tenant`)
+- tenant_id (null only when `scope_kind = platform`)
+- platform_template_id nullable
 - agent_type
 - display_name
 - mission
 - status
+
+Ownership constraints:
+
+- `scope_kind = platform` requires `tenant_id IS NULL`
+- `scope_kind = tenant` requires `tenant_id IS NOT NULL`
+- tenant resolution references a platform template explicitly; nullable ownership never creates implicit fallback
 
 ### AgentVersion
 - id
@@ -89,7 +97,9 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 - normalized_input
 - approval_id
 - idempotency_key
+- request_digest
 - status
+- external_outcome (`not_started`, `confirmed`, `unknown`, `reconciled`)
 - external_reference
 - result_ref
 - started_at
@@ -102,6 +112,12 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 - action_type
 - risk_level
 - payload_hash
+- canonicalization_version
+- tool_id and tool_version
+- resource_type and resource_id
+- environment
+- policy_version
+- idempotency_key
 - status
 - expires_at
 - decided_by
@@ -335,3 +351,7 @@ Most tenant-owned entities should include:
 - `updated_at`
 - optional `created_by`
 - version/revision where concurrent updates matter
+
+Tenant-owned relationships must not reference a resource belonging to another tenant. Where practical, tenant-owned tables expose a unique `(tenant_id, id)` key and tenant-owned foreign keys include both columns. Application authorization remains mandatory; database constraints and RLS provide defense in depth.
+
+Database timestamps use timezone-aware UTC values. Transaction boundaries follow application use cases. State changes and their cross-context domain events are committed atomically through a transactional outbox.
