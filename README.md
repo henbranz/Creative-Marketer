@@ -97,3 +97,7 @@ Phase 0 establishes:
 - architectural invariants
 
 See [`docs/11_PHASE_0_IMPLEMENTATION_PLAN.md`](docs/11_PHASE_0_IMPLEMENTATION_PLAN.md).
+
+## Development
+
+See [`DEVELOPMENT.md`](DEVELOPMENT.md) for prerequisites, local startup, repository layout, and the complete quality-check command set.

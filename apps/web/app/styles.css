@@ -1,0 +1,54 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  background: #f4f1e8;
+  color: #17221b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 1rem;
+  padding: 3rem;
+  max-width: 52rem;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(3rem, 9vw, 7rem);
+  letter-spacing: -0.06em;
+  line-height: 0.9;
+}
+
+.eyebrow {
+  color: #a33b20;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.lede {
+  max-width: 42rem;
+  font-size: clamp(1.1rem, 2vw, 1.4rem);
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+  font-weight: 700;
+  width: fit-content;
+}
