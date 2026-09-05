@@ -139,6 +139,98 @@
         "title": "BrandProfileContract",
         "type": "object"
       },
+      "BrandProfileResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_claims": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Allowed Claims",
+            "type": "array"
+          },
+          "brand_positioning": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Brand Positioning",
+            "type": "string"
+          },
+          "brand_voice": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Brand Voice",
+            "type": "string"
+          },
+          "competitors": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Competitors",
+            "type": "array"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "industry": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Industry",
+            "type": "string"
+          },
+          "primary_language": {
+            "default": "en",
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Primary Language",
+            "type": "string"
+          },
+          "prohibited_claims": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Prohibited Claims",
+            "type": "array"
+          },
+          "provenance": {
+            "enum": ["user_provided", "imported", "ai_inferred", "validated"],
+            "title": "Provenance",
+            "type": "string"
+          },
+          "target_markets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Target Markets",
+            "type": "array"
+          },
+          "tone_attributes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Tone Attributes",
+            "type": "array"
+          },
+          "visual_style_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Visual Style Keywords",
+            "type": "array"
+          }
+        },
+        "required": ["provenance"],
+        "title": "BrandProfileResponse",
+        "type": "object"
+      },
       "BrandResponse": {
         "additionalProperties": false,
         "properties": {
@@ -169,7 +261,7 @@
             "type": "string"
           },
           "profile": {
-            "$ref": "#/components/schemas/BrandProfileContract"
+            "$ref": "#/components/schemas/BrandProfileResponse"
           },
           "slug": {
             "maxLength": 100,
@@ -209,6 +301,7 @@
         "required": [
           "name",
           "slug",
+          "profile",
           "id",
           "tenant_id",
           "created_by",
@@ -562,6 +655,11 @@
             "title": "Prohibited Messaging",
             "type": "array"
           },
+          "provenance": {
+            "enum": ["user_provided", "imported", "ai_inferred", "validated"],
+            "title": "Provenance",
+            "type": "string"
+          },
           "required_disclaimers": {
             "items": {
               "type": "string"
@@ -612,7 +710,13 @@
             "type": "array"
           }
         },
-        "required": ["product_id", "revision", "updated_at", "can_edit"],
+        "required": [
+          "product_id",
+          "revision",
+          "updated_at",
+          "can_edit",
+          "provenance"
+        ],
         "title": "BriefResponse",
         "type": "object"
       },
@@ -728,7 +832,7 @@
             "type": "string"
           },
           "profile": {
-            "$ref": "#/components/schemas/ProductProfileContract-Input"
+            "$ref": "#/components/schemas/ProductProfileContract"
           },
           "short_description": {
             "default": "",
@@ -765,7 +869,7 @@
         "title": "ProductCreate",
         "type": "object"
       },
-      "ProductProfileContract-Input": {
+      "ProductProfileContract": {
         "additionalProperties": false,
         "properties": {
           "allowed_claims": {
@@ -956,7 +1060,7 @@
         "title": "ProductProfileContract",
         "type": "object"
       },
-      "ProductProfileContract-Output": {
+      "ProductProfileResponse": {
         "additionalProperties": false,
         "properties": {
           "allowed_claims": {
@@ -1078,6 +1182,11 @@
             "title": "Prohibited Claims",
             "type": "array"
           },
+          "provenance": {
+            "enum": ["user_provided", "imported", "ai_inferred", "validated"],
+            "title": "Provenance",
+            "type": "string"
+          },
           "purchase_objections": {
             "items": {
               "type": "string"
@@ -1135,7 +1244,8 @@
             "type": "array"
           }
         },
-        "title": "ProductProfileContract",
+        "required": ["provenance"],
+        "title": "ProductProfileResponse",
         "type": "object"
       },
       "ProductResponse": {
@@ -1179,7 +1289,7 @@
             "type": "string"
           },
           "profile": {
-            "$ref": "#/components/schemas/ProductProfileContract-Output"
+            "$ref": "#/components/schemas/ProductProfileResponse"
           },
           "short_description": {
             "default": "",
@@ -1226,6 +1336,7 @@
           "name",
           "slug",
           "category",
+          "profile",
           "id",
           "tenant_id",
           "brand_id",
@@ -1252,7 +1363,7 @@
             "type": "string"
           },
           "profile": {
-            "$ref": "#/components/schemas/ProductProfileContract-Input"
+            "$ref": "#/components/schemas/ProductProfileContract"
           },
           "short_description": {
             "default": "",

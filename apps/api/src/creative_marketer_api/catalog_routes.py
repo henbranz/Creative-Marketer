@@ -72,6 +72,10 @@ class BrandProfileContract(Contract):
     competitors: list[str] = Field(default_factory=list, max_length=30)
 
 
+class BrandProfileResponse(BrandProfileContract):
+    provenance: Literal["user_provided", "imported", "ai_inferred", "validated"]
+
+
 class BrandWrite(Contract):
     name: str = Field(min_length=1, max_length=200)
     slug: str = Field(min_length=1, max_length=100)
@@ -87,6 +91,7 @@ class BrandResponse(BrandWrite):
     created_at: datetime
     updated_at: datetime
     can_edit: bool = False
+    profile: BrandProfileResponse
 
 
 class ProductProfileContract(Contract):
@@ -109,6 +114,10 @@ class ProductProfileContract(Contract):
     seasonality_notes: str | None = Field(default=None, max_length=2000)
     landing_page_url: str | None = Field(default=None, max_length=2048)
     competitor_product_refs: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ProductProfileResponse(ProductProfileContract):
+    provenance: Literal["user_provided", "imported", "ai_inferred", "validated"]
 
 
 class BriefContract(Contract):
@@ -153,6 +162,7 @@ class ProductResponse(ProductWrite):
     created_at: datetime
     updated_at: datetime
     can_edit: bool = False
+    profile: ProductProfileResponse
 
 
 class ProductCreate(ProductWrite):
@@ -164,6 +174,7 @@ class BriefResponse(BriefContract):
     revision: int
     updated_at: datetime
     can_edit: bool
+    provenance: Literal["user_provided", "imported", "ai_inferred", "validated"]
 
 
 class CompletenessResponse(Contract):
@@ -272,7 +283,7 @@ def _brand_response(brand: Brand, profile: BrandProfile, can_edit: bool) -> Bran
         created_at=brand.created_at,
         updated_at=brand.updated_at,
         can_edit=can_edit,
-        profile=BrandProfileContract(
+        profile=BrandProfileResponse(
             industry=profile.industry,
             description=profile.description,
             brand_positioning=profile.brand_positioning,
@@ -284,6 +295,7 @@ def _brand_response(brand: Brand, profile: BrandProfile, can_edit: bool) -> Bran
             allowed_claims=list(profile.allowed_claims),
             prohibited_claims=list(profile.prohibited_claims),
             competitors=list(profile.competitors),
+            provenance=profile.provenance.value,
         ),
     )
 
@@ -304,8 +316,8 @@ def _product_response(product: Product, profile: ProductProfile, can_edit: bool)
         created_at=product.created_at,
         updated_at=product.updated_at,
         can_edit=can_edit,
-        profile=ProductProfileContract(
-            **{key: value[key] for key in ProductProfileContract.model_fields}
+        profile=ProductProfileResponse(
+            **{key: value[key] for key in ProductProfileResponse.model_fields}
         ),
     )
 

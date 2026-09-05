@@ -23,6 +23,7 @@ const brand = {
     allowed_claims: [],
     prohibited_claims: [],
     competitors: [],
+    provenance: "user_provided" as const,
   },
   created_by: "30000000-0000-0000-0000-000000000001",
   created_at: "2026-09-05T00:00:00Z",
@@ -68,6 +69,7 @@ const product = {
     seasonality_notes: null,
     landing_page_url: null,
     competitor_product_refs: [],
+    provenance: "user_provided" as const,
   },
   created_by: brand.created_by,
   created_at: brand.created_at,
@@ -107,6 +109,7 @@ const brief = {
   required_disclaimers: [],
   legal_safety_constraints: [],
   geographical_restrictions: [],
+  provenance: "user_provided" as const,
 };
 const workspace: Workspace = {
   brand,

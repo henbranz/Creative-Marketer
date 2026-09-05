@@ -108,7 +108,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
       - run: npm ci
+      - run: uv sync --frozen --project apps/api
       - run: npm run contracts:check
       - run: npm run lint
       - run: npm run format:check

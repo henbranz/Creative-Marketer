@@ -378,7 +378,8 @@ async def test_product_state_audit_and_outbox_rollback_atomically(
                 await connection.execute(
                     text(
                         "SELECT "
-                        "(SELECT count(*) FROM audit.audit_records), "
+                        "(SELECT count(*) FROM audit.audit_records "
+                        "WHERE action LIKE 'catalog.%'), "
                         "(SELECT count(*) FROM event_delivery.outbox_events)"
                     )
                 )
@@ -419,7 +420,8 @@ async def test_product_state_audit_and_outbox_rollback_atomically(
                 await connection.execute(
                     text(
                         "SELECT "
-                        "(SELECT count(*) FROM audit.audit_records), "
+                        "(SELECT count(*) FROM audit.audit_records "
+                        "WHERE action LIKE 'catalog.%'), "
                         "(SELECT count(*) FROM event_delivery.outbox_events)"
                     )
                 )

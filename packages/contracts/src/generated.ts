@@ -292,6 +292,51 @@ export interface components {
       /** Visual Style Keywords */
       visual_style_keywords?: string[];
     };
+    /** BrandProfileResponse */
+    BrandProfileResponse: {
+      /** Allowed Claims */
+      allowed_claims?: string[];
+      /**
+       * Brand Positioning
+       * @default
+       */
+      brand_positioning: string;
+      /**
+       * Brand Voice
+       * @default
+       */
+      brand_voice: string;
+      /** Competitors */
+      competitors?: string[];
+      /**
+       * Description
+       * @default
+       */
+      description: string;
+      /**
+       * Industry
+       * @default
+       */
+      industry: string;
+      /**
+       * Primary Language
+       * @default en
+       */
+      primary_language: string;
+      /** Prohibited Claims */
+      prohibited_claims?: string[];
+      /**
+       * Provenance
+       * @enum {string}
+       */
+      provenance: "user_provided" | "imported" | "ai_inferred" | "validated";
+      /** Target Markets */
+      target_markets?: string[];
+      /** Tone Attributes */
+      tone_attributes?: string[];
+      /** Visual Style Keywords */
+      visual_style_keywords?: string[];
+    };
     /** BrandResponse */
     BrandResponse: {
       /**
@@ -316,7 +361,7 @@ export interface components {
       id: string;
       /** Name */
       name: string;
-      profile?: components["schemas"]["BrandProfileContract"];
+      profile: components["schemas"]["BrandProfileResponse"];
       /** Slug */
       slug: string;
       /**
@@ -462,6 +507,11 @@ export interface components {
       product_why: string;
       /** Prohibited Messaging */
       prohibited_messaging?: string[];
+      /**
+       * Provenance
+       * @enum {string}
+       */
+      provenance: "user_provided" | "imported" | "ai_inferred" | "validated";
       /** Required Disclaimers */
       required_disclaimers?: string[];
       /** Revision */
@@ -533,7 +583,7 @@ export interface components {
       category: string;
       /** Name */
       name: string;
-      profile?: components["schemas"]["ProductProfileContract-Input"];
+      profile?: components["schemas"]["ProductProfileContract"];
       /**
        * Short Description
        * @default
@@ -551,7 +601,7 @@ export interface components {
       status: "draft" | "active" | "archived";
     };
     /** ProductProfileContract */
-    "ProductProfileContract-Input": {
+    ProductProfileContract: {
       /** Allowed Claims */
       allowed_claims?: string[];
       /** Benefits */
@@ -594,8 +644,8 @@ export interface components {
       /** Variants */
       variants?: string[];
     };
-    /** ProductProfileContract */
-    "ProductProfileContract-Output": {
+    /** ProductProfileResponse */
+    ProductProfileResponse: {
       /** Allowed Claims */
       allowed_claims?: string[];
       /** Benefits */
@@ -625,6 +675,11 @@ export interface components {
       problems_solved?: string[];
       /** Prohibited Claims */
       prohibited_claims?: string[];
+      /**
+       * Provenance
+       * @enum {string}
+       */
+      provenance: "user_provided" | "imported" | "ai_inferred" | "validated";
       /** Purchase Objections */
       purchase_objections?: string[];
       /** Seasonality Notes */
@@ -669,7 +724,7 @@ export interface components {
       id: string;
       /** Name */
       name: string;
-      profile?: components["schemas"]["ProductProfileContract-Output"];
+      profile: components["schemas"]["ProductProfileResponse"];
       /**
        * Short Description
        * @default
@@ -702,7 +757,7 @@ export interface components {
       category: string;
       /** Name */
       name: string;
-      profile?: components["schemas"]["ProductProfileContract-Input"];
+      profile?: components["schemas"]["ProductProfileContract"];
       /**
        * Short Description
        * @default
