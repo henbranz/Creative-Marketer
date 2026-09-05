@@ -4,13 +4,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKeyConstraint,
     Index,
+    Integer,
     MetaData,
     String,
     Table,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_N_name)s",
@@ -88,3 +89,53 @@ memberships = Table(
     schema="identity",
 )
 Index("ix_memberships_user_id", memberships.c.user_id)
+
+audit_records = Table(
+    "audit_records",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("scope_kind", String(32), nullable=False),
+    Column("tenant_id", UUID(as_uuid=True)),
+    Column("actor_kind", String(32), nullable=False),
+    Column("actor_id", String(160)),
+    Column("action", String(160), nullable=False),
+    Column("resource_type", String(100)),
+    Column("resource_id", String(200)),
+    Column("outcome", String(32), nullable=False),
+    Column("reason_code", String(100)),
+    Column("correlation_id", UUID(as_uuid=True), nullable=False),
+    Column("causation_id", UUID(as_uuid=True)),
+    Column("occurred_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("environment", String(32), nullable=False),
+    Column("policy_version", String(100)),
+    Column("tool_name", String(160)),
+    Column("tool_version", String(100)),
+    Column("agent_definition_id", UUID(as_uuid=True)),
+    Column("agent_version_id", UUID(as_uuid=True)),
+    Column("agent_run_id", UUID(as_uuid=True)),
+    Column("before_digest", String(80)),
+    Column("after_digest", String(80)),
+    Column("safe_metadata", JSONB, nullable=False),
+    Column("audit_schema_version", Integer, nullable=False),
+    CheckConstraint(
+        "(scope_kind = 'platform' AND tenant_id IS NULL) OR "
+        "(scope_kind = 'tenant' AND tenant_id IS NOT NULL)",
+        name="audit_scope_tenant",
+    ),
+    CheckConstraint("outcome IN ('success', 'denied', 'failed', 'error')", name="audit_outcome"),
+    CheckConstraint(
+        "actor_kind IN ('user', 'workload', 'system', 'agent', 'external_principal', 'anonymous')",
+        name="audit_actor_kind",
+    ),
+    CheckConstraint("audit_schema_version >= 1", name="audit_schema_version"),
+    CheckConstraint(
+        "jsonb_typeof(safe_metadata) = 'object' AND octet_length(safe_metadata::text) <= 8192",
+        name="safe_metadata_shape_size",
+    ),
+    schema="audit",
+)
+Index("ix_audit_records_tenant_occurred", audit_records.c.tenant_id, audit_records.c.occurred_at)
+Index("ix_audit_records_actor_occurred", audit_records.c.actor_id, audit_records.c.occurred_at)
+Index("ix_audit_records_correlation", audit_records.c.correlation_id)
+Index("ix_audit_records_action_occurred", audit_records.c.action, audit_records.c.occurred_at)
+Index("ix_audit_records_resource", audit_records.c.resource_type, audit_records.c.resource_id)

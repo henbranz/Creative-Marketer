@@ -3,6 +3,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from creative_marketer.audit.application import AuditWriter
+from creative_marketer.audit.domain import AuditRecord
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.errors import EntityNotFoundError
 from creative_marketer.identity.application.ports import (
@@ -79,6 +81,11 @@ class ExternalIdentityRepo:
         return None
 
 
+class FakeAuditWriter:
+    async def append(self, record: AuditRecord) -> None:
+        del record
+
+
 class FakeUow:
     def __init__(self, factory: "FakeUowFactory", context: TenantContext | None) -> None:
         self.factory = factory
@@ -88,6 +95,7 @@ class FakeUow:
             factory.memberships, None if context is None else context.tenant_id
         )
         self.external_identities: ExternalIdentityRepository = ExternalIdentityRepo()
+        self.audit: AuditWriter = FakeAuditWriter()
         self.committed = False
 
     async def __aenter__(self) -> "FakeUow":

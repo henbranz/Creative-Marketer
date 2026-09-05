@@ -2,6 +2,7 @@ from types import TracebackType
 from typing import Protocol
 from uuid import UUID
 
+from creative_marketer.audit.application import AuditWriter
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.domain import ExternalIdentity, Membership, Tenant, User
 
@@ -32,6 +33,7 @@ class UnitOfWork(Protocol):
     users: UserRepository
     external_identities: ExternalIdentityRepository
     memberships: MembershipRepository
+    audit: AuditWriter
 
     async def __aenter__(self) -> "UnitOfWork": ...
     async def __aexit__(

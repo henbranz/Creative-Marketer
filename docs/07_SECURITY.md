@@ -197,6 +197,33 @@ Never log:
 
 Audit metadata should remain useful without exposing secrets.
 
+## Security Audit
+
+Audit is accountability evidence and is not an application log, domain event, or telemetry span.
+The Phase 0 flow is explicit: trusted `Actor`/`ExecutionContext` → audit builder → inward-owned
+`AuditWriter` → PostgreSQL adapter → `audit.audit_records`. Tenant builders derive authoritative
+actor, tenant, environment, and correlation values from the execution context. Pre-tenant unknown
+principals are represented by a keyed HMAC-SHA-256 issuer/subject fingerprint, never a fabricated
+User and never a raw subject.
+
+The runtime database role receives only `USAGE` on the audit schema and `INSERT` on the table. It
+cannot select, update, delete, or truncate records. Forced RLS checks tenant inserts against the
+transaction-local tenant setting, and scope constraints prevent platform records from carrying a
+tenant. Governed audit reads and elevated support access are intentionally not exposed yet.
+
+Metadata is recursively sanitized and obvious credential-shaped values are redacted even when
+their key is innocuous. Forbidden secret and PII fields become `[REDACTED]`; values are not logged
+elsewhere as a fallback. Metadata over 4096 canonical bytes is rejected, not truncated, and the
+persistence adapter revalidates it. Full before/after payloads are avoided in favor of canonical
+SHA-256 digests where evidence is needed.
+
+Successful governed mutations append audit in the same unit-of-work transaction. Denials and
+pre-authentication failures use an explicit platform-only standalone short transaction; tenant
+records require a trusted context-bound transaction. Audit failure is visible
+and never ignored; successful consequential work fails closed, while denial remains denial. Audit
+append itself is deliberately non-recursive. Retention, partitioning, governed readers, export,
+tamper-evident chaining, and WORM storage are deferred until policy and volume requirements exist.
+
 ## Security Tests
 
 Must include:

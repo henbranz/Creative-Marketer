@@ -18,10 +18,9 @@ from creative_marketer.identity.application.use_cases import (
     ListTenantMemberships,
 )
 from creative_marketer.identity.domain import MembershipRole
-from creative_marketer.infrastructure.database.engine import create_session_factory
-from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
+from tests.integration.support import IdentityStack
 
 
 async def seed(admin_engine: AsyncEngine) -> tuple[UUID, UUID, UUID]:
@@ -223,14 +222,14 @@ async def test_roles_and_failed_transaction_rollback(
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_use_cases_repositories_and_development_delivery(
-    admin_engine: AsyncEngine, runtime_database_url: str
+    admin_engine: AsyncEngine, runtime_database_url: str, identity_stack: IdentityStack
 ) -> None:
-    factory = SqlAlchemyUnitOfWorkFactory(create_session_factory(runtime_database_url))
+    factory, audit = identity_stack.uow_factory, identity_stack.audit
     tenant = await CreateTenant(factory)("Tenant", "tenant")
     user = await CreateUser(factory)("Person@Example.Test")
     context = TenantContext(tenant.id)
     membership = await AddMembership(factory)(context, user.id, MembershipRole.OWNER)
-    await LinkExternalIdentity(factory)(user.id, "https://dev.example", "subject-1")
+    await LinkExternalIdentity(factory, audit)(user.id, "https://dev.example", "subject-1")
 
     assert (await GetTenant(factory)(context)).id == tenant.id
     assert await ListTenantMemberships(factory)(context) == [membership]

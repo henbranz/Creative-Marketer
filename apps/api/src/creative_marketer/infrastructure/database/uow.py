@@ -3,6 +3,7 @@ from types import TracebackType
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_sessionmaker
 
+from creative_marketer.audit.application import AuditWriter
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.ports import (
     ExternalIdentityRepository,
@@ -11,6 +12,7 @@ from creative_marketer.identity.application.ports import (
     UnitOfWork,
     UserRepository,
 )
+from creative_marketer.infrastructure.database.audit import PostgresAuditWriter
 from creative_marketer.infrastructure.database.repositories import (
     SqlAlchemyExternalIdentityRepository,
     SqlAlchemyMembershipRepository,
@@ -26,6 +28,7 @@ class SqlAlchemyUnitOfWork:
     users: UserRepository
     memberships: MembershipRepository
     external_identities: ExternalIdentityRepository
+    audit: AuditWriter
 
     def __init__(
         self,
@@ -49,6 +52,7 @@ class SqlAlchemyUnitOfWork:
         self.users = SqlAlchemyUserRepository(self._session)
         self.external_identities = SqlAlchemyExternalIdentityRepository(self._session)
         self.memberships = SqlAlchemyMembershipRepository(self._session, self._context)
+        self.audit = PostgresAuditWriter(self._session)
         return self
 
     async def __aexit__(

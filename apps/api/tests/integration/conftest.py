@@ -6,6 +6,12 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
+from creative_marketer.audit.identity import IdentityAuditService
+from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
+from tests.integration.support import IdentityStack
+
 
 @pytest.fixture(scope="session")
 def admin_database_url() -> str:
@@ -27,6 +33,7 @@ def runtime_database_url() -> str:
 async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
+        await connection.execute(text("TRUNCATE audit.audit_records"))
         await connection.execute(
             text("TRUNCATE identity.memberships, identity.users, identity.tenants CASCADE")
         )
@@ -39,3 +46,12 @@ async def runtime_engine(runtime_database_url: str) -> AsyncIterator[AsyncEngine
     engine = create_async_engine(runtime_database_url, pool_size=1, max_overflow=0)
     yield engine
     await engine.dispose()
+
+
+@pytest.fixture
+def identity_stack(runtime_database_url: str) -> IdentityStack:
+    sessions = create_session_factory(runtime_database_url)
+    return IdentityStack(
+        SqlAlchemyUnitOfWorkFactory(sessions),
+        IdentityAuditService(PostgresStandaloneAuditWriter(sessions), b"test-fingerprint-key" * 2),
+    )

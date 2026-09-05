@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -31,10 +32,9 @@ from creative_marketer.identity.application.use_cases import (
     GetTenant,
 )
 from creative_marketer.identity.domain import MembershipRole
-from creative_marketer.infrastructure.database.engine import create_session_factory
-from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
+from tests.integration.support import IdentityStack
 
 
 def principal(issuer: str, subject: str) -> AuthenticatedPrincipal:
@@ -44,30 +44,32 @@ def principal(issuer: str, subject: str) -> AuthenticatedPrincipal:
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_external_identity_resolution_is_exact_and_never_email_based(
-    admin_engine: AsyncEngine, runtime_database_url: str
+    admin_engine: AsyncEngine, identity_stack: IdentityStack
 ) -> None:
-    factory = SqlAlchemyUnitOfWorkFactory(create_session_factory(runtime_database_url))
+    factory, audit = identity_stack.uow_factory, identity_stack.audit
     first = await CreateUser(factory)("same@example.test")
     second = await CreateUser(factory)("other@example.test")
-    first_identity = await LinkExternalIdentity(factory)(first.id, "https://idp-a", "CaseSensitive")
-    await LinkExternalIdentity(factory)(first.id, "https://idp-b", "second")
+    first_identity = await LinkExternalIdentity(factory, audit)(
+        first.id, "https://idp-a", "CaseSensitive"
+    )
+    await LinkExternalIdentity(factory, audit)(first.id, "https://idp-b", "second")
 
     assert (
-        await ResolveAuthenticatedUser(factory)(principal("https://idp-a", "CaseSensitive"))
+        await ResolveAuthenticatedUser(factory, audit)(principal("https://idp-a", "CaseSensitive"))
     ).id == first.id
     assert (
-        await ResolveAuthenticatedUser(factory)(principal("https://idp-b", "second"))
+        await ResolveAuthenticatedUser(factory, audit)(principal("https://idp-b", "second"))
     ).id == first.id
     with pytest.raises(UnknownExternalIdentity):
-        await ResolveAuthenticatedUser(factory)(principal("https://idp-a", "casesensitive"))
+        await ResolveAuthenticatedUser(factory, audit)(principal("https://idp-a", "casesensitive"))
     with pytest.raises(UnknownExternalIdentity):
-        await ResolveAuthenticatedUser(factory)(principal("unknown", "same@example.test"))
+        await ResolveAuthenticatedUser(factory, audit)(principal("unknown", "same@example.test"))
     with pytest.raises(DuplicateEntityError):
-        await LinkExternalIdentity(factory)(
+        await LinkExternalIdentity(factory, audit)(
             second.id, first_identity.issuer, first_identity.subject
         )
     with pytest.raises(UserDisabled):
-        await LinkExternalIdentity(factory)(uuid4(), "https://idp", "missing-user")
+        await LinkExternalIdentity(factory, audit)(uuid4(), "https://idp", "missing-user")
 
     async with admin_engine.connect() as connection:
         assert await connection.scalar(text("SELECT count(*) FROM identity.users")) == 2
@@ -81,23 +83,54 @@ async def test_external_identity_resolution_is_exact_and_never_email_based(
             {"id": first_identity.id},
         )
     with pytest.raises(UnknownExternalIdentity):
-        await ResolveAuthenticatedUser(factory)(
+        await ResolveAuthenticatedUser(factory, audit)(
             principal(first_identity.issuer, first_identity.subject)
         )
+
+    async with admin_engine.connect() as connection:
+        records = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT action, outcome, actor_kind, actor_id, reason_code, "
+                        "safe_metadata::text AS metadata FROM audit.audit_records"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+    actions = [record["action"] for record in records]
+    assert actions.count("identity.external_identity.linked") == 2
+    assert actions.count("identity.external_identity.link_failed") == 2
+    assert actions.count("authentication.succeeded") == 2
+    assert actions.count("authentication.failed") == 3
+    failed_auth = [record for record in records if record["action"] == "authentication.failed"]
+    assert all(record["outcome"] == "denied" for record in failed_auth)
+    assert all(record["actor_kind"] == "external_principal" for record in failed_auth)
+    assert all(str(record["actor_id"]).startswith("hmac-sha256:") for record in failed_auth)
+    serialized = json.dumps(records, default=str).lower()
+    for sensitive_value in (
+        "same@example.test",
+        "other@example.test",
+        "casesensitive",
+        "missing-user",
+    ):
+        assert sensitive_value not in serialized
 
 
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_statuses_membership_and_tenant_selection_are_authoritative(
-    admin_engine: AsyncEngine, runtime_database_url: str
+    admin_engine: AsyncEngine, identity_stack: IdentityStack
 ) -> None:
-    factory = SqlAlchemyUnitOfWorkFactory(create_session_factory(runtime_database_url))
+    factory, audit = identity_stack.uow_factory, identity_stack.audit
     tenant_a = await CreateTenant(factory)("Tenant A", "tenant-a")
     tenant_b = await CreateTenant(factory)("Tenant B", "tenant-b")
     user = await CreateUser(factory)("user@example.test")
-    identity = await LinkExternalIdentity(factory)(user.id, "https://idp", "subject")
+    identity = await LinkExternalIdentity(factory, audit)(user.id, "https://idp", "subject")
     await AddMembership(factory)(TenantContext(tenant_a.id), user.id, MembershipRole.MEMBER)
-    resolver = ResolveTenantExecutionContext(factory)
+    resolver = ResolveTenantExecutionContext(factory, audit)
     correlation = uuid4()
 
     context_a = await resolver(
@@ -155,20 +188,56 @@ async def test_statuses_membership_and_tenant_selection_are_authoritative(
             text("UPDATE identity.users SET status='disabled' WHERE id=:user"), {"user": user.id}
         )
     with pytest.raises(UserDisabled):
-        await ResolveAuthenticatedUser(factory)(principal(identity.issuer, identity.subject))
+        await ResolveAuthenticatedUser(factory, audit)(principal(identity.issuer, identity.subject))
+
+    async with admin_engine.connect() as connection:
+        records = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT scope_kind, tenant_id, actor_id, action, outcome, reason_code, "
+                        "correlation_id, safe_metadata FROM audit.audit_records"
+                    )
+                )
+            )
+            .mappings()
+            .all()
+        )
+    resolved = [
+        record for record in records if record["action"] == "identity.tenant_context.resolved"
+    ]
+    assert {record["tenant_id"] for record in resolved} == {tenant_a.id, tenant_b.id}
+    assert all(record["scope_kind"] == "tenant" for record in resolved)
+    assert all(record["actor_id"] == str(user.id) for record in resolved)
+    assert any(record["correlation_id"] == correlation for record in resolved)
+    assert {record["safe_metadata"]["membership_role"] for record in resolved} == {
+        "member",
+        "admin",
+    }
+    denied_reasons = {
+        record["reason_code"]
+        for record in records
+        if record["action"] == "identity.tenant_context.denied"
+    }
+    assert denied_reasons == {"tenant_access_denied", "membership_inactive", "tenant_suspended"}
+    assert all(
+        record["scope_kind"] == "platform"
+        for record in records
+        if record["action"] == "identity.tenant_context.denied"
+    )
 
 
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_http_input_cannot_forge_actor_role_tenant_or_agent_identity(
-    admin_engine: AsyncEngine, runtime_database_url: str
+    admin_engine: AsyncEngine, runtime_database_url: str, identity_stack: IdentityStack
 ) -> None:
-    factory = SqlAlchemyUnitOfWorkFactory(create_session_factory(runtime_database_url))
+    factory, audit = identity_stack.uow_factory, identity_stack.audit
     allowed = await CreateTenant(factory)("Allowed", "allowed")
     denied = await CreateTenant(factory)("Denied", "denied")
     user = await CreateUser(factory)("member@example.test")
     other_id = uuid4()
-    await LinkExternalIdentity(factory)(user.id, "https://dev", "opaque")
+    await LinkExternalIdentity(factory, audit)(user.id, "https://dev", "opaque")
     await AddMembership(factory)(TenantContext(allowed.id), user.id, MembershipRole.MEMBER)
     app = create_app(
         Settings(app_env="test", database_url=runtime_database_url, dev_identity_enabled=True)

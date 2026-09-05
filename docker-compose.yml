@@ -35,6 +35,7 @@ services:
       APP_PORT: 8000
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
       DEV_IDENTITY_ENABLED: "true"
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
       CORS_ORIGINS: '["http://localhost:3000"]'
     depends_on:
       migrate:

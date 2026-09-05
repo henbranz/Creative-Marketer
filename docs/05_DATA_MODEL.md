@@ -344,17 +344,31 @@ Customer PII should be isolated into dedicated tables/columns with stricter acce
 
 ### AuditRecord
 - id
-- tenant_id
-- actor_type
+- scope_kind (`platform` or `tenant`)
+- tenant_id (null only for platform scope)
+- actor_kind
 - actor_id
 - action
-- resource_type
-- resource_id
+- resource_type optional
+- resource_id optional
+- outcome (`success`, `denied`, `failed`, or `error`)
+- reason_code optional
 - correlation_id
-- before_hash
-- after_hash
-- timestamp
-- metadata
+- causation_id optional
+- occurred_at
+- environment
+- policy/tool/agent/run references optional
+- before_digest optional
+- after_digest optional
+- safe_metadata
+- audit_schema_version
+
+Security audit is stored in `audit.audit_records`, separately from domain events, logs, and
+telemetry. Runtime code can append but cannot read or mutate audit history. Tenant records are
+protected by forced RLS and must match transaction-local tenant context; platform records cannot
+carry a tenant. Record UUIDs and timestamps provide identity and evidence time, not global event
+ordering. Safe metadata is recursively redacted, size bounded, and revalidated immediately before
+persistence. Canonical SHA-256 digests provide compact state evidence without storing full state.
 
 ## Cross-Cutting Fields
 

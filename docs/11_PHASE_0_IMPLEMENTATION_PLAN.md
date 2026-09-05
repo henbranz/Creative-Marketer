@@ -96,6 +96,8 @@ Implement:
 
 ## Workstream 7 — Audit
 
+Status: foundation completed by `TASK-004`; later governance/tool integrations remain pending.
+
 Record:
 - actor
 - tenant
@@ -176,7 +178,7 @@ Mandatory:
 2. Architecture Consolidation — completed by `TASK-001.5`
 3. Database + Multi-Tenancy
 4. Actor/Auth Identity Boundary
-5. Audit Foundation
+5. Audit Foundation — completed by `TASK-004`
 6. Agent Registry
 7. Tool Registry
 8. Permission Engine

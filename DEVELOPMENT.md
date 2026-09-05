@@ -76,6 +76,13 @@ Migration `20260905_0002` preserves legacy issuer/subject pairs from TASK-002 wh
 
 The reusable relationship convention for future tenant-owned tables is a unique `(tenant_id, id)` target and a composite `(tenant_id, resource_id)` foreign key. Membership currently relates a tenant-owned row to a platform-scoped User, so its composite primary key `(tenant_id, user_id)`, tenant/user foreign keys, and RLS jointly prevent duplicates, orphan relationships, and cross-context attachment.
 
+Migration `20260905_0003` creates the isolated `audit.audit_records` security-evidence table. The
+runtime role has insert-only access: it cannot select, update, delete, or truncate audit history.
+Tenant-scoped inserts require the same transaction-local tenant context used by tenant data; denied
+and pre-authentication records use the explicit standalone audit writer. `AUDIT_FINGERPRINT_KEY`
+must be a deployment secret of at least 32 characters and is used only to create stable keyed
+external-principal fingerprints. The committed value is local/CI-only.
+
 Run migrations directly only with the migration URL:
 
 ```bash
