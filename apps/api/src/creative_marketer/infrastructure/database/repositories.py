@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.errors import DuplicateEntityError
 from creative_marketer.identity.domain import (
+    ExternalIdentity,
+    ExternalIdentityStatus,
     Membership,
     MembershipRole,
     MembershipStatus,
@@ -15,7 +17,12 @@ from creative_marketer.identity.domain import (
     User,
     UserStatus,
 )
-from creative_marketer.infrastructure.database.schema import memberships, tenants, users
+from creative_marketer.infrastructure.database.schema import (
+    external_identities,
+    memberships,
+    tenants,
+    users,
+)
 
 
 def _tenant(row: object) -> Tenant:
@@ -36,9 +43,20 @@ def _user(row: object) -> User:
         id=data["id"],
         email=data["email"],
         normalized_email=data["normalized_email"],
-        external_identity_issuer=data["external_identity_issuer"],
-        external_identity_subject=data["external_identity_subject"],
         status=UserStatus(data["status"]),
+        created_at=data["created_at"],
+        updated_at=data["updated_at"],
+    )
+
+
+def _external_identity(row: object) -> ExternalIdentity:
+    data = row._mapping  # type: ignore[attr-defined]
+    return ExternalIdentity(
+        id=data["id"],
+        user_id=data["user_id"],
+        issuer=data["issuer"],
+        subject=data["subject"],
+        status=ExternalIdentityStatus(data["status"]),
         created_at=data["created_at"],
         updated_at=data["updated_at"],
     )
@@ -93,8 +111,6 @@ class SqlAlchemyUserRepository:
                     id=user.id,
                     email=user.email,
                     normalized_email=user.normalized_email,
-                    external_identity_issuer=user.external_identity_issuer,
-                    external_identity_subject=user.external_identity_subject,
                     status=user.status.value,
                     created_at=user.created_at,
                     updated_at=user.updated_at,
@@ -106,6 +122,38 @@ class SqlAlchemyUserRepository:
     async def get(self, user_id: UUID) -> User | None:
         row = (await self._session.execute(select(users).where(users.c.id == user_id))).first()
         return None if row is None else _user(row)
+
+
+class SqlAlchemyExternalIdentityRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, identity: ExternalIdentity) -> None:
+        try:
+            await self._session.execute(
+                insert(external_identities).values(
+                    id=identity.id,
+                    user_id=identity.user_id,
+                    issuer=identity.issuer,
+                    subject=identity.subject,
+                    status=identity.status.value,
+                    created_at=identity.created_at,
+                    updated_at=identity.updated_at,
+                )
+            )
+        except IntegrityError as error:
+            raise DuplicateEntityError("external identity already exists or is invalid") from error
+
+    async def get(self, issuer: str, subject: str) -> ExternalIdentity | None:
+        row = (
+            await self._session.execute(
+                select(external_identities).where(
+                    external_identities.c.issuer == issuer,
+                    external_identities.c.subject == subject,
+                )
+            )
+        ).first()
+        return None if row is None else _external_identity(row)
 
 
 class SqlAlchemyMembershipRepository:

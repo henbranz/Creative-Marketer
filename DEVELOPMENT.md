@@ -70,6 +70,10 @@ Reusable backend code lives in `apps/api/src/creative_marketer`; `creative_marke
 
 Tenant-aware use cases pass an immutable `TenantContext` into a unit of work. On transaction entry the adapter calls PostgreSQL `set_config(..., true)`, equivalent to transaction-local `SET LOCAL`. Policies compare protected rows to `app.current_tenant_id`; missing or invalid context never exposes rows. Do not set this value outside the trusted application boundary.
 
+With `DEV_IDENTITY_ENABLED=true`, protected proof routes accept a synthetic bearer credential formatted as `issuer|opaque-subject`. The credential still must match an `identity.external_identities` record and an active User/Membership/Tenant chain. This adapter cannot be enabled in staging or production; those environments return an authentication-unavailable error until a production adapter is configured.
+
+Migration `20260905_0002` preserves legacy issuer/subject pairs from TASK-002 while extracting them to `identity.external_identities`. Its downgrade restores the legacy columns only when every User has at most one identity; it fails before changing the schema if that downgrade would be lossy.
+
 The reusable relationship convention for future tenant-owned tables is a unique `(tenant_id, id)` target and a composite `(tenant_id, resource_id)` foreign key. Membership currently relates a tenant-owned row to a platform-scoped User, so its composite primary key `(tenant_id, user_id)`, tenant/user foreign keys, and RLS jointly prevent duplicates, orphan relationships, and cross-context attachment.
 
 Run migrations directly only with the migration URL:

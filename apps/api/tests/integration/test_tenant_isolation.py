@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.errors import DuplicateEntityError
+from creative_marketer.identity.application.identity_resolution import LinkExternalIdentity
 from creative_marketer.identity.application.use_cases import (
     AddMembership,
     CreateTenant,
@@ -229,6 +230,7 @@ async def test_use_cases_repositories_and_development_delivery(
     user = await CreateUser(factory)("Person@Example.Test")
     context = TenantContext(tenant.id)
     membership = await AddMembership(factory)(context, user.id, MembershipRole.OWNER)
+    await LinkExternalIdentity(factory)(user.id, "https://dev.example", "subject-1")
 
     assert (await GetTenant(factory)(context)).id == tenant.id
     assert await ListTenantMemberships(factory)(context) == [membership]
@@ -248,34 +250,16 @@ async def test_use_cases_repositories_and_development_delivery(
     transport = ASGITransport(app=create_app(settings))
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
-            "/development/membership",
+            f"/v1/tenants/{tenant.id}/context",
             headers={
-                "X-Development-Tenant-ID": str(tenant.id),
-                "X-Development-User-ID": str(user.id),
+                "Authorization": "Bearer https://dev.example|subject-1",
             },
         )
-        missing = await client.get(
-            "/development/membership",
-            headers={
-                "X-Development-Tenant-ID": str(tenant.id),
-                "X-Development-User-ID": str(uuid4()),
-            },
-        )
-        tenant_response = await client.get(
-            "/development/tenant",
-            headers={"X-Development-Tenant-ID": str(tenant.id)},
-        )
-        membership_list = await client.get(
-            "/development/memberships",
-            headers={"X-Development-Tenant-ID": str(tenant.id)},
-        )
-        missing_tenant = await client.get(
-            "/development/tenant",
-            headers={"X-Development-Tenant-ID": str(uuid4())},
+        me = await client.get(
+            "/v1/me",
+            headers={"Authorization": "Bearer https://dev.example|subject-1"},
         )
     assert response.status_code == 200
-    assert response.json()["role"] == "owner"
-    assert missing.status_code == 404
-    assert tenant_response.json()["slug"] == "tenant"
-    assert membership_list.json()[0]["user_id"] == str(user.id)
-    assert missing_tenant.status_code == 404
+    assert response.json()["membership_role"] == "owner"
+    assert response.json()["user_id"] == str(user.id)
+    assert me.json() == {"actor_kind": "user", "user_id": str(user.id)}

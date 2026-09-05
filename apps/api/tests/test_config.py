@@ -1,3 +1,5 @@
+from typing import Literal
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,10 +19,13 @@ def test_settings_reject_unknown_environment() -> None:
         )
 
 
-def test_settings_reject_development_identity_in_production() -> None:
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_settings_reject_development_identity_in_deployed_environments(
+    environment: Literal["staging", "production"],
+) -> None:
     with pytest.raises(ValidationError):
         Settings(
-            app_env="production",
+            app_env=environment,
             dev_identity_enabled=True,
             database_url="postgresql+psycopg://test:test@localhost:5432/test",
         )

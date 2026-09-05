@@ -41,24 +41,36 @@ users = Table(
     "users",
     metadata,
     Column("id", UUID(as_uuid=True), primary_key=True),
-    Column("external_identity_issuer", String(500)),
-    Column("external_identity_subject", String(500)),
     Column("email", String(320), nullable=False),
     Column("normalized_email", String(320), nullable=False),
     Column("status", String(32), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    CheckConstraint(
-        "(external_identity_issuer IS NULL) = (external_identity_subject IS NULL)",
-        name="external_identity_pair",
-    ),
     CheckConstraint("email = btrim(email) AND length(email) > 0", name="user_email_trimmed"),
     CheckConstraint("normalized_email = lower(btrim(email))", name="normalized_email"),
     CheckConstraint("status IN ('active', 'disabled')", name="user_status"),
     UniqueConstraint("normalized_email"),
-    UniqueConstraint("external_identity_issuer", "external_identity_subject"),
     schema="identity",
 )
+
+external_identities = Table(
+    "external_identities",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("user_id", UUID(as_uuid=True), nullable=False),
+    Column("issuer", String(500), nullable=False),
+    Column("subject", String(500), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["user_id"], ["identity.users.id"], ondelete="CASCADE"),
+    CheckConstraint("length(btrim(issuer)) > 0", name="external_identity_issuer_present"),
+    CheckConstraint("length(subject) > 0", name="external_identity_subject_present"),
+    CheckConstraint("status IN ('active', 'disabled')", name="external_identity_status"),
+    UniqueConstraint("issuer", "subject"),
+    schema="identity",
+)
+Index("ix_external_identities_user_id", external_identities.c.user_id)
 
 memberships = Table(
     "memberships",

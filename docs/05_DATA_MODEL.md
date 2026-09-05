@@ -16,9 +16,19 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 
 ### User
 - id
-- identity_provider_id
 - email
 - status
+
+### ExternalIdentity
+- id
+- user_id
+- issuer
+- opaque subject
+- status
+- created_at
+- updated_at
+
+`(issuer, subject)` is globally unique and is the only authentication lookup key. A User may own multiple external identities. Subjects retain exact case and are never inferred or linked from email.
 
 ### Membership
 - tenant_id
@@ -28,7 +38,7 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 - created_at
 - updated_at
 
-TASK-002 stores identity records in the `identity` PostgreSQL schema. Tenant slugs and normalized user emails are unique. External identities are optional vendor-neutral `(issuer, subject)` pairs; permanent authentication remains deferred to TASK-003. Membership's `(tenant_id, user_id)` primary key allows one user to join many tenants while prohibiting duplicate relationships within one tenant.
+The identity records use the `identity` PostgreSQL schema. Tenant slugs and normalized user emails are unique. Membership's `(tenant_id, user_id)` primary key allows one user to join many tenants while prohibiting duplicate relationships within one tenant. Permanent authentication provider selection remains deferred.
 
 ## Agent Governance
 

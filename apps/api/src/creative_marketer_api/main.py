@@ -1,12 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from creative_marketer.infrastructure.authentication import (
+    DevelopmentAuthenticationAdapter,
+    UnavailableAuthenticationAdapter,
+)
 from creative_marketer.infrastructure.database import (
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
 )
+from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.config import Settings, get_settings
-from creative_marketer_api.identity_routes import create_identity_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -23,11 +27,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    if resolved_settings.dev_identity_enabled:
-        session_factory = create_session_factory(str(resolved_settings.database_url))
-        application.include_router(
-            create_identity_router(SqlAlchemyUnitOfWorkFactory(session_factory))
+    session_factory = create_session_factory(str(resolved_settings.database_url))
+    authenticator = (
+        DevelopmentAuthenticationAdapter()
+        if resolved_settings.dev_identity_enabled
+        else UnavailableAuthenticationAdapter()
+    )
+    application.include_router(
+        create_authentication_router(
+            authenticator,
+            SqlAlchemyUnitOfWorkFactory(session_factory),
+            resolved_settings.app_env,
         )
+    )
 
     @application.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

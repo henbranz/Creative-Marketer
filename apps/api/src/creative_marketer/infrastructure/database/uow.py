@@ -5,12 +5,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_
 
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.ports import (
+    ExternalIdentityRepository,
     MembershipRepository,
     TenantRepository,
     UnitOfWork,
     UserRepository,
 )
 from creative_marketer.infrastructure.database.repositories import (
+    SqlAlchemyExternalIdentityRepository,
     SqlAlchemyMembershipRepository,
     SqlAlchemyTenantRepository,
     SqlAlchemyUserRepository,
@@ -23,6 +25,7 @@ class SqlAlchemyUnitOfWork:
     tenants: TenantRepository
     users: UserRepository
     memberships: MembershipRepository
+    external_identities: ExternalIdentityRepository
 
     def __init__(
         self,
@@ -44,6 +47,7 @@ class SqlAlchemyUnitOfWork:
             )
         self.tenants = SqlAlchemyTenantRepository(self._session)
         self.users = SqlAlchemyUserRepository(self._session)
+        self.external_identities = SqlAlchemyExternalIdentityRepository(self._session)
         self.memberships = SqlAlchemyMembershipRepository(self._session, self._context)
         return self
 

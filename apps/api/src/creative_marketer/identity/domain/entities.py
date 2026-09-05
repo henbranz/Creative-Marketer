@@ -14,6 +14,11 @@ class UserStatus(StrEnum):
     DISABLED = "disabled"
 
 
+class ExternalIdentityStatus(StrEnum):
+    ACTIVE = "active"
+    DISABLED = "disabled"
+
+
 class MembershipRole(StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
@@ -51,8 +56,6 @@ class User:
     email: str
     normalized_email: str
     id: UUID = field(default_factory=uuid4)
-    external_identity_issuer: str | None = None
-    external_identity_subject: str | None = None
     status: UserStatus = UserStatus.ACTIVE
     created_at: datetime = field(default_factory=utc_now)
     updated_at: datetime = field(default_factory=utc_now)
@@ -61,6 +64,17 @@ class User:
     def create(cls, email: str) -> "User":
         stripped = email.strip()
         return cls(email=stripped, normalized_email=normalize_email(stripped), id=uuid4())
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalIdentity:
+    user_id: UUID
+    issuer: str
+    subject: str
+    id: UUID = field(default_factory=uuid4)
+    status: ExternalIdentityStatus = ExternalIdentityStatus.ACTIVE
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(frozen=True, slots=True)

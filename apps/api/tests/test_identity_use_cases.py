@@ -6,6 +6,7 @@ import pytest
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.application.errors import EntityNotFoundError
 from creative_marketer.identity.application.ports import (
+    ExternalIdentityRepository,
     MembershipRepository,
     TenantRepository,
     UnitOfWork,
@@ -19,7 +20,13 @@ from creative_marketer.identity.application.use_cases import (
     GetTenant,
     ListTenantMemberships,
 )
-from creative_marketer.identity.domain import Membership, MembershipRole, Tenant, User
+from creative_marketer.identity.domain import (
+    ExternalIdentity,
+    Membership,
+    MembershipRole,
+    Tenant,
+    User,
+)
 
 
 class TenantRepo:
@@ -63,6 +70,15 @@ class MembershipRepo:
         return self.values.get((self.tenant_id, user_id))
 
 
+class ExternalIdentityRepo:
+    async def add(self, identity: ExternalIdentity) -> None:
+        del identity
+
+    async def get(self, issuer: str, subject: str) -> ExternalIdentity | None:
+        del issuer, subject
+        return None
+
+
 class FakeUow:
     def __init__(self, factory: "FakeUowFactory", context: TenantContext | None) -> None:
         self.factory = factory
@@ -71,6 +87,7 @@ class FakeUow:
         self.memberships: MembershipRepository = MembershipRepo(
             factory.memberships, None if context is None else context.tenant_id
         )
+        self.external_identities: ExternalIdentityRepository = ExternalIdentityRepo()
         self.committed = False
 
     async def __aenter__(self) -> "FakeUow":

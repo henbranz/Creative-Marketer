@@ -1,4 +1,6 @@
 from creative_marketer.identity.domain.entities import (
+    ExternalIdentity,
+    ExternalIdentityStatus,
     Membership,
     MembershipRole,
     MembershipStatus,
@@ -9,6 +11,8 @@ from creative_marketer.identity.domain.entities import (
 )
 
 __all__ = [
+    "ExternalIdentity",
+    "ExternalIdentityStatus",
     "Membership",
     "MembershipRole",
     "MembershipStatus",
