@@ -473,6 +473,7 @@ Customer PII should be isolated into dedicated tables/columns with stricter acce
 - canonicalization_version
 
 ### OutboxEvent delivery metadata
+- bounded `traceparent` / `tracestate` captured at creation, excluded from semantic event digest
 - publication_state (`PENDING`, `PUBLISHING`, `PUBLISHED`, `FAILED_TERMINAL`)
 - attempt_count / next_attempt_at
 - lease_owner / lease_expires_at

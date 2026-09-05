@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from time import monotonic
 from types import TracebackType
 from typing import Protocol
 from uuid import UUID
@@ -43,6 +44,7 @@ from creative_marketer.execution_control.domain import (
 )
 from creative_marketer.identity.application.authentication import ExecutionContext
 from creative_marketer.identity.application.context import TenantContext
+from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.permission_governance.application import EvaluateToolPermission
 from creative_marketer.permission_governance.domain import (
     Decision,
@@ -239,15 +241,66 @@ class ToolGateway:
     budget_guard: BudgetGuard | None = None
     contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def invoke(
         self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
     ) -> GatewayResult:
         context = invocation.initiating_context
+        started = monotonic()
+        observation = {"risk": "unknown"}
+        with self.telemetry.span(
+            "tool_gateway.invoke",
+            {"correlation_id": str(context.correlation_id), "tool.key": request.tool_key},
+        ) as span:
+            result = await self._invoke(invocation, request, observation)
+            attributes = {
+                "tool.key": request.tool_key,
+                "risk": observation["risk"],
+                "result": result.status.value,
+            }
+            span.set_attribute("result", result.status.value)
+            span.set_attribute("operation_id", result.operation_id)
+            if result.status in {
+                GatewayStatus.FAILED_PRE_EFFECT,
+                GatewayStatus.UNKNOWN_OUTCOME,
+                GatewayStatus.CRITICAL_AMBIGUOUS,
+            }:
+                span.record_error(result.reason_code or result.status.value)
+            self.telemetry.count("tool_gateway.invocations", attributes=attributes)
+            self.telemetry.duration(
+                "tool_gateway.duration", monotonic() - started, attributes=attributes
+            )
+            if result.status in {GatewayStatus.UNKNOWN_OUTCOME, GatewayStatus.CRITICAL_AMBIGUOUS}:
+                self.telemetry.count(
+                    "tool_gateway.unknown_outcomes",
+                    attributes={"tool.key": request.tool_key, "result": result.status.value},
+                )
+            if result.status is GatewayStatus.REPLAYED:
+                self.telemetry.count(
+                    "tool_gateway.replays",
+                    attributes={"tool.key": request.tool_key, "result": result.status.value},
+                )
+            if result.status is GatewayStatus.AWAITING_APPROVAL:
+                self.telemetry.count(
+                    "approval.requests",
+                    attributes={"risk": observation["risk"], "state": "pending"},
+                )
+            return result
+
+    async def _invoke(
+        self,
+        invocation: TrustedAgentInvocation,
+        request: ToolInvocationRequest,
+        observation: dict[str, str],
+    ) -> GatewayResult:
+        context = invocation.initiating_context
         operation = _operation(request)
         try:
-            agent = await self.agent_resolver(context, invocation.requested_agent_definition_id)
-            tool = await self.tool_resolver(request.tool_key)
+            with self.telemetry.span("tool_gateway.resolve"):
+                agent = await self.agent_resolver(context, invocation.requested_agent_definition_id)
+                tool = await self.tool_resolver(request.tool_key)
+                observation["risk"] = tool.risk_level.value
         except Exception:
             return _result(GatewayStatus.DENIED, operation.value, reason_code="TOOL_UNAVAILABLE")
         binding = self.bindings.resolve(tool)
@@ -258,9 +311,10 @@ class ToolGateway:
                 reason_code="EXECUTOR_UNAVAILABLE",
             )
         try:
-            _validate_input(tool, request.raw_input)
-            normalized = binding.normalizer(request.raw_input)
-            resources = await binding.resource_resolver(context, tool, normalized)
+            with self.telemetry.span("tool_gateway.input_validation"):
+                _validate_input(tool, request.raw_input)
+                normalized = binding.normalizer(request.raw_input)
+                resources = await binding.resource_resolver(context, tool, normalized)
         except ResourceAccessDenied:
             return await self._record_pre_call_denial(
                 context, agent, tool, operation.value, "RESOURCE_ACCESS_DENIED"
@@ -269,11 +323,20 @@ class ToolGateway:
             return _result(
                 GatewayStatus.INVALID_INPUT, operation.value, reason_code="INPUT_INVALID"
             )
-        decision = await self.permission_evaluator(
-            context,
-            invocation.requested_agent_definition_id,
-            request.tool_key,
-            resources.scopes,
+        with self.telemetry.span("tool_gateway.permission"):
+            decision = await self.permission_evaluator(
+                context,
+                invocation.requested_agent_definition_id,
+                request.tool_key,
+                resources.scopes,
+            )
+        self.telemetry.count(
+            "permission.decisions",
+            attributes={
+                "decision": decision.decision.value,
+                "reason": decision.reason_code.value,
+                "risk": tool.risk_level.value,
+            },
         )
         if (
             decision.tenant_id != context.tenant_id
@@ -438,13 +501,17 @@ class ToolGateway:
                 return _result(
                     GatewayStatus.DENIED, call.operation_id, reason_code="STALE_AUTHORIZATION"
                 )
-            record, was_created = await uow.idempotency.reserve(
-                IdempotencyRecord.from_binding(action)
-            )
+            with self.telemetry.span("tool_gateway.idempotency"):
+                record, was_created = await uow.idempotency.reserve(
+                    IdempotencyRecord.from_binding(action)
+                )
             reservation = (
                 ReservationOutcome.NEW_RESERVATION
                 if was_created
                 else reservation_outcome(record, action.action_digest)
+            )
+            self.telemetry.count(
+                "idempotency.reservations", attributes={"result": reservation.value}
             )
             if (
                 reservation is ReservationOutcome.REPLAY_SUCCEEDED
@@ -490,7 +557,8 @@ class ToolGateway:
             await uow.audit.append(
                 _audit(context, call, "tool.execution.started", AuditOutcome.SUCCESS)
             )
-            await uow.commit()
+            with self.telemetry.span("tool_gateway.persistence"):
+                await uow.commit()
         execution_context = ToolExecutionContext(
             context.tenant_id,
             call.id,
@@ -501,7 +569,8 @@ class ToolGateway:
             context.correlation_id,
         )
         try:
-            executor_result = await binding.executor.execute(execution_context, normalized)
+            with self.telemetry.span("tool_gateway.executor"):
+                executor_result = await binding.executor.execute(execution_context, normalized)
         except PreEffectFailure:
             return await self._complete(
                 context, call, ToolCallStatus.FAILED_PRE_EFFECT, "PRE_EFFECT_FAILURE"
@@ -602,7 +671,8 @@ class ToolGateway:
             }[target]
             await uow.audit.append(_audit(context, changed_call, action, AuditOutcome.SUCCESS))
             await uow.outbox.append(tool_outcome_event(context, changed_call, self.contracts, now))
-            await uow.commit()
+            with self.telemetry.span("tool_gateway.persistence"):
+                await uow.commit()
             status = {
                 ToolCallStatus.SUCCEEDED: GatewayStatus.EXECUTED,
                 ToolCallStatus.FAILED_PRE_EFFECT: GatewayStatus.FAILED_PRE_EFFECT,

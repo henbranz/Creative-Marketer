@@ -165,12 +165,20 @@ Request flow:
 
 ## Workstream 10 — Observability
 
+Status: completed by `TASK-011`; production dashboards, alert routing, collector deployment, and
+vendor selection remain deferred.
+
 - structured logs
 - correlation IDs
 - trace IDs
 - metrics baseline
 - error taxonomy
 - agent/tool cost fields even before real agents exist
+
+TASK-011 establishes explicit OpenTelemetry traces/metrics, safe JSON logs, immutable async event
+trace propagation, bounded-cardinality dimensions, liveness/readiness, and fail-open asynchronous
+export. It deliberately does not create fake Agent/LLM cost or token metrics before that runtime
+exists.
 
 ## Workstream 10.5 — Temporal Adoption Spike
 

@@ -66,6 +66,7 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.observability.ports import NullTelemetry
 from creative_marketer.permission_governance.domain import (
     Decision,
     DecisionReason,
@@ -522,6 +523,24 @@ class MemoryOutbox:
         self.events.append(event)
 
 
+class MetricRecorder:
+    def __init__(self):
+        self.values = []
+        self._null = NullTelemetry()
+
+    def count(self, name, value=1, attributes=None):
+        self.values.append((name, value, attributes))
+
+    def duration(self, name, seconds, attributes=None):
+        return None
+
+    def gauge(self, name, value, attributes=None):
+        return None
+
+    def span(self, name, attributes=None, *, traceparent=None, tracestate=None):
+        return self._null.span(name, attributes, traceparent=traceparent, tracestate=tracestate)
+
+
 class MemoryUow:
     def __init__(self, requests=None, decisions=None, revocations=None, records=None):
         self.requests = requests
@@ -555,7 +574,8 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
     def factory(_tenant):
         return uow
 
-    create = CreateApprovalRequest(factory, lambda: NOW)
+    metrics = MetricRecorder()
+    create = CreateApprovalRequest(factory, lambda: NOW, telemetry=metrics)
     normalized = NormalizedToolInput.from_trusted_value({"post_id": "123"})
     request = await create(ctx, permission(ctx), normalized)
     assert request.binding.idempotency_key.startswith("op_")
@@ -575,7 +595,7 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
         actor = context(tenant_id=ctx.tenant_id, role=role)
         candidate = approval(binding(ctx=ctx, risk=risk))
         requests.items[candidate.id] = candidate
-        service = DecideApproval(factory, lambda: NOW)
+        service = DecideApproval(factory, lambda: NOW, telemetry=metrics)
         if allowed:
             assert (
                 await service(actor, candidate.id, HumanDecision.APPROVE)
@@ -595,7 +615,9 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
 
     pending = approval(binding(ctx=ctx))
     requests.items[pending.id] = pending
-    revoked = await RevokeApproval(factory, lambda: NOW)(ctx, pending.id, "operator_request")
+    revoked = await RevokeApproval(factory, lambda: NOW, telemetry=metrics)(
+        ctx, pending.id, "operator_request"
+    )
     assert revoked.approval_request_id == pending.id
     with pytest.raises(ApprovalConflict):
         await DecideApproval(factory, lambda: NOW)(ctx, pending.id, HumanDecision.APPROVE)
@@ -604,7 +626,9 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
     ).state is ApprovalState.REVOKED
     denied_request = approval(binding(ctx=ctx))
     requests.items[denied_request.id] = denied_request
-    await DecideApproval(factory, lambda: NOW)(ctx, denied_request.id, HumanDecision.DENY)
+    await DecideApproval(factory, lambda: NOW, telemetry=metrics)(
+        ctx, denied_request.id, HumanDecision.DENY
+    )
     registry = EventContractRegistry()
     for emitted in uow.outbox.events:
         registry.validate_event(emitted)
@@ -613,6 +637,11 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
         "governance.approval.granted.v1",
         "governance.approval.denied.v1",
         "governance.approval.revoked.v1",
+    }
+    assert {item[0] for item in metrics.values} == {
+        "approval.requests",
+        "approval.decisions",
+        "approval.revocations",
     }
 
 
@@ -626,7 +655,8 @@ async def test_idempotency_application_reserve_attempt_complete_reconcile_and_au
         return uow
 
     bound = binding(ctx=ctx)
-    reserve = ReserveIdempotentOperation(factory)
+    metrics = MetricRecorder()
+    reserve = ReserveIdempotentOperation(factory, telemetry=metrics)
     first = await reserve(ctx, bound)
     assert first.outcome is ReservationOutcome.NEW_RESERVATION
     assert (await reserve(ctx, bound)).outcome is ReservationOutcome.EXISTING_PENDING
@@ -636,26 +666,42 @@ async def test_idempotency_application_reserve_attempt_complete_reconcile_and_au
     with pytest.raises(IdempotencyConflict):
         await reserve(context(), bound)
 
-    acquired = await BeginExecutionAttempt(factory, clock=lambda: NOW)(ctx, first.record.id)
+    acquired = await BeginExecutionAttempt(factory, clock=lambda: NOW, telemetry=metrics)(
+        ctx, first.record.id
+    )
     assert acquired.outcome is AttemptAcquisitionOutcome.ACQUIRED
     attempt_id = acquired.record.current_attempt_id
-    failed = await MarkFailedPreEffect(factory)(ctx, first.record.id, attempt_id)
+    failed_service = MarkFailedPreEffect(factory)
+    failed_service.telemetry = metrics
+    failed = await failed_service(ctx, first.record.id, attempt_id)
     assert failed.state is IdempotencyState.FAILED_PRE_EFFECT
-    retry = await BeginExecutionAttempt(factory, clock=lambda: NOW)(ctx, first.record.id)
-    unknown = await MarkUnknownExternalOutcome(factory)(
-        ctx, first.record.id, retry.record.current_attempt_id
+    retry = await BeginExecutionAttempt(factory, clock=lambda: NOW, telemetry=metrics)(
+        ctx, first.record.id
     )
+    unknown_service = MarkUnknownExternalOutcome(factory)
+    unknown_service.telemetry = metrics
+    unknown = await unknown_service(ctx, first.record.id, retry.record.current_attempt_id)
     assert unknown.state is IdempotencyState.UNKNOWN_EXTERNAL_OUTCOME
-    reconciled = await ReconcileUnknownOutcome(factory, clock=lambda: NOW)(
+    reconciled = await ReconcileUnknownOutcome(factory, clock=lambda: NOW, telemetry=metrics)(
         ctx, first.record.id, ReconciliationOutcome.NO_EFFECT_CONFIRMED
     )
     assert reconciled.reconciliation_outcome is ReconciliationOutcome.NO_EFFECT_CONFIRMED
-    final_attempt = await BeginExecutionAttempt(factory, clock=lambda: NOW)(ctx, first.record.id)
-    succeeded = await MarkSucceeded(factory)(
+    final_attempt = await BeginExecutionAttempt(factory, clock=lambda: NOW, telemetry=metrics)(
+        ctx, first.record.id
+    )
+    succeeded_service = MarkSucceeded(factory)
+    succeeded_service.telemetry = metrics
+    succeeded = await succeeded_service(
         ctx, first.record.id, final_attempt.record.current_attempt_id, result_ref="result://abc"
     )
     assert succeeded.state is IdempotencyState.SUCCEEDED
     assert uow.audit.records[-1].attempt_id == final_attempt.record.current_attempt_id
+    assert {item[0] for item in metrics.values} >= {
+        "idempotency.reservations",
+        "idempotency.attempts",
+        "idempotency.completions",
+        "idempotency.reconciliations",
+    }
 
 
 @pytest.mark.asyncio

@@ -269,3 +269,13 @@ normalizes input, derives resource requirements, evaluates permission, enforces 
 binds one immutable `ToolCall` to the exact versions, and only then invokes an exact-version
 executor mapping. Executor I/O occurs after durable `EXECUTING` state commits and outside the
 database transaction. Outcome state, idempotency state, Audit, and Outbox evidence commit together.
+
+## Implemented observability boundary (Phase 0)
+
+OpenTelemetry is an outer, vendor-neutral adapter behind application-owned no-op-safe ports. Domain
+modules have no telemetry dependency. Explicit spans cover API requests, Tool Gateway resolution,
+input validation, permission, idempotency, executor and persistence stages, plus Outbox publication
+and Inbox consumption. Resource identity uses `creative-marketer-api`,
+`creative-marketer-event-publisher`, or `creative-marketer-event-consumer` with version,
+deployment environment, and instance ID. Audit, events, logs, telemetry, and future analytics are
+not interchangeable.

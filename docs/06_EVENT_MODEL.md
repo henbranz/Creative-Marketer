@@ -179,3 +179,11 @@ Phase 0 defines `governance.tool.execution_succeeded.v1`,
 operation/result references, and stable error codes only. Raw Tool input, provider responses,
 credentials, prompts, and PII are forbidden. The terminal ToolCall update, idempotency update,
 Audit record, and Outbox append share one transaction.
+
+## Trace delivery metadata
+
+`traceparent` and optional bounded `tracestate` are immutable Outbox delivery metadata rather than
+Domain Event fields. They are validated independently, excluded from Event Canonical JSON V1 and
+the event digest, and confer no authority. Publisher and consumer spans may continue this context;
+business correlation remains the envelope's `correlation_id`, and Inbox—not tracing—deduplicates
+delivery.

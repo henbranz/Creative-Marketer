@@ -196,3 +196,17 @@ def test_delivery_does_not_construct_authoritative_identity() -> None:
     ).read_text()
     assert "TenantContext(" not in route_source
     assert "Actor(" not in route_source
+
+
+def test_domain_modules_do_not_import_observability_sdks() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    domain_files = list(root.glob("**/domain.py"))
+    forbidden = {"opentelemetry", "logging"}
+    assert imported_roots(domain_files).isdisjoint(forbidden)
+
+
+def test_observability_has_no_provider_or_business_sdk_dependency() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer" / "observability"
+    source = "\n".join(path.read_text().lower() for path in root.glob("*.py"))
+    for forbidden in ("openai", "anthropic", "shopify", "temporalio", "stripe"):
+        assert forbidden not in source

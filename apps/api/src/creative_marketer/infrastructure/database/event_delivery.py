@@ -2,14 +2,16 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from creative_marketer.events.application import (
     ClaimedEvent,
+    DeliveryHealth,
     InboxReservation,
+    TraceContext,
     assert_same_event,
 )
 from creative_marketer.events.contracts import EventContractRegistry
@@ -19,6 +21,7 @@ from creative_marketer.infrastructure.database.event_delivery_schema import (
     inbox_receipts,
     outbox_events,
 )
+from creative_marketer.observability.tracing import capture_trace_context
 
 
 def _event_values(event: DomainEvent) -> dict[str, object]:
@@ -82,9 +85,12 @@ class PostgresOutboxWriter:
     async def append(self, event: DomainEvent) -> None:
         self._contracts.validate_event(event)
         now = event.occurred_at
+        trace_context = capture_trace_context()
         await self._session.execute(
             insert(outbox_events).values(
                 **_event_values(event),
+                traceparent=trace_context.traceparent if trace_context else None,
+                tracestate=trace_context.tracestate if trace_context else None,
                 publication_state="PENDING",
                 attempt_count=0,
                 next_attempt_at=now,
@@ -97,6 +103,20 @@ class PostgresOutboxWriter:
 class PostgresPublisherStore:
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = factory
+
+    async def delivery_health(self) -> DeliveryHealth:
+        async with self._factory() as session:
+            pending = (
+                await session.execute(
+                    select(func.count(), func.min(outbox_events.c.created_at)).where(
+                        outbox_events.c.publication_state == "PENDING"
+                    )
+                )
+            ).one()
+            terminal = await session.scalar(
+                select(func.count()).where(outbox_events.c.publication_state == "FAILED_TERMINAL")
+            )
+        return DeliveryHealth(int(pending[0]), pending[1], int(terminal or 0))
 
     async def claim_ready(
         self, worker_id: UUID, *, batch_size: int, now: datetime, lease_duration: timedelta
@@ -140,7 +160,14 @@ class PostgresPublisherStore:
                 )
             ).all()
             return tuple(
-                ClaimedEvent(_row_event(row), worker_id, row._mapping["attempt_count"])
+                ClaimedEvent(
+                    _row_event(row),
+                    worker_id,
+                    row._mapping["attempt_count"],
+                    TraceContext(row._mapping["traceparent"], row._mapping["tracestate"])
+                    if row._mapping["traceparent"]
+                    else None,
+                )
                 for row in rows
             )
 

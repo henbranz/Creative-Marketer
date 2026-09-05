@@ -251,6 +251,19 @@ Never log:
 - payment credentials
 - full unnecessary PII
 
+Phase-0 operational telemetry applies a central allow-list and bounded scalar policy. It omits raw
+request bodies, query strings, headers, Tool input/output, prompts, provider payloads, secrets, and
+customer PII. Exception text and stack-local values are not automatically exported; only stable
+safe error codes/types are recorded. Identifiers may appear on sampled traces when necessary for
+diagnosis, but never as metric dimensions. No tenant or actor telemetry fingerprint is currently
+emitted. Any future fingerprint requires HMAC-SHA-256 with a key separate from
+`AUDIT_FINGERPRINT_KEY`.
+
+Incoming browser `traceparent`, `tracestate`, and baggage are ignored in Phase 0 and never become
+authority. Internally captured W3C context is strictly bounded on Outbox creation and is immutable
+delivery metadata. Changing it cannot change event, permission, approval, idempotency, or operation
+semantics.
+
 ## Event delivery security
 
 Events can be created only by trusted application use cases; there is no public event/outbox API.

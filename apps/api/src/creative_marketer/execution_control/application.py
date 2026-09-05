@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Protocol
@@ -28,6 +28,7 @@ from creative_marketer.execution_control.domain import (
 from creative_marketer.identity.application.authentication import ActorKind, ExecutionContext
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 
 
 class IdempotencyRepository(Protocol):
@@ -68,6 +69,7 @@ class ReservationResult:
 @dataclass(slots=True)
 class ReserveIdempotentOperation:
     uow_factory: IdempotencyUnitOfWorkFactory
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self, context: ExecutionContext, binding: ActionBindingV1
@@ -99,6 +101,7 @@ class ReserveIdempotentOperation:
                 )
             )
             await uow.commit()
+            self.telemetry.count("idempotency.reservations", attributes={"result": outcome.value})
             return ReservationResult(record, outcome)
 
 
@@ -113,6 +116,7 @@ class BeginExecutionAttempt:
     uow_factory: IdempotencyUnitOfWorkFactory
     lease_duration: timedelta = DEFAULT_EXECUTION_LEASE
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(self, context: ExecutionContext, record_id: UUID) -> AttemptAcquisition:
         async with self.uow_factory(context.tenant_context()) as uow:
@@ -132,6 +136,7 @@ class BeginExecutionAttempt:
                     )
                 )
                 await uow.commit()
+            self.telemetry.count("idempotency.attempts", attributes={"result": outcome.value})
             return AttemptAcquisition(changed, outcome)
 
 
@@ -141,6 +146,7 @@ class CompleteExecutionAttempt:
     target: IdempotencyState
     audit_action: str
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self,
@@ -169,6 +175,7 @@ class CompleteExecutionAttempt:
                 )
             )
             await uow.commit()
+            self.telemetry.count("idempotency.completions", attributes={"state": self.target.value})
             return changed
 
 
@@ -202,6 +209,7 @@ def _require_reconciler(context: ExecutionContext) -> None:
 class ReconcileUnknownOutcome:
     uow_factory: IdempotencyUnitOfWorkFactory
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self,
@@ -228,6 +236,9 @@ class ReconcileUnknownOutcome:
                 )
             )
             await uow.commit()
+            self.telemetry.count(
+                "idempotency.reconciliations", attributes={"result": outcome.value}
+            )
             return changed
 
 

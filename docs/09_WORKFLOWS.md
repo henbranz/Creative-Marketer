@@ -168,6 +168,14 @@ replayed through a safe result reference. `UNKNOWN_EXTERNAL_OUTCOME`, including 
 possible side effect, blocks retry until an active owner/admin records explicit reconciliation.
 Lease expiry alone never proves that no external effect occurred.
 
+## Operational trace continuity
+
+An invocation span ends when approval is required; it is never held open while waiting for a
+person. Resume creates a new Gateway invocation correlated by the durable operation and business
+correlation IDs. Outbox creation captures W3C trace context separately from the immutable Domain
+Event envelope. Publisher and consumer spans continue that context, while duplicate delivery may
+legitimately create additional spans and Inbox remains the sole business deduplication authority.
+
 ## Governed Tool operation lifecycle
 
 A low-risk allowed operation progresses `READY → EXECUTING → SUCCEEDED` (or a safe failure/unknown

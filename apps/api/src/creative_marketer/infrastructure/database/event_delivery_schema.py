@@ -34,6 +34,8 @@ outbox_events = Table(
     Column("payload_schema_digest", String(71), nullable=False),
     Column("event_digest", String(71), nullable=False),
     Column("canonicalization_version", Integer, nullable=False),
+    Column("traceparent", String(55)),
+    Column("tracestate", String(512)),
     Column("publication_state", String(32), nullable=False),
     Column("attempt_count", Integer, nullable=False),
     Column("next_attempt_at", DateTime(timezone=True), nullable=False),
@@ -84,6 +86,7 @@ outbox_events = Table(
     schema="event_delivery",
 )
 Index("ix_outbox_ready", outbox_events.c.publication_state, outbox_events.c.next_attempt_at)
+Index("ix_outbox_state_created", outbox_events.c.publication_state, outbox_events.c.created_at)
 Index("ix_outbox_lease", outbox_events.c.lease_expires_at)
 Index("ix_outbox_tenant_created", outbox_events.c.tenant_id, outbox_events.c.created_at)
 Index("ix_outbox_type_created", outbox_events.c.event_type, outbox_events.c.created_at)

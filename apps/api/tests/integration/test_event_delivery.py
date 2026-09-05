@@ -57,10 +57,10 @@ class CollectingTransport:
         self.events: list[DomainEvent] = []
         self.processor, self.consumer_name = processor, consumer_name
 
-    async def publish(self, event: DomainEvent) -> None:
+    async def publish(self, event: DomainEvent, trace_context=None) -> None:
         self.events.append(event)
         if self.processor is not None:
-            await self.processor(self.consumer_name, event)
+            await self.processor(self.consumer_name, event, trace_context)
 
 
 class FailingWriter:
@@ -268,6 +268,8 @@ async def test_publisher_role_claims_but_cannot_mutate_content_or_read_business_
             {"payload": {}},
             {"payload_schema_digest": "sha256:" + "a" * 64},
             {"event_digest": "sha256:" + "b" * 64},
+            {"traceparent": "00-" + "1" * 32 + "-" + "2" * 16 + "-01"},
+            {"tracestate": "vendor=value"},
         )
         for values in immutable_changes:
             with pytest.raises(DBAPIError):

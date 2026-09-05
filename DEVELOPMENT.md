@@ -37,6 +37,25 @@ make web-dev
 
 The API reads the repository-root `.env` file. Configuration is validated at startup; invalid URLs, environments, origins, or ports fail closed with a clear validation error.
 
+## Observability
+
+Operational telemetry is disabled by default and does not affect application correctness. Set
+`OTEL_MODE=console` for local JSON logs plus console spans, or set `OTEL_MODE=otlp` and
+`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` to use any OTLP/HTTP collector. Authentication
+headers for a hosted collector are deployment secrets consumed by standard exporter environment
+configuration; never commit them. `OTEL_TRACE_SAMPLE_RATIO` is a bounded local root sampling ratio.
+
+Every deployment supplies a stable `SERVICE_INSTANCE_ID`. Independently deployed workers use
+`creative-marketer-event-publisher` and `creative-marketer-event-consumer` as service names. The
+collector is optional and never a readiness dependency. `/health/live` reports process liveness;
+`/health/ready` verifies PostgreSQL; `/health` remains a liveness compatibility alias.
+
+Telemetry intentionally excludes bodies, query strings, headers, Tool inputs/outputs, prompts,
+provider responses, credentials, and PII. Audit and durable Domain Events remain authoritative.
+Future production alerting should watch unknown external outcomes, terminal Outbox failures,
+sustained backlog/age, elevated Tool failures, and database readiness. No dashboard or alert vendor
+is selected in Phase 0.
+
 ## Quality commands
 
 ```bash

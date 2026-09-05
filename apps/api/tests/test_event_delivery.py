@@ -37,6 +37,7 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.observability.ports import NullTelemetry
 
 NOW = datetime(2026, 9, 5, 12, tzinfo=UTC)
 
@@ -196,6 +197,11 @@ class MemoryPublisherStore:
     async def claim_ready(self, worker_id, *, batch_size, now, lease_duration):
         return tuple(self.items[:batch_size])
 
+    async def delivery_health(self):
+        from creative_marketer.events.application import DeliveryHealth
+
+        return DeliveryHealth(len(self.items), NOW if self.items else None, 0)
+
     async def mark_published(self, claimed, *, now):
         self.actions.append((PublicationState.PUBLISHED, claimed))
         return True
@@ -214,11 +220,24 @@ class MemoryTransport:
         self.outcomes = list(outcomes)
         self.events = []
 
-    async def publish(self, candidate):
+    async def publish(self, candidate, trace_context=None):
         self.events.append(candidate)
         outcome = self.outcomes.pop(0)
         if outcome is not None:
             raise outcome
+
+
+class RecordingTelemetry(NullTelemetry):
+    def __init__(self):
+        self.gauges = {}
+
+    def gauge(self, name, value, attributes=None):
+        self.gauges[name] = value
+
+
+class FailingHealthStore(MemoryPublisherStore):
+    async def delivery_health(self):
+        raise RuntimeError("diagnostic query failed")
 
 
 @pytest.mark.asyncio
@@ -226,6 +245,7 @@ async def test_publisher_reports_success_retry_and_terminal_failures() -> None:
     worker = uuid4()
     items = tuple(ClaimedEvent(event(), worker, attempt) for attempt in (1, 2, 8, 1))
     store = MemoryPublisherStore(items)
+    telemetry = RecordingTelemetry()
     transport = MemoryTransport(
         [
             None,
@@ -234,16 +254,30 @@ async def test_publisher_reports_success_retry_and_terminal_failures() -> None:
             TerminalTransportError("REJECTED", "sha256:" + "c" * 64),
         ]
     )
-    result = await PublishOutboxBatch(store, transport, worker)(now=NOW)
+    result = await PublishOutboxBatch(store, transport, worker, telemetry=telemetry)(now=NOW)
     assert (result.claimed_count, result.published_count) == (4, 1)
     assert (result.retry_count, result.terminal_failure_count) == (1, 2)
     assert store.actions[1][2]["next_attempt_at"] == NOW + timedelta(seconds=2)
+    assert telemetry.gauges == {
+        "outbox.pending": 4,
+        "outbox.terminal_failures": 0,
+        "outbox.oldest_pending_age": 0.0,
+    }
     empty = await PublishOutboxBatch(MemoryPublisherStore(()), MemoryTransport([]), worker)(now=NOW)
     assert empty.claimed_count == 0
     with pytest.raises(ValueError):
         RetryableTransportError("unsafe error", "bad")
     with pytest.raises(ValueError):
         RetryableTransportError("UNAVAILABLE", "bad")
+
+
+@pytest.mark.asyncio
+async def test_operational_snapshot_failure_does_not_stop_publication() -> None:
+    worker = uuid4()
+    store = FailingHealthStore((ClaimedEvent(event(), worker, 1),))
+    transport = MemoryTransport([None])
+    result = await PublishOutboxBatch(store, transport, worker)(now=NOW)
+    assert result.published_count == 1
     for kwargs in (
         {"max_attempts": 0},
         {"lease_duration": timedelta(0)},

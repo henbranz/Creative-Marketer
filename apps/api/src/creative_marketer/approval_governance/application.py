@@ -38,6 +38,7 @@ from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.identity.application.authentication import ActorKind, ExecutionContext
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.permission_governance.domain import Decision, PermissionDecision
 from creative_marketer.tool_governance.domain import RiskLevel
 
@@ -115,6 +116,7 @@ class CreateApprovalRequest:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
     contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self,
@@ -153,6 +155,9 @@ class CreateApprovalRequest:
         async with self.uow_factory(context.tenant_context()) as uow:
             await append_approval_request(uow, context, request, self.contracts)
             await uow.commit()
+        self.telemetry.count(
+            "approval.requests", attributes={"risk": binding.risk_level.value, "state": "pending"}
+        )
         return request
 
 
@@ -161,6 +166,7 @@ class DecideApproval:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
     contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self,
@@ -199,6 +205,13 @@ class DecideApproval:
                 approval_decided_event(context, request, decision, self.contracts)
             )
             await uow.commit()
+            self.telemetry.count(
+                "approval.decisions",
+                attributes={
+                    "risk": request.binding.risk_level.value,
+                    "decision": decision_value.value,
+                },
+            )
             return decision
 
 
@@ -207,6 +220,7 @@ class RevokeApproval:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
     contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
 
     async def __call__(
         self,
@@ -231,6 +245,10 @@ class RevokeApproval:
                 approval_revoked_event(context, request, revocation, self.contracts)
             )
             await uow.commit()
+            self.telemetry.count(
+                "approval.revocations",
+                attributes={"risk": request.binding.risk_level.value, "state": "revoked"},
+            )
             return revocation
 
 
