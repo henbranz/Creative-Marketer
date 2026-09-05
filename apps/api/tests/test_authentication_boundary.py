@@ -77,6 +77,7 @@ async def test_unavailable_authenticator_fails_closed() -> None:
         Settings(
             app_env="production",
             database_url="postgresql+psycopg://unused:unused@localhost/unused",
+            object_storage_backend="disabled",
         ),
         IdentityAuditService(writer, b"test-fingerprint-key" * 2),
     )

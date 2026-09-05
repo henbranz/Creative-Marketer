@@ -51,6 +51,7 @@ def test_deployed_s3_storage_rejects_local_or_placeholder_credentials() -> None:
         "app_env": "production",
         "database_url": "postgresql+psycopg://test:test@localhost:5432/test",
         "object_storage_backend": "s3",
+        "object_storage_access_key_id": "disabled-access-key",
     }
     with pytest.raises(ValidationError, match="loopback"):
         Settings(**common)  # type: ignore[arg-type]
@@ -67,4 +68,5 @@ def test_s3_storage_requires_an_explicit_cors_origin() -> None:
         Settings(
             database_url="postgresql+psycopg://test:test@localhost:5432/test",
             object_storage_backend="s3",
+            cors_origins=[],
         )
