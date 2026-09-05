@@ -61,6 +61,8 @@ class Settings(BaseSettings):
                 raise ValueError("deployed S3 storage cannot use a loopback endpoint")
             if self.object_storage_access_key_id.startswith("disabled-"):
                 raise ValueError("deployed S3 storage requires injected credentials")
+        if self.object_storage_backend == "s3" and not self.cors_origins:
+            raise ValueError("S3 storage requires at least one explicit CORS origin")
         return self
 
 

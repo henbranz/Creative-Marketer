@@ -60,3 +60,11 @@ def test_deployed_s3_storage_rejects_local_or_placeholder_credentials() -> None:
             object_storage_endpoint_url="https://storage.example.test",
             object_storage_public_endpoint_url="https://storage.example.test",
         )
+
+
+def test_s3_storage_requires_an_explicit_cors_origin() -> None:
+    with pytest.raises(ValidationError, match="explicit CORS origin"):
+        Settings(
+            database_url="postgresql+psycopg://test:test@localhost:5432/test",
+            object_storage_backend="s3",
+        )
