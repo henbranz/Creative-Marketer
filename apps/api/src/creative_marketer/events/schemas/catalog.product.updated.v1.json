@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","x-event-type":"catalog.product.updated.v1","type":"object","additionalProperties":false,"required":["product_id","brand_id","status"],"properties":{"product_id":{"type":"string","format":"uuid"},"brand_id":{"type":"string","format":"uuid"},"status":{"enum":["draft","active","archived"]}}}

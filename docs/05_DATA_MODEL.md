@@ -265,6 +265,11 @@ reconciliation before any retry.
 
 ## Product Digital Twin
 
+Phase-1 TASK-001 supersedes the early conceptual shape below with separate current-state
+`Brand`/`BrandProfile`, `Product`/`ProductProfile`, `ProductBrief`, and immutable
+`ProductKnowledgeSnapshot` records. Structured Audience values and bounded lists use validated
+JSONB, while money uses exact numeric types. See `docs/12_PRODUCT_BRAIN.md`.
+
 ### Brand
 - id
 - tenant_id

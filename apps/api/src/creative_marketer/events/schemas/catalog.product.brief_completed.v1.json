@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","x-event-type":"catalog.product.brief_completed.v1","type":"object","additionalProperties":false,"required":["product_id","brief_revision","completeness_score"],"properties":{"product_id":{"type":"string","format":"uuid"},"brief_revision":{"type":"integer","minimum":1},"completeness_score":{"const":100}}}

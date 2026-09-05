@@ -8,11 +8,13 @@ from sqlalchemy import text
 from starlette.responses import Response
 
 from creative_marketer.audit.identity import IdentityAuditService
+from creative_marketer.catalog.application import CatalogService
 from creative_marketer.infrastructure.authentication import (
     DevelopmentAuthenticationAdapter,
     UnavailableAuthenticationAdapter,
 )
 from creative_marketer.infrastructure.database import (
+    SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
 )
@@ -25,6 +27,7 @@ from creative_marketer.observability.logging import configure_structured_logging
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
 from creative_marketer_api.authentication_routes import create_authentication_router
+from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
 
 
@@ -70,7 +73,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=[str(origin).rstrip("/") for origin in resolved_settings.cors_origins],
         allow_credentials=True,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST", "PUT", "PATCH"],
         allow_headers=["*"],
     )
 
@@ -129,10 +132,20 @@ def create_app(
         if resolved_settings.dev_identity_enabled
         else UnavailableAuthenticationAdapter()
     )
+    identity_uow = SqlAlchemyUnitOfWorkFactory(session_factory)
     application.include_router(
         create_authentication_router(
             authenticator,
-            SqlAlchemyUnitOfWorkFactory(session_factory),
+            identity_uow,
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_catalog_router(
+            authenticator,
+            identity_uow,
+            CatalogService(SqlAlchemyCatalogUnitOfWorkFactory(session_factory)),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

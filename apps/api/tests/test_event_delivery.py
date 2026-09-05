@@ -150,6 +150,11 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         with pytest.raises(EventContractError):
             registry.validate_event(replace(valid, **changes))
     assert set(registry.event_types) == {
+        "catalog.brand.created.v1",
+        "catalog.product.created.v1",
+        "catalog.product.updated.v1",
+        "catalog.product.brief_completed.v1",
+        "catalog.product.snapshot_created.v1",
         "governance.approval.requested.v1",
         "governance.approval.granted.v1",
         "governance.approval.denied.v1",

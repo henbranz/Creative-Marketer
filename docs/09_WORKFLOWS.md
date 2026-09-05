@@ -20,6 +20,10 @@ Build Product Digital Twin
 Request initial Research Snapshot
 ```
 
+TASK-001 implements the deterministic pre-research portion as Brand creation, Product/Profile
+creation, sectional Brief completion, and explicit immutable Product Knowledge Snapshot creation.
+Research request and asset ingestion remain later slices; neither is simulated by the current UI.
+
 ## Autonomous Creative Loop
 
 ```text

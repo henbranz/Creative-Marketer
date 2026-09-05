@@ -347,3 +347,26 @@ def test_configuration_and_http_instrumentation(settings) -> None:
     assert http_span.attributes["url.route"] == "/health/live"
     assert "SECRET" not in str(http_span.attributes)
     value.shutdown()
+
+
+def test_catalog_confidential_text_never_enters_logs_or_traces(settings, caplog) -> None:
+    value, exporter, _reader = runtime()
+    sentinel = "SENTINEL-CATALOG-CONFIDENTIAL-TEXT"
+
+    async def request():
+        transport = ASGITransport(app=create_app(settings, observability=value))
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            return await client.post(
+                "/v1/brands",
+                json={"name": sentinel, "slug": "sentinel", "profile": {"description": sentinel}},
+            )
+
+    with caplog.at_level(logging.INFO):
+        response = asyncio.run(request())
+    assert response.status_code == 401
+    assert value.tracer_provider.force_flush()
+    assert sentinel not in caplog.text
+    assert sentinel not in str(
+        [span.attributes for span in exporter.get_finished_spans() if span.name == "http.request"]
+    )
+    value.shutdown()

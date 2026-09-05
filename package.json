@@ -18,9 +18,12 @@
     "format:check": "prettier --check .",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "contracts:generate": "cd apps/api && uv run python scripts/export_openapi.py && cd ../.. && openapi-typescript packages/contracts/openapi.json -o packages/contracts/src/generated.ts && prettier --write packages/contracts/openapi.json packages/contracts/src/generated.ts",
+    "contracts:check": "npm run contracts:generate && git diff --exit-code -- packages/contracts/openapi.json packages/contracts/src/generated.ts"
   },
   "devDependencies": {
+    "openapi-typescript": "^7.10.1",
     "prettier": "3.9.6"
   }
 }

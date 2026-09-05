@@ -14,6 +14,7 @@ from creative_marketer.infrastructure.database.approval_uow import (
     SqlAlchemyApprovalUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.database.catalog_uow import SqlAlchemyCatalogUnitOfWorkFactory
 from creative_marketer.infrastructure.database.engine import create_session_factory
 from creative_marketer.infrastructure.database.execution_control_uow import (
     SqlAlchemyIdempotencyUnitOfWorkFactory,
@@ -61,6 +62,13 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
+                "TRUNCATE catalog.product_knowledge_snapshots, catalog.product_briefs, "
+                "catalog.product_profiles, catalog.products, catalog.brand_profiles, "
+                "catalog.brands"
+            )
+        )
+        await connection.execute(
+            text(
                 "TRUNCATE event_delivery.inbox_receipts, event_delivery.outbox_events, "
                 "tool_execution.tool_calls, "
                 "approval_governance.approval_revocations, "
@@ -104,6 +112,11 @@ def identity_stack(runtime_database_url: str) -> IdentityStack:
         SqlAlchemyUnitOfWorkFactory(sessions),
         IdentityAuditService(PostgresStandaloneAuditWriter(sessions), b"test-fingerprint-key" * 2),
     )
+
+
+@pytest.fixture
+def catalog_factory(runtime_database_url: str) -> SqlAlchemyCatalogUnitOfWorkFactory:
+    return SqlAlchemyCatalogUnitOfWorkFactory(create_session_factory(runtime_database_url))
 
 
 @pytest.fixture

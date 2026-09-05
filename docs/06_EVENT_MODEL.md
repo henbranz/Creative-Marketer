@@ -44,8 +44,11 @@ Every event uses the implemented immutable canonical envelope:
 ## Core Event Families
 
 ### Catalog
+- `catalog.brand.created.v1`
 - `catalog.product.created.v1`
 - `catalog.product.updated.v1`
+- `catalog.product.brief_completed.v1`
+- `catalog.product.snapshot_created.v1`
 - `catalog.asset.added.v1`
 
 ### Research
@@ -97,8 +100,8 @@ Every event uses the implemented immutable canonical envelope:
 - `governance.approval.revoked.v1`
 - `governance.tool.denied.v1`
 
-Only the four Approval event schemas are registered as production contracts in TASK-009. The
-other families above are roadmap names, not currently accepted contracts.
+Approval, Tool execution, and the five Catalog facts above are registered production contracts.
+Other families remain roadmap names rather than accepted contracts.
 
 ## Rules
 

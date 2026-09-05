@@ -280,3 +280,10 @@ and Inbox consumption. Resource identity uses `creative-marketer-api`,
 `creative-marketer-event-publisher`, or `creative-marketer-event-consumer` with version,
 deployment environment, and instance ID. Audit, events, logs, telemetry, and future analytics are
 not interchangeable.
+
+## Implemented Catalog boundary (Phase 1)
+
+Catalog owns Brand, Product, their typed profiles and Brief, and immutable Product Knowledge
+Snapshots. Delivery calls Catalog application services; PostgreSQL adapters implement its inward
+ports. Ordinary user CRUD does not pass through Tool Gateway. Catalog state, compact Audit
+evidence, and reference-oriented Outbox facts commit atomically. See `docs/12_PRODUCT_BRAIN.md`.

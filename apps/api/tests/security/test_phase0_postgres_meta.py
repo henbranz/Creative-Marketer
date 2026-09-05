@@ -17,6 +17,7 @@ APPLICATION_SCHEMAS = (
     "execution_control",
     "event_delivery",
     "tool_execution",
+    "catalog",
 )
 
 
@@ -238,6 +239,12 @@ async def test_missing_tenant_context_fails_closed_across_every_implemented_cont
         "execution_control.idempotency_records",
         "event_delivery.inbox_receipts",
         "tool_execution.tool_calls",
+        "catalog.brands",
+        "catalog.brand_profiles",
+        "catalog.products",
+        "catalog.product_profiles",
+        "catalog.product_briefs",
+        "catalog.product_knowledge_snapshots",
     )
     for table in tables:
         try:
@@ -295,6 +302,7 @@ async def test_publisher_has_only_outbox_delivery_privileges(
             "approval_governance.approval_requests",
             "tool_execution.tool_calls",
             "event_delivery.inbox_receipts",
+            "catalog.products",
         )
         for table in forbidden:
             assert not await connection.scalar(

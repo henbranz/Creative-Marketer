@@ -203,7 +203,7 @@ def test_tool_executors_are_invoked_only_inside_the_gateway() -> None:
     assert calls == ["src/creative_marketer/tool_execution/application.py:573"]
 
 
-def test_public_api_surface_contains_no_governance_or_execution_mutation(
+def test_public_api_surface_contains_only_identity_and_catalog_mutation(
     settings: Settings,
 ) -> None:
     routes: set[tuple[str, str]] = set()
@@ -214,11 +214,14 @@ def test_public_api_surface_contains_no_governance_or_execution_mutation(
             continue
         routes.update((method, path) for method in methods if isinstance(method, str))
     allowed_non_read = {("HEAD", "/docs"), ("HEAD", "/redoc")}
-    assert not {
+    unexpected = {
         (method, path)
         for method, path in routes
-        if method not in {"GET", "HEAD"} and (method, path) not in allowed_non_read
+        if method not in {"GET", "HEAD"}
+        and (method, path) not in allowed_non_read
+        and not (path.startswith("/v1/brands") or path.startswith("/v1/products"))
     }
+    assert not unexpected
     forbidden_fragments = (
         "/agents",
         "/tools",
@@ -304,12 +307,31 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
         assert document["x-event-type"] == path.stem
         assert document["additionalProperties"] is False
         assert "$ref" not in path.read_text(encoding="utf-8")
-    assert not list(REPOSITORY_ROOT.rglob("openapi.json"))
-    assert not list(REPOSITORY_ROOT.rglob("openapi.yaml"))
+    assert list(REPOSITORY_ROOT.rglob("openapi.json")) == [
+        REPOSITORY_ROOT / "packages" / "contracts" / "openapi.json"
+    ]
+    assert not [
+        path for path in REPOSITORY_ROOT.rglob("openapi.yaml") if "node_modules" not in path.parts
+    ]
 
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "catalog.brand.created.v1": (
+            "sha256:37dd8c1541a9c68d98d74941bf96a20415e53c786d1040d081eba9c70c72f550"
+        ),
+        "catalog.product.brief_completed.v1": (
+            "sha256:c60461c5ddca0b19525df7e3f216ff53ed96be07c6a2fdacaa8b1e1e506dfda3"
+        ),
+        "catalog.product.created.v1": (
+            "sha256:65626cbe777eeedbaa0619ba275dd461aab6963223ace65a5b91b1b26a27ddee"
+        ),
+        "catalog.product.snapshot_created.v1": (
+            "sha256:2d8b2c8a7c7d09b0fdada374218277e4d8848d9babe9a9a75c6924672eef05e4"
+        ),
+        "catalog.product.updated.v1": (
+            "sha256:b510933280654f2e45ca59513d41d5171523fea6bf1975920ed1380524d41d87"
+        ),
         "governance.approval.denied.v1": (
             "sha256:b287fb010f7271979b1c02a9d5f5d50d4a677c7c6404bf3abe025a157edb0443"
         ),
@@ -346,6 +368,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260905_0011"]
+    assert script.get_heads() == ["20260905_0012"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)
