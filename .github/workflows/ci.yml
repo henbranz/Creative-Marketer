@@ -27,7 +27,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer
       MIGRATION_DATABASE_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: ci-only-audit-fingerprint-key-32-bytes
       TEST_DATABASE_ADMIN_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
       TEST_DATABASE_RUNTIME_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer
       TEST_DATABASE_PUBLISHER_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer
