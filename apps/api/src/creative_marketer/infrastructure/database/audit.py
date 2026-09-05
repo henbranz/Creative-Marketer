@@ -35,6 +35,8 @@ class PostgresAuditWriter:
                 agent_definition_id=record.agent_definition_id,
                 agent_version_id=record.agent_version_id,
                 agent_run_id=record.agent_run_id,
+                permission_id=record.permission_id,
+                permission_version_id=record.permission_version_id,
                 before_digest=record.before_digest,
                 after_digest=record.after_digest,
                 safe_metadata=persisted_metadata(record.safe_metadata),

@@ -3,6 +3,9 @@ import re
 TOOL_KEY_PATTERN = r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$"
 TOOL_KEY = re.compile(TOOL_KEY_PATTERN)
 MAX_TOOL_KEY_LENGTH = 128
+SCOPE_KEY_PATTERN = r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$"
+SCOPE_KEY = re.compile(SCOPE_KEY_PATTERN)
+MAX_SCOPE_KEY_LENGTH = 128
 
 
 def canonical_tool_key(value: str, *, field_name: str = "tool_key") -> str:
@@ -15,3 +18,15 @@ def canonical_tool_keys(values: tuple[str, ...], *, field_name: str) -> tuple[st
     if len(values) != len(set(values)):
         raise ValueError(f"{field_name} contains duplicates")
     return tuple(sorted(canonical_tool_key(value, field_name=field_name) for value in values))
+
+
+def canonical_scope_key(value: str, *, field_name: str = "scope_key") -> str:
+    if len(value) > MAX_SCOPE_KEY_LENGTH or value in {"*", "all"} or not SCOPE_KEY.fullmatch(value):
+        raise ValueError(f"{field_name} must be a canonical scope key without wildcards")
+    return value
+
+
+def canonical_scope_keys(values: tuple[str, ...], *, field_name: str) -> tuple[str, ...]:
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} contains duplicates")
+    return tuple(sorted(canonical_scope_key(value, field_name=field_name) for value in values))

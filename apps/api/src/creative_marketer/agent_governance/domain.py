@@ -7,9 +7,12 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from creative_marketer.governance_keys import canonical_tool_keys
+from creative_marketer.governance_keys import (
+    canonical_scope_key,
+    canonical_scope_keys,
+    canonical_tool_keys,
+)
 
-CANONICAL_KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 AGENT_KEY = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 CURRENCY = re.compile(r"^[A-Z]{3}$")
 SECRET_VALUE = re.compile(
@@ -84,9 +87,9 @@ def utc_now() -> datetime:
 
 
 def _canonical_key(value: str, *, field_name: str, max_length: int = 128) -> str:
-    if len(value) > max_length or not CANONICAL_KEY.fullmatch(value) or value == "*":
+    if len(value) > max_length:
         raise ValueError(f"{field_name} must be a canonical key without wildcards")
-    return value
+    return canonical_scope_key(value, field_name=field_name)
 
 
 def _agent_key(value: str, *, field_name: str) -> str:
@@ -104,9 +107,7 @@ def _bounded_text(value: str, *, field_name: str, max_bytes: int) -> str:
 
 
 def _canonical_set(values: tuple[str, ...], *, field_name: str) -> tuple[str, ...]:
-    if len(values) != len(set(values)):
-        raise ValueError(f"{field_name} contains duplicates")
-    return tuple(sorted(_canonical_key(value, field_name=field_name) for value in values))
+    return canonical_scope_keys(values, field_name=field_name)
 
 
 def _money(value: Decimal, *, field_name: str) -> Decimal:

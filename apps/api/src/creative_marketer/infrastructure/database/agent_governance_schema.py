@@ -47,6 +47,7 @@ agent_definitions = Table(
         ["agent_governance.agent_definitions.id"],
         ondelete="RESTRICT",
     ),
+    UniqueConstraint("tenant_id", "id"),
     schema="agent_governance",
 )
 Index(

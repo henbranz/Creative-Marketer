@@ -154,14 +154,34 @@ forward rollout and rollback without rewriting history. Active resolution fails 
 unknown, disabled, archived, unactivated, or internally inconsistent records.
 
 ### ToolPermission
+- id
 - tenant_id
 - agent_definition_id
-- tool_id
-- scope
-- policy
+- tool_definition_id
+- status
+- created_at / created_by
 
-`ToolPermission` is deliberately not implemented by TASK-006. Agent tool keys and Registry
-existence are declarations, not permission.
+### ToolPermissionVersion
+- id / permission_id / tenant_id
+- version_number
+- effect (`GRANT` or `DENY`)
+- allowed_scopes / allowed_environments
+- approval_behavior
+- policy_schema_version / configuration_digest
+- created_at / created_by
+
+### ToolPermissionActivation
+- permission_id (primary key)
+- tenant_id
+- active_version_id
+- activated_at / activated_by
+
+`ToolPermission` is a stable tenant-owned relationship between a tenant AgentDefinition and a
+platform ToolDefinition. `ToolPermissionVersion` stores immutable effect, scope, environment, and
+approval-behavior revisions; `ToolPermissionActivation` selects one active revision and supports
+audited rollback. The relationship is bound to the requested tenant AgentDefinition rather than a
+resolved platform template. Agent tool keys and Registry existence remain declarations, not
+permission.
 
 ### ToolCall
 - id

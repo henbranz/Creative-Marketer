@@ -54,6 +54,8 @@ class AuditRecord:
     agent_definition_id: UUID | None = None
     agent_version_id: UUID | None = None
     agent_run_id: UUID | None = None
+    permission_id: UUID | None = None
+    permission_version_id: UUID | None = None
     before_digest: str | None = None
     after_digest: str | None = None
     occurred_at: datetime = field(default_factory=lambda: datetime.now(UTC))

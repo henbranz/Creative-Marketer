@@ -76,7 +76,9 @@ No LLM calls required.
 
 ## Workstream 5 — Tool Registry & Permission Engine
 
-Tool Registry status: completed by `TASK-006`; Permission Engine remains pending.
+Tool Registry status: completed by `TASK-006`; deterministic Permission Engine and immutable
+tenant ToolPermission policy completed by `TASK-007`. Approval, idempotency, ToolCall, and Tool
+Gateway execution remain pending.
 
 Implement:
 - ToolDefinition
@@ -88,8 +90,9 @@ Implement:
 
 Start deny-by-default.
 
-TASK-006 intentionally did not create `ToolPermission`, authorization decisions, tool calls, or
-gateway execution. Its declaration-reconciliation query is diagnostic only.
+TASK-006 intentionally deferred authorization. TASK-007 now creates `ToolPermission`, immutable
+versions, activation, and audited deterministic decisions without creating approvals, idempotency,
+tool calls, or gateway execution. Those remain later workstream boundaries.
 
 ## Workstream 6 — Approval Engine
 

@@ -84,6 +84,31 @@ def test_no_public_tool_registry_mutation_routes_exist() -> None:
     assert '@router.post("/tools' not in source
 
 
+def test_permission_engine_is_framework_provider_and_execution_independent() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer" / "permission_governance"
+    source_files = list(root.glob("*.py"))
+    forbidden = {
+        "fastapi",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "openai",
+        "anthropic",
+        "temporalio",
+    }
+    assert imported_roots(source_files).isdisjoint(forbidden)
+    source = "\n".join(path.read_text().lower() for path in source_files)
+    for value in ("functiontool", "eval(", "exec(", "provider sdk"):
+        assert value not in source
+
+
+def test_no_public_permission_mutation_or_evaluation_routes_exist() -> None:
+    delivery_root = Path(__file__).parents[1] / "src" / "creative_marketer_api"
+    source = "\n".join(path.read_text() for path in delivery_root.glob("*.py"))
+    assert '@router.post("/permissions' not in source
+    assert '@router.post("/authorize' not in source
+
+
 def test_delivery_does_not_construct_authoritative_identity() -> None:
     route_source = (
         Path(__file__).parents[1] / "src" / "creative_marketer_api" / "authentication_routes.py"

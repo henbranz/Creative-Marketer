@@ -24,8 +24,8 @@ These layers remain deliberately separate:
 ```text
 AgentVersion.allowed_tool_keys  declaration only
 ToolDefinition                  known capability only
-ToolPermission                  future tenant policy
-Permission Engine               future authoritative decision
+ToolPermission                  tenant policy with immutable revisions and activation
+Permission Engine               authoritative deterministic decision
 ```
 
 Unknown declarations remain `unknown`; they are never auto-created or treated as authorized.
@@ -94,10 +94,18 @@ No wildcard privileges for ordinary agents in production.
 | R1 | generate insight candidate | automatic |
 | R2 | generate video within budget | automatic or budget gated |
 | R3 | draft Instagram post | automatic |
-| R4 | publish Instagram/TikTok post | tenant configurable |
-| R5 | change inventory/fulfillment state | approval or strict policy |
+| R4 | publish Instagram/TikTok post | approval required in Phase 0 |
+| R5 | change inventory/fulfillment state | approval required in Phase 0 |
 | R6 | refund/payment-affecting action | explicit approval |
-| R7 | credentials/permissions/admin | user/admin only |
+| R7 | credentials/permissions/admin | always denied for Agent execution |
+
+The Phase-0 tenant policy may force approval for R0–R3 but cannot suppress the R4–R6 approval
+baseline. This conservative rule can be revisited only with the Approval Engine and a separately
+reviewed autonomy design.
+
+Tool scope requirements are constructed by trusted application or future Tool Gateway code. Model
+output, browser input, and ordinary tool arguments are never authoritative for required scopes.
+An explicitly trusted unscoped marker is required for tools that genuinely need no resource scope.
 
 ## Tool Gateway Decision Inputs
 
