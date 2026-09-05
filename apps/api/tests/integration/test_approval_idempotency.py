@@ -318,6 +318,7 @@ async def test_rls_and_database_immutability_are_fail_closed(
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_live_version_activations_invalidate_old_approval(
+    admin_engine: AsyncEngine,
     identity_stack: IdentityStack,
     agent_registry_factory: SqlAlchemyAgentRegistryUnitOfWorkFactory,
     tool_control_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
@@ -325,6 +326,7 @@ async def test_live_version_activations_invalidate_old_approval(
     permission_factory: SqlAlchemyPermissionUnitOfWorkFactory,
     approval_factory: SqlAlchemyApprovalUnitOfWorkFactory,
 ) -> None:
+    assert admin_engine is not None
     ctx, original, agent_definition, tool_definition = await approval_subject(
         identity_stack,
         agent_registry_factory,
