@@ -1,9 +1,8 @@
 from types import TracebackType
 
-from sqlalchemy import and_, select, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_sessionmaker
 
-from creative_marketer.agent_governance.domain import AgentScopeKind
 from creative_marketer.approval_governance.application import (
     ApprovalDecisionRepository,
     ApprovalRequestRepository,
@@ -13,10 +12,6 @@ from creative_marketer.audit.application import AuditWriter
 from creative_marketer.events.application import OutboxWriter
 from creative_marketer.execution_control.application import IdempotencyRepository
 from creative_marketer.identity.application.context import TenantContext
-from creative_marketer.infrastructure.database.agent_governance_schema import (
-    agent_activations,
-    agent_definitions,
-)
 from creative_marketer.infrastructure.database.approval_repositories import (
     SqlAlchemyApprovalDecisionRepository,
     SqlAlchemyApprovalRequestRepository,
@@ -27,16 +22,8 @@ from creative_marketer.infrastructure.database.event_delivery import PostgresOut
 from creative_marketer.infrastructure.database.execution_control_repositories import (
     SqlAlchemyIdempotencyRepository,
 )
-from creative_marketer.infrastructure.database.permission_governance_schema import (
-    tool_permission_activations,
-    tool_permissions,
-)
 from creative_marketer.infrastructure.database.tool_execution_repositories import (
     SqlAlchemyToolCallRepository,
-)
-from creative_marketer.infrastructure.database.tool_governance_schema import (
-    tool_activations,
-    tool_definitions,
 )
 from creative_marketer.tool_execution.application import GatewayUnitOfWork, ToolCallRepository
 from creative_marketer.tool_execution.domain import ToolCall
@@ -92,79 +79,60 @@ class SqlAlchemyGatewayUnitOfWork:
         if self._session is None:
             raise RuntimeError("gateway unit of work has not been entered")
         binding = call.binding
-        requested = (
-            await self._session.execute(
-                select(agent_definitions.c.platform_template_id)
-                .where(
-                    agent_definitions.c.id == binding.requested_agent_definition_id,
-                    agent_definitions.c.tenant_id == binding.tenant_id,
-                    agent_definitions.c.status == "active",
+        statement = text("""
+            SELECT EXISTS (
+              SELECT 1 FROM agent_governance.agent_definitions requested
+              WHERE requested.id = :requested_agent
+                AND requested.tenant_id = :tenant AND requested.status = 'active'
+                AND (
+                  (requested.id = :resolved_agent AND EXISTS (
+                    SELECT 1 FROM agent_governance.agent_activations aa
+                    WHERE aa.definition_id = requested.id
+                      AND aa.active_version_id = :agent_version
+                  )) OR
+                  (requested.platform_template_id = :resolved_agent AND EXISTS (
+                    SELECT 1 FROM agent_governance.agent_definitions platform_agent
+                    JOIN agent_governance.agent_activations aa
+                      ON aa.definition_id = platform_agent.id
+                    WHERE platform_agent.id = :resolved_agent
+                      AND platform_agent.scope_kind = 'platform'
+                      AND platform_agent.status = 'active'
+                      AND aa.active_version_id = :agent_version
+                  ))
                 )
-                .with_for_update(read=True)
+                AND EXISTS (
+                  SELECT 1 FROM tool_governance.tool_definitions td
+                  JOIN tool_governance.tool_activations ta ON ta.definition_id = td.id
+                  WHERE td.id = :tool_definition AND td.status = 'active'
+                    AND ta.active_version_id = :tool_version
+                )
+                AND EXISTS (
+                  SELECT 1 FROM permission_governance.tool_permissions permission
+                  JOIN permission_governance.tool_permission_activations pa
+                    ON pa.permission_id = permission.id
+                    AND pa.tenant_id = permission.tenant_id
+                  WHERE permission.id = :permission AND permission.tenant_id = :tenant
+                    AND permission.status = 'active'
+                    AND permission.agent_definition_id = :requested_agent
+                    AND permission.tool_definition_id = :tool_definition
+                    AND pa.active_version_id = :permission_version
+                )
             )
-        ).first()
-        if requested is None:
-            return False
-        expected_resolved = binding.requested_agent_definition_id
-        if requested.platform_template_id == binding.resolved_agent_definition_id:
-            expected_resolved = requested.platform_template_id
-            platform_active = (
-                await self._session.execute(
-                    select(agent_definitions.c.id)
-                    .where(
-                        agent_definitions.c.id == expected_resolved,
-                        agent_definitions.c.scope_kind == AgentScopeKind.PLATFORM.value,
-                        agent_definitions.c.status == "active",
-                    )
-                    .with_for_update(read=True)
-                )
-            ).first()
-            if platform_active is None:
-                return False
-        elif binding.resolved_agent_definition_id != binding.requested_agent_definition_id:
-            return False
-        agent_active = (
-            await self._session.execute(
-                select(agent_activations.c.active_version_id)
-                .where(agent_activations.c.definition_id == expected_resolved)
-                .with_for_update(read=True)
+        """)
+        return bool(
+            await self._session.scalar(
+                statement,
+                {
+                    "tenant": binding.tenant_id,
+                    "requested_agent": binding.requested_agent_definition_id,
+                    "resolved_agent": binding.resolved_agent_definition_id,
+                    "agent_version": binding.agent_version_id,
+                    "tool_definition": binding.tool_definition_id,
+                    "tool_version": binding.tool_version_id,
+                    "permission": binding.permission_id,
+                    "permission_version": binding.permission_version_id,
+                },
             )
-        ).scalar_one_or_none()
-        tool_active = (
-            await self._session.execute(
-                select(tool_activations.c.active_version_id)
-                .join(tool_definitions, tool_definitions.c.id == tool_activations.c.definition_id)
-                .where(
-                    tool_activations.c.definition_id == binding.tool_definition_id,
-                    tool_definitions.c.status == "active",
-                )
-                .with_for_update(read=True)
-            )
-        ).scalar_one_or_none()
-        permission_active = (
-            await self._session.execute(
-                select(tool_permission_activations.c.active_version_id)
-                .join(
-                    tool_permissions,
-                    and_(
-                        tool_permissions.c.id == tool_permission_activations.c.permission_id,
-                        tool_permissions.c.tenant_id == tool_permission_activations.c.tenant_id,
-                    ),
-                )
-                .where(
-                    tool_permission_activations.c.tenant_id == binding.tenant_id,
-                    tool_permission_activations.c.permission_id == binding.permission_id,
-                    tool_permissions.c.status == "active",
-                    tool_permissions.c.agent_definition_id == binding.requested_agent_definition_id,
-                    tool_permissions.c.tool_definition_id == binding.tool_definition_id,
-                )
-                .with_for_update(read=True)
-            )
-        ).scalar_one_or_none()
-        return (
-            agent_active == binding.agent_version_id
-            and tool_active == binding.tool_version_id
-            and permission_active == binding.permission_version_id
         )
 
 
