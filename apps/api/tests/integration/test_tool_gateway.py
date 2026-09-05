@@ -186,12 +186,22 @@ async def test_governed_approval_execution_replay_audit_outbox_and_rls(
         with pytest.raises(ProgrammingError):
             await connection.execute(text("DELETE FROM tool_execution.tool_calls"))
         await transaction.rollback()
+    protected_mutations: tuple[dict[str, object], ...] = (
+        {"tenant_id": uuid4()},
+        {"operation_id": "op_" + uuid4().hex},
+        {"action_digest": "sha256:" + "b" * 64},
+        {"normalized_input_digest": "sha256:" + "c" * 64},
+        {"status": "READY"},
+        {"result_ref": "result://attacker/rewrite"},
+        {"error_code": "ATTACKER_REWRITE"},
+    )
     async with admin_engine.connect() as connection:
-        transaction = await connection.begin()
-        with pytest.raises(DBAPIError):
-            await connection.execute(
-                update(tool_calls)
-                .where(tool_calls.c.id == executed.tool_call_id)
-                .values(action_digest="sha256:" + "b" * 64)
-            )
-        await transaction.rollback()
+        for values in protected_mutations:
+            transaction = await connection.begin()
+            with pytest.raises(DBAPIError):
+                await connection.execute(
+                    update(tool_calls)
+                    .where(tool_calls.c.id == executed.tool_call_id)
+                    .values(**values)
+                )
+            await transaction.rollback()

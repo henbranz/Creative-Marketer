@@ -197,6 +197,8 @@ Do not use Temporal for simple synchronous operations.
 
 ## Workstream 11 — Architectural Tests
 
+Status: completed by `TASK-013`; TASK-014 retains the final Phase-0 review decision.
+
 Mandatory:
 - tenant isolation
 - denied tool

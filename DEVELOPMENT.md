@@ -92,7 +92,14 @@ make test
 make test-postgres
 make build
 make check
+make phase0-gate
 ```
+
+`make phase0-gate` (also available as `make architecture-security`) is the permanent Phase-0
+architecture/security gate. It runs static boundaries, strict quality checks, the complete
+PostgreSQL security suite against the final migration head, coverage, and Temporal replay/workflow
+tests. Docker is required because the catalog, role, RLS, and concurrency checks use real
+PostgreSQL.
 
 ## Repository layout
 
@@ -142,6 +149,12 @@ credential or a mutation route. Every mutation appends platform audit in the sam
 Tool contracts are self-contained JSON Schema 2020-12 object schemas with bounded validation and
 canonical SHA-256 digests. The downgrade refuses to discard Registry or referenced audit history.
 No production demo catalog is seeded.
+
+Migration `20260905_0011` removes an unnecessary elevated-function surface discovered by the
+Phase-0 hardening gate. Agent Registry owner-validation triggers now execute with invoker rights,
+and every internal application trigger function has PostgreSQL's default `PUBLIC EXECUTE` revoked.
+The architecture/security suite inspects final-schema function, schema, table, role, ownership,
+policy, and RLS catalogs so later migrations cannot silently weaken those controls.
 
 Run migrations directly only with the migration URL:
 

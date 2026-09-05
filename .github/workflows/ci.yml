@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  backend:
+  architecture-security:
+    name: architecture-security
     runs-on: ubuntu-latest
     services:
       postgres:

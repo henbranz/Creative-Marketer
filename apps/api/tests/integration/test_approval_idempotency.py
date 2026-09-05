@@ -169,19 +169,37 @@ async def test_concurrent_decision_reservation_and_attempt_ownership(
     )
     assert sum(not isinstance(result, Exception) for result in decisions) == 1
     assert sum(isinstance(result, ApprovalConflict) for result in decisions) == 1
+    for index in range(8):
+        race_request = await CreateApprovalRequest(approval_factory)(
+            ctx,
+            permission_decision,
+            NormalizedToolInput.from_trusted_value({"post_id": f"race-{index}"}),
+        )
+        race = await asyncio.gather(
+            DecideApproval(approval_factory)(ctx, race_request.id, HumanDecision.APPROVE),
+            DecideApproval(approval_factory)(ctx, race_request.id, HumanDecision.DENY),
+            return_exceptions=True,
+        )
+        assert sum(not isinstance(result, Exception) for result in race) == 1
+        assert sum(isinstance(result, ApprovalConflict) for result in race) == 1
     await RevokeApproval(approval_factory)(ctx, request.id, "operator_request")
     assert (await InspectApproval(approval_factory)(ctx, request.id)).state is ApprovalState.REVOKED
 
     reservation_service = ReserveIdempotentOperation(idempotency_factory)
-    reservations = await asyncio.gather(
-        reservation_service(ctx, request.binding),
-        reservation_service(ctx, request.binding),
-    )
+    reservation_rounds = [
+        await asyncio.gather(
+            reservation_service(ctx, request.binding),
+            reservation_service(ctx, request.binding),
+        )
+        for _ in range(8)
+    ]
+    reservations = reservation_rounds[0]
     assert {result.outcome for result in reservations} == {
         ReservationOutcome.NEW_RESERVATION,
         ReservationOutcome.EXISTING_PENDING,
     }
     assert len({result.record.id for result in reservations}) == 1
+    assert len({result.record.id for pair in reservation_rounds for result in pair}) == 1
     assert reservations[0].record.request_digest == request.action_digest
 
     alternate = replace(
