@@ -222,6 +222,27 @@ The binding uses a versioned canonical representation of normalized action input
 
 Material changes after approval invalidate the approval.
 
+Phase 0 implements this as one shared `ActionBindingV1` used by Approval and Idempotency. The
+binding includes exact Agent, Tool, permission, scope, resource, environment, normalized-input,
+and platform-generated operation-key provenance. Approval request, decision, and revocation rows
+are immutable, tenant-isolated with forced RLS, and written atomically with compact audit evidence.
+No approval bearer token exists: an approval UUID identifies database state but conveys no
+authority. Current permission is always re-evaluated; historical approval never overrides `DENY`.
+
+Only trusted application code may construct `NormalizedToolInput`; raw browser/model JSON is not
+normalized input. Canonicalization v1 rejects floats and Python-specific values as well as
+credential-shaped keys/values. Raw payloads and provider results are absent from approval,
+idempotency, and audit storage.
+
+Decision authority is derived from a fresh authoritative `ExecutionContext`: active owners or
+admins for R0-R5, and active owners only for R6. Agents and workloads cannot decide. The Phase 0
+policy intentionally does not require maker-checker or dual control; that remains required design
+work for sensitive financial operations.
+
+Approval is not authorization and is not an execution credential. Idempotency is not a
+distributed exactly-once guarantee. The future Tool Gateway must re-resolve and authorize the
+action, rebuild and compare the exact binding, validate approval, and then reserve execution.
+
 ## Logging
 
 Never log:

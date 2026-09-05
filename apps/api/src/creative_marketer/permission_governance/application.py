@@ -375,6 +375,7 @@ class EvaluateToolPermission:
                     permission_version_id=None,
                     permission_configuration_digest=None,
                     requested_scope_digest=scopes.digest,
+                    environment=context.environment,
                     obligations=(),
                     correlation_id=context.correlation_id,
                 )

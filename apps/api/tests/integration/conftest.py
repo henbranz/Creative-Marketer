@@ -10,8 +10,14 @@ from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.infrastructure.database.agent_governance_uow import (
     SqlAlchemyAgentRegistryUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.approval_uow import (
+    SqlAlchemyApprovalUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.execution_control_uow import (
+    SqlAlchemyIdempotencyUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.permission_governance_uow import (
     SqlAlchemyPermissionUnitOfWorkFactory,
 )
@@ -44,7 +50,11 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE permission_governance.tool_permission_activations, "
+                "TRUNCATE approval_governance.approval_revocations, "
+                "approval_governance.approval_decisions, "
+                "approval_governance.approval_requests, "
+                "execution_control.idempotency_records, "
+                "permission_governance.tool_permission_activations, "
                 "permission_governance.tool_permission_versions, "
                 "permission_governance.tool_permissions, "
                 "tool_governance.tool_activations, tool_governance.tool_versions, "
@@ -100,3 +110,13 @@ def tool_runtime_factory(
 @pytest.fixture
 def permission_factory(runtime_database_url: str) -> SqlAlchemyPermissionUnitOfWorkFactory:
     return SqlAlchemyPermissionUnitOfWorkFactory(create_session_factory(runtime_database_url))
+
+
+@pytest.fixture
+def approval_factory(runtime_database_url: str) -> SqlAlchemyApprovalUnitOfWorkFactory:
+    return SqlAlchemyApprovalUnitOfWorkFactory(create_session_factory(runtime_database_url))
+
+
+@pytest.fixture
+def idempotency_factory(runtime_database_url: str) -> SqlAlchemyIdempotencyUnitOfWorkFactory:
+    return SqlAlchemyIdempotencyUnitOfWorkFactory(create_session_factory(runtime_database_url))

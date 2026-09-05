@@ -109,6 +109,37 @@ def test_no_public_permission_mutation_or_evaluation_routes_exist() -> None:
     assert '@router.post("/authorize' not in source
 
 
+def test_approval_and_idempotency_are_framework_provider_and_executor_independent() -> None:
+    source_files: list[Path] = []
+    for package in ("approval_governance", "execution_control"):
+        root = Path(__file__).parents[1] / "src" / "creative_marketer" / package
+        source_files.extend(root.glob("*.py"))
+    source_files.append(
+        Path(__file__).parents[1] / "src" / "creative_marketer" / "action_binding.py"
+    )
+    forbidden = {
+        "fastapi",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "openai",
+        "anthropic",
+        "temporalio",
+        "langgraph",
+    }
+    assert imported_roots(source_files).isdisjoint(forbidden)
+    source = "\n".join(path.read_text().lower() for path in source_files)
+    for value in ("requests.post", "httpx", "functiontool", "provider sdk", "toolcall"):
+        assert value not in source
+
+
+def test_no_public_normalization_or_approval_request_creation_route_exists() -> None:
+    delivery_root = Path(__file__).parents[1] / "src" / "creative_marketer_api"
+    source = "\n".join(path.read_text() for path in delivery_root.glob("*.py"))
+    assert "NormalizedToolInput" not in source
+    assert '@router.post("/approvals"' not in source
+
+
 def test_delivery_does_not_construct_authoritative_identity() -> None:
     route_source = (
         Path(__file__).parents[1] / "src" / "creative_marketer_api" / "authentication_routes.py"

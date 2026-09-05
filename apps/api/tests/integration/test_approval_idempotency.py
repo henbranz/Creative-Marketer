@@ -1,0 +1,293 @@
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
+
+import asyncio
+from dataclasses import replace
+from uuid import uuid4
+
+import pytest
+from sqlalchemy import select, text, update
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from creative_marketer.action_binding import NormalizedToolInput
+from creative_marketer.agent_governance.application import ResolveActiveAgentVersion
+from creative_marketer.approval_governance.application import (
+    CreateApprovalRequest,
+    DecideApproval,
+    InspectApproval,
+    RevokeApproval,
+)
+from creative_marketer.approval_governance.domain import (
+    ApprovalConflict,
+    ApprovalNotFound,
+    ApprovalState,
+    HumanDecision,
+)
+from creative_marketer.execution_control.application import (
+    BeginExecutionAttempt,
+    InspectIdempotencyState,
+    MarkFailedPreEffect,
+    MarkSucceeded,
+    MarkUnknownExternalOutcome,
+    ReconcileUnknownOutcome,
+    ReserveIdempotentOperation,
+)
+from creative_marketer.execution_control.domain import (
+    AttemptAcquisitionOutcome,
+    IdempotencyNotFound,
+    IdempotencyState,
+    ReconciliationOutcome,
+    ReservationOutcome,
+    StaleExecutionAttempt,
+)
+from creative_marketer.identity.application.use_cases import CreateTenant
+from creative_marketer.infrastructure.database.agent_governance_uow import (
+    SqlAlchemyAgentRegistryUnitOfWorkFactory,
+)
+from creative_marketer.infrastructure.database.approval_schema import approval_requests
+from creative_marketer.infrastructure.database.approval_uow import (
+    SqlAlchemyApprovalUnitOfWorkFactory,
+)
+from creative_marketer.infrastructure.database.execution_control_schema import idempotency_records
+from creative_marketer.infrastructure.database.execution_control_uow import (
+    SqlAlchemyIdempotencyUnitOfWorkFactory,
+)
+from creative_marketer.infrastructure.database.permission_governance_uow import (
+    SqlAlchemyPermissionUnitOfWorkFactory,
+)
+from creative_marketer.infrastructure.database.tool_governance_uow import (
+    SqlAlchemyToolRegistryUnitOfWorkFactory,
+)
+from creative_marketer.permission_governance.application import (
+    ActivateToolPermissionVersion,
+    CreateToolPermission,
+    CreateToolPermissionVersion,
+    EvaluateToolPermission,
+)
+from creative_marketer.permission_governance.domain import (
+    ApprovalBehavior,
+    PermissionEffect,
+    ScopeAccess,
+    ScopeRequirement,
+    ToolPermissionVersionConfiguration,
+    TrustedScopeRequirements,
+)
+from creative_marketer.tool_governance.application import ResolveActiveTool
+from tests.integration.support import IdentityStack
+from tests.integration.test_permission_engine import execution_context, setup_subject
+
+
+async def approval_subject(
+    identity_stack: IdentityStack,
+    agent_factory: SqlAlchemyAgentRegistryUnitOfWorkFactory,
+    tool_control_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    tool_runtime_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    permission_factory: SqlAlchemyPermissionUnitOfWorkFactory,
+):
+    ctx, agent_definition, tool_definition = await setup_subject(
+        identity_stack, agent_factory, tool_control_factory
+    )
+    policy = await CreateToolPermission(permission_factory)(
+        ctx, agent_definition.id, tool_definition.id
+    )
+    version = await CreateToolPermissionVersion(permission_factory)(
+        ctx,
+        policy.id,
+        ToolPermissionVersionConfiguration(
+            PermissionEffect.GRANT,
+            ("catalog.product",),
+            ("test",),
+            ApprovalBehavior.ALWAYS,
+        ),
+    )
+    await ActivateToolPermissionVersion(permission_factory)(ctx, policy.id, version.id)
+    permission_decision = await EvaluateToolPermission(
+        permission_factory,
+        ResolveActiveAgentVersion(agent_factory),
+        ResolveActiveTool(tool_runtime_factory),
+    )(
+        ctx,
+        agent_definition.id,
+        tool_definition.tool_key,
+        TrustedScopeRequirements((ScopeRequirement("catalog.product", ScopeAccess.READ),)),
+    )
+    return ctx, permission_decision
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_concurrent_decision_reservation_and_attempt_ownership(
+    admin_engine: AsyncEngine,
+    identity_stack: IdentityStack,
+    agent_registry_factory: SqlAlchemyAgentRegistryUnitOfWorkFactory,
+    tool_control_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    tool_runtime_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    permission_factory: SqlAlchemyPermissionUnitOfWorkFactory,
+    approval_factory: SqlAlchemyApprovalUnitOfWorkFactory,
+    idempotency_factory: SqlAlchemyIdempotencyUnitOfWorkFactory,
+) -> None:
+    ctx, permission_decision = await approval_subject(
+        identity_stack,
+        agent_registry_factory,
+        tool_control_factory,
+        tool_runtime_factory,
+        permission_factory,
+    )
+    request = await CreateApprovalRequest(approval_factory)(
+        ctx,
+        permission_decision,
+        NormalizedToolInput.from_trusted_value({"post_id": "123", "caption": "A"}),
+        resource_type="catalog.product",
+        resource_id="123",
+    )
+    decisions = await asyncio.gather(
+        DecideApproval(approval_factory)(ctx, request.id, HumanDecision.APPROVE),
+        DecideApproval(approval_factory)(ctx, request.id, HumanDecision.DENY),
+        return_exceptions=True,
+    )
+    assert sum(not isinstance(result, Exception) for result in decisions) == 1
+    assert sum(isinstance(result, ApprovalConflict) for result in decisions) == 1
+    await RevokeApproval(approval_factory)(ctx, request.id, "operator_request")
+    assert (await InspectApproval(approval_factory)(ctx, request.id)).state is ApprovalState.REVOKED
+
+    reservation_service = ReserveIdempotentOperation(idempotency_factory)
+    reservations = await asyncio.gather(
+        reservation_service(ctx, request.binding),
+        reservation_service(ctx, request.binding),
+    )
+    assert {result.outcome for result in reservations} == {
+        ReservationOutcome.NEW_RESERVATION,
+        ReservationOutcome.EXISTING_PENDING,
+    }
+    assert len({result.record.id for result in reservations}) == 1
+    assert reservations[0].record.request_digest == request.action_digest
+
+    alternate = replace(
+        request.binding,
+        idempotency_key="op_" + uuid4().hex,
+    )
+    conflict_binding = replace(alternate, normalized_input_digest="sha256:" + "f" * 64)
+    conflicting = await asyncio.gather(
+        reservation_service(ctx, alternate),
+        reservation_service(ctx, conflict_binding),
+    )
+    assert {result.outcome for result in conflicting} == {
+        ReservationOutcome.NEW_RESERVATION,
+        ReservationOutcome.CONFLICT,
+    }
+    alternate_record = next(
+        result.record
+        for result in conflicting
+        if result.outcome is ReservationOutcome.NEW_RESERVATION
+    )
+    alternate_attempt = await BeginExecutionAttempt(idempotency_factory)(ctx, alternate_record.id)
+    await MarkUnknownExternalOutcome(idempotency_factory)(
+        ctx, alternate_record.id, alternate_attempt.record.current_attempt_id
+    )
+    reconciled = await ReconcileUnknownOutcome(idempotency_factory)(
+        ctx,
+        alternate_record.id,
+        ReconciliationOutcome.EFFECT_CONFIRMED,
+        result_ref="result://operation/alternate",
+    )
+    assert reconciled.reconciliation_outcome is ReconciliationOutcome.EFFECT_CONFIRMED
+    record_id = reservations[0].record.id
+    attempts = await asyncio.gather(
+        BeginExecutionAttempt(idempotency_factory)(ctx, record_id),
+        BeginExecutionAttempt(idempotency_factory)(ctx, record_id),
+    )
+    assert {result.outcome for result in attempts} == {
+        AttemptAcquisitionOutcome.ACQUIRED,
+        AttemptAcquisitionOutcome.IN_PROGRESS,
+    }
+    acquired = next(
+        result for result in attempts if result.outcome is AttemptAcquisitionOutcome.ACQUIRED
+    )
+    failed = await MarkFailedPreEffect(idempotency_factory)(
+        ctx, record_id, acquired.record.current_attempt_id
+    )
+    assert failed.state is IdempotencyState.FAILED_PRE_EFFECT
+    retry = await BeginExecutionAttempt(idempotency_factory)(ctx, record_id)
+    with pytest.raises(StaleExecutionAttempt):
+        await MarkSucceeded(idempotency_factory)(
+            ctx, record_id, acquired.record.current_attempt_id, result_ref="result://stale"
+        )
+    succeeded = await MarkSucceeded(idempotency_factory)(
+        ctx, record_id, retry.record.current_attempt_id, result_ref="result://operation/123"
+    )
+    assert succeeded.state is IdempotencyState.SUCCEEDED
+
+    async with admin_engine.connect() as connection:
+        actions = set(
+            (
+                await connection.execute(
+                    text(
+                        "SELECT action FROM audit.audit_records "
+                        "WHERE approval_request_id = :approval OR idempotency_record_id = :record"
+                    ),
+                    {"approval": request.id, "record": record_id},
+                )
+            ).scalars()
+        )
+    assert {
+        "approval.request.created",
+        "idempotency.reserved",
+        "idempotency.execution.started",
+        "idempotency.succeeded",
+    }.issubset(actions)
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_rls_and_database_immutability_are_fail_closed(
+    admin_engine: AsyncEngine,
+    identity_stack: IdentityStack,
+    agent_registry_factory: SqlAlchemyAgentRegistryUnitOfWorkFactory,
+    tool_control_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    tool_runtime_factory: SqlAlchemyToolRegistryUnitOfWorkFactory,
+    permission_factory: SqlAlchemyPermissionUnitOfWorkFactory,
+    approval_factory: SqlAlchemyApprovalUnitOfWorkFactory,
+    idempotency_factory: SqlAlchemyIdempotencyUnitOfWorkFactory,
+) -> None:
+    ctx, permission_decision = await approval_subject(
+        identity_stack,
+        agent_registry_factory,
+        tool_control_factory,
+        tool_runtime_factory,
+        permission_factory,
+    )
+    request = await CreateApprovalRequest(approval_factory)(
+        ctx, permission_decision, NormalizedToolInput.from_trusted_value({"amount": 100})
+    )
+    record = (await ReserveIdempotentOperation(idempotency_factory)(ctx, request.binding)).record
+    other = await CreateTenant(identity_stack.uow_factory)("Other", f"approval-other-{uuid4()}")
+    with pytest.raises(ApprovalNotFound):
+        await InspectApproval(approval_factory)(execution_context(other.id), request.id)
+    with pytest.raises(IdempotencyNotFound, match="not found"):
+        await InspectIdempotencyState(idempotency_factory)(execution_context(other.id), record.id)
+
+    async with admin_engine.begin() as connection:
+        with pytest.raises(DBAPIError):
+            await connection.execute(
+                update(approval_requests)
+                .where(approval_requests.c.id == request.id)
+                .values(action_digest="sha256:" + "f" * 64)
+            )
+        await connection.rollback()
+    async with admin_engine.begin() as connection:
+        with pytest.raises(DBAPIError):
+            await connection.execute(
+                update(idempotency_records)
+                .where(idempotency_records.c.id == record.id)
+                .values(request_digest="sha256:" + "f" * 64)
+            )
+        await connection.rollback()
+    async with admin_engine.connect() as connection:
+        assert (
+            await connection.scalar(
+                select(idempotency_records.c.request_digest).where(
+                    idempotency_records.c.id == record.id
+                )
+            )
+            == request.action_digest
+        )

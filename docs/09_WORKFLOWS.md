@@ -135,3 +135,23 @@ Every durable workflow should define:
 - compensation strategy if applicable
 - user escalation
 - dead-letter/manual intervention path
+
+## Approval and Idempotency Preparation
+
+Phase 0 now persists the safety state that a future Tool Gateway will consume:
+
+```text
+REQUIRES_APPROVAL PermissionDecision
+  → trusted normalized input
+  → shared ActionBindingV1 / action digest
+  → immutable ApprovalRequest
+  → immutable human decision or revocation
+  → current authorization and exact-binding validation
+  → idempotency reservation
+  → one leased execution attempt
+```
+
+No tool is executed in this flow yet. `FAILED_PRE_EFFECT` may acquire a new attempt. A success is
+replayed through a safe result reference. `UNKNOWN_EXTERNAL_OUTCOME`, including a crash after a
+possible side effect, blocks retry until an active owner/admin records explicit reconciliation.
+Lease expiry alone never proves that no external effect occurred.

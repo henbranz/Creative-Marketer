@@ -203,20 +203,61 @@ permission.
 ### ApprovalRequest
 - id
 - tenant_id
-- requested_by_agent_run_id
-- action_type
+- requested_by_actor_kind / requested_by_actor_id
+- requested/resolved AgentDefinition IDs
+- AgentVersion ID / configuration digest
+- ToolDefinition ID / ToolVersion ID / configuration digest / tool key
 - risk_level
-- payload_hash
-- canonicalization_version
-- tool_id and tool_version
-- resource_type and resource_id
+- ToolPermission ID / version ID / configuration digest / engine version
+- scope request digest
+- resource_type / resource_id optional
 - environment
-- policy_version
-- idempotency_key
-- status
+- normalized input digest
+- platform-generated idempotency key
+- action digest
+- canonicalization_version
+- created_at
 - expires_at
-- decided_by
+
+`ApprovalRequest` is immutable and stores no raw tool payload. Its `ActionBindingV1` digest is also
+the idempotency request digest. Canonicalization version 1 is strict JSON with lexicographically
+sorted object keys, UTF-8 serialization, compact separators, and only null, boolean, JSON-safe
+integer, string, array, and string-keyed object values. Floats, out-of-range integers, bytes, dates,
+custom objects, unordered collections, invalid Unicode, and credential-shaped fields or values are
+rejected.
+
+### ApprovalDecision
+- id / tenant_id / approval_request_id
+- decision (`APPROVE` or `DENY`)
+- decided_by_user_id / decided_by_actor_kind
 - decided_at
+- reason_code / safe_note optional
+
+Exactly one immutable terminal decision may exist per request. Active owners/admins decide R0-R5;
+R6 requires an active owner. R7 is denied before approval. Requests expire after seven days for
+R0-R4, 24 hours for R5, and one hour for R6.
+
+### ApprovalRevocation
+- id / tenant_id / approval_request_id
+- revoked_by_user_id / revoked_at / reason_code
+
+Revocation is append-only and takes precedence over decision and expiry when state is derived.
+
+### IdempotencyRecord
+- id / tenant_id
+- ToolDefinition ID / ToolVersion ID
+- platform-generated idempotency key
+- request digest (the ActionBinding digest)
+- state / attempt count
+- current attempt ID / lease expiry while executing
+- safe result reference optional
+- reconciliation outcome optional
+- created_at / updated_at
+
+The logical-operation uniqueness key is `(tenant_id, tool_definition_id, idempotency_key)`.
+ToolVersion remains digest-bound, so reuse of a key for another version conflicts. An expired
+execution lease does not permit automatic takeover. Unknown external outcomes require explicit
+reconciliation before any retry.
 
 ## Product Digital Twin
 

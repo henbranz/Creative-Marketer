@@ -39,3 +39,26 @@ Canonicalization must be versioned and stable across languages. Some provider fa
 - provider-native idempotency keys are used where available but do not replace platform records
 - audit records preserve decision and execution state without storing secrets
 - approval and idempotency behavior is tested independently of LLM output
+
+## Implementation Clarifications
+
+Canonicalization version 1 uses a deliberately small, portable JSON profile: null, booleans,
+integers within JavaScript's interoperable safe range, valid Unicode strings, arrays, and
+string-keyed objects. Object keys are sorted by Unicode scalar value and serialized as compact UTF-8
+JSON. Floats, out-of-range integers, bytes, dates, invalid Unicode, custom objects, unordered
+collections, and credential-shaped content are rejected. The profile is not presented as full RFC
+8785; a new version is required for any semantic change.
+
+One immutable `ActionBindingV1` is the source for both `ApprovalRequest.action_digest` and
+`IdempotencyRecord.request_digest`. It binds resolved configuration digests and immutable version
+IDs for Agent, Tool, and ToolPermission, plus scope, resource, environment, normalized input, risk,
+and a platform-generated `op_<uuid>` key.
+
+Approval state is derived from append-only request, decision, and optional revocation rows. Its
+precedence is revoked, denied, expired, approved, pending. Expiry is seven days for R0-R4, 24 hours
+for R5, and one hour for R6. Active owners/admins decide R0-R5; R6 requires an active owner.
+
+Idempotency uniqueness is `(tenant_id, tool_definition_id, idempotency_key)`. Tool version is
+bound in the action digest. Execution attempts have explicit UUID ownership and bounded leases,
+but lease expiry never authorizes takeover. Unknown external outcome blocks retry until explicit
+reconciliation records either confirmed effect or confirmed no effect.

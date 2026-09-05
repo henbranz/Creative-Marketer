@@ -292,6 +292,7 @@ class PermissionDecision:
     permission_version_id: UUID | None
     permission_configuration_digest: str | None
     requested_scope_digest: str
+    environment: str
     obligations: tuple[Obligation, ...]
     correlation_id: UUID
     decision_id: UUID = field(default_factory=uuid4)
@@ -399,6 +400,7 @@ class PermissionEngine:
             permission_version_id=permission.permission_version_id,
             permission_configuration_digest=permission.configuration_digest,
             requested_scope_digest=scopes.digest,
+            environment=context.environment,
             obligations=obligations,
             correlation_id=context.correlation_id,
         )

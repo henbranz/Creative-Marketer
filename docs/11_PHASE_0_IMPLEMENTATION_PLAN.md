@@ -77,8 +77,8 @@ No LLM calls required.
 ## Workstream 5 — Tool Registry & Permission Engine
 
 Tool Registry status: completed by `TASK-006`; deterministic Permission Engine and immutable
-tenant ToolPermission policy completed by `TASK-007`. Approval, idempotency, ToolCall, and Tool
-Gateway execution remain pending.
+tenant ToolPermission policy completed by `TASK-007`. Approval and idempotency were completed by
+`TASK-008`; ToolCall and Tool Gateway execution remain pending.
 
 Implement:
 - ToolDefinition
@@ -90,11 +90,15 @@ Implement:
 
 Start deny-by-default.
 
-TASK-006 intentionally deferred authorization. TASK-007 now creates `ToolPermission`, immutable
-versions, activation, and audited deterministic decisions without creating approvals, idempotency,
-tool calls, or gateway execution. Those remain later workstream boundaries.
+TASK-006 intentionally deferred authorization. TASK-007 creates `ToolPermission`, immutable
+versions, activation, and audited deterministic decisions. TASK-008 consumes those decisions to
+create exact action bindings, immutable approvals, and durable idempotency state without creating
+tool calls or gateway execution.
 
 ## Workstream 6 — Approval Engine
+
+Status: completed by `TASK-008`, together with the Idempotency Engine. Tool execution remains
+deferred to the Tool Gateway workstream.
 
 Implement:
 - ApprovalRequest
@@ -103,6 +107,9 @@ Implement:
 - grant/deny
 - actor identity
 - immutable decision history
+- immutable revocation history
+- shared versioned action binding
+- conservative execution-attempt and unknown-outcome lifecycle
 
 ## Workstream 7 — Audit
 
