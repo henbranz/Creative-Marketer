@@ -376,7 +376,15 @@ def _rls_and_grants() -> None:
                 f"{MIGRATOR} USING (true) WITH CHECK (true)"
             )
             op.execute(f"REVOKE ALL ON {schema}.{table} FROM {RUNTIME}")
-    for table in ("approval_requests", "approval_decisions", "approval_revocations"):
+    op.execute(
+        "CREATE POLICY approval_requests_tenant_lock ON "
+        f"approval_governance.approval_requests FOR UPDATE TO {RUNTIME} "
+        f"USING (tenant_id = {TENANT}) WITH CHECK (tenant_id = {TENANT})"
+    )
+    op.execute(
+        f"GRANT SELECT, INSERT, UPDATE ON approval_governance.approval_requests TO {RUNTIME}"
+    )
+    for table in ("approval_decisions", "approval_revocations"):
         op.execute(f"GRANT SELECT, INSERT ON approval_governance.{table} TO {RUNTIME}")
     op.execute(
         "CREATE POLICY idempotency_records_tenant_update ON "

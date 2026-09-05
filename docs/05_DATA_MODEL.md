@@ -226,6 +226,10 @@ integer, string, array, and string-keyed object values. Floats, out-of-range int
 custom objects, unordered collections, invalid Unicode, and credential-shaped fields or values are
 rejected.
 
+The runtime's narrowly scoped `UPDATE` privilege on request rows exists only so PostgreSQL permits
+tenant-scoped `SELECT ... FOR UPDATE` serialization. A database trigger rejects every actual
+update or delete, preserving immutability even if application code is bypassed.
+
 ### ApprovalDecision
 - id / tenant_id / approval_request_id
 - decision (`APPROVE` or `DENY`)
