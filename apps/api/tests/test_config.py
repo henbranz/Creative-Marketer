@@ -15,3 +15,12 @@ def test_settings_reject_unknown_environment() -> None:
             app_env="demo",
             database_url="postgresql+psycopg://test:test@localhost:5432/test",
         )
+
+
+def test_settings_reject_development_identity_in_production() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            app_env="production",
+            dev_identity_enabled=True,
+            database_url="postgresql+psycopg://test:test@localhost:5432/test",
+        )

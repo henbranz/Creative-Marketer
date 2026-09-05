@@ -37,3 +37,13 @@ Composite keys and RLS add migration, query, test, and operational complexity. D
 - migration tooling uses a non-runtime role
 - tenant-owned repository APIs require tenant identity
 - globally scoped records use explicit ownership semantics rather than accidental null-tenant fallback
+
+## TASK-002 implementation notes
+
+The initial identity schema uses an async SQLAlchemy 2.x unit of work because API and future worker entrypoints are concurrent and I/O bound. Each application use case owns one transaction. The adapter establishes `app.current_tenant_id` with `set_config(..., true)`, whose `true` flag makes the value transaction-local; policies use `current_setting(..., true)` and `nullif` so an unset value matches no protected row. An invalid UUID fails the statement.
+
+`identity.tenants` and `identity.memberships` use forced RLS. `identity.users` is deliberately platform-scoped because one user can belong to several tenants; tenant code reaches users only through purpose-specific repositories rather than a tenant ownership fiction. The runtime login is a non-owner with `NOBYPASSRLS`; the migration login owns schema objects and is never an application credential.
+
+The custom tenant setting is not itself an authorization grant: PostgreSQL permits a role to set custom GUC values. Only the trusted application boundary may choose its value, based on the authoritative context introduced in TASK-003. RLS limits missing-filter mistakes and pooled-session leakage but does not replace credential security or application authorization.
+
+Membership uses `(tenant_id, user_id)` as its primary key with foreign keys to the tenant and global user. Future relationships between two tenant-owned resources use a unique `(tenant_id, id)` target plus a composite `(tenant_id, resource_id)` foreign key; no artificial surrogate relationship was added merely to demonstrate that convention.

@@ -25,7 +25,7 @@ Start PostgreSQL, the API, and the web app together:
 make dev-up
 ```
 
-The web app is available at <http://localhost:3000>; the API health endpoint is at <http://localhost:8000/health>.
+The web app is available at <http://localhost:3000>; the API health endpoint is at <http://localhost:8000/health>. Compose applies Alembic migrations with the migration role before starting the API with the restricted runtime role.
 
 To run processes directly during development, start PostgreSQL with Docker and run these in separate terminals:
 
@@ -44,6 +44,7 @@ make lint
 make format-check
 make typecheck
 make test
+make test-postgres
 make build
 make check
 ```
@@ -61,7 +62,24 @@ scripts/               Reproducible developer scripts
 docs/                  Architecture and decision records
 ```
 
-Domain and application modules added later must follow the dependency direction in `AGENTS.md`: delivery layers depend on application services, which depend on domain code and ports. Infrastructure implements ports and points inward. Provider SDKs, database drivers, and web frameworks do not belong in domain modules.
+Reusable backend code lives in `apps/api/src/creative_marketer`; `creative_marketer_api` is only the delivery/composition adapter. Domain and application modules follow the dependency direction in `AGENTS.md`: delivery depends on application services, and infrastructure implements inward-owned ports. Provider SDKs, database drivers, and web frameworks do not belong in domain modules.
+
+## Database security model
+
+`creative_marketer_migrator` owns and migrates the schema. `creative_marketer_runtime` is a non-owner login used by the application and is subject to forced RLS. The committed password values are local/CI-only; production provisioning must create rotated credentials outside the repository.
+
+Tenant-aware use cases pass an immutable `TenantContext` into a unit of work. On transaction entry the adapter calls PostgreSQL `set_config(..., true)`, equivalent to transaction-local `SET LOCAL`. Policies compare protected rows to `app.current_tenant_id`; missing or invalid context never exposes rows. Do not set this value outside the trusted application boundary.
+
+The reusable relationship convention for future tenant-owned tables is a unique `(tenant_id, id)` target and a composite `(tenant_id, resource_id)` foreign key. Membership currently relates a tenant-owned row to a platform-scoped User, so its composite primary key `(tenant_id, user_id)`, tenant/user foreign keys, and RLS jointly prevent duplicates, orphan relationships, and cross-context attachment.
+
+Run migrations directly only with the migration URL:
+
+```bash
+cd apps/api
+uv run alembic upgrade head
+```
+
+`make test-postgres` starts the repository PostgreSQL service, applies migrations, and runs the real RLS/security suite. If an existing volume predates the role bootstrap, create a fresh development volume intentionally with `docker compose down -v` before retrying; that command deletes local database data.
 
 ## Environment and secrets
 

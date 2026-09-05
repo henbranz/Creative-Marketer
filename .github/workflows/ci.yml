@@ -11,6 +11,24 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: creative_marketer
+          POSTGRES_USER: creative_marketer_migrator
+          POSTGRES_PASSWORD: creative_marketer_migrator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U creative_marketer_migrator -d creative_marketer"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIGRATION_DATABASE_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
+      TEST_DATABASE_ADMIN_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
+      TEST_DATABASE_RUNTIME_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer
     defaults:
       run:
         working-directory: apps/api
@@ -21,6 +39,10 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --frozen
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f ../../infra/postgres/init/001-runtime-role.sql
+      - run: uv run alembic upgrade head
+      - run: uv run alembic downgrade base
+      - run: uv run alembic upgrade head
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src tests

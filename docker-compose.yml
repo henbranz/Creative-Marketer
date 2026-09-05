@@ -3,8 +3,8 @@ services:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-creative_marketer}
-      POSTGRES_USER: ${POSTGRES_USER:-creative_marketer}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-creative_marketer}
+      POSTGRES_USER: ${POSTGRES_USER:-creative_marketer_migrator}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-creative_marketer_migrator}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -14,6 +14,17 @@ services:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  migrate:
+    build:
+      context: ./apps/api
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      MIGRATION_DATABASE_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@postgres:5432/creative_marketer
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   api:
     build:
@@ -22,11 +33,12 @@ services:
       APP_ENV: development
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      DATABASE_URL: postgresql+psycopg://creative_marketer:creative_marketer@postgres:5432/creative_marketer
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      DEV_IDENTITY_ENABLED: "true"
       CORS_ORIGINS: '["http://localhost:3000"]'
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
 

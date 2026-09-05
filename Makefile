@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down api-dev web-dev lint format-check typecheck test build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -13,6 +13,14 @@ dev-up:
 
 dev-down:
 	docker compose down
+
+db-migrate:
+	docker compose run --rm migrate
+
+test-postgres:
+	docker compose up -d postgres
+	docker compose run --rm migrate
+	cd apps/api && TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer uv run pytest -m postgres
 
 api-dev:
 	cd apps/api && uv run uvicorn creative_marketer_api.main:app --reload --host 0.0.0.0 --port 8000

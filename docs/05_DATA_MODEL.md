@@ -24,7 +24,11 @@ This document defines conceptual entities. Phase 0 should convert these into exp
 - tenant_id
 - user_id
 - role
-- permissions
+- status
+- created_at
+- updated_at
+
+TASK-002 stores identity records in the `identity` PostgreSQL schema. Tenant slugs and normalized user emails are unique. External identities are optional vendor-neutral `(issuer, subject)` pairs; permanent authentication remains deferred to TASK-003. Membership's `(tenant_id, user_id)` primary key allows one user to join many tenants while prohibiting duplicate relationships within one tenant.
 
 ## Agent Governance
 

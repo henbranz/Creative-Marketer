@@ -5,13 +5,17 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
-RUN uv sync --frozen --no-dev
+COPY alembic.ini ./
+COPY migrations ./migrations
+RUN uv sync --frozen --no-dev --no-editable
 
 FROM python:3.12-slim AS runtime
 
 RUN useradd --create-home --uid 10001 appuser
 WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
+COPY --from=builder --chown=appuser:appuser /app/alembic.ini /app/alembic.ini
+COPY --from=builder --chown=appuser:appuser /app/migrations /app/migrations
 
 ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 USER appuser
