@@ -317,6 +317,12 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "catalog.asset.archived.v1": (
+            "sha256:bcbb774c81085112f4594e587be1b0bc23dbdfdebc3eac331ccac840499d6b4f"
+        ),
+        "catalog.asset.ready.v1": (
+            "sha256:3bbba4e4f7c7caf2121f67c557f676157fcea18093155e451c225fbe71c20c63"
+        ),
         "catalog.brand.created.v1": (
             "sha256:37dd8c1541a9c68d98d74941bf96a20415e53c786d1040d081eba9c70c72f550"
         ),
@@ -368,6 +374,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260905_0012"]
+    assert script.get_heads() == ["20260906_0013"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

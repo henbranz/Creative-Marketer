@@ -36,6 +36,19 @@ class Settings(BaseSettings):
         default_factory=lambda: uuid4().hex, min_length=1, max_length=128
     )
     otel_trace_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)
+    object_storage_backend: Literal["disabled", "s3"] = "disabled"
+    object_storage_endpoint_url: AnyHttpUrl = AnyHttpUrl("http://localhost:9000")
+    object_storage_public_endpoint_url: AnyHttpUrl = AnyHttpUrl("http://localhost:9000")
+    object_storage_region: str = Field(default="us-east-1", min_length=1, max_length=64)
+    object_storage_bucket: str = Field(
+        default="creative-marketer-assets", min_length=3, max_length=63
+    )
+    object_storage_access_key_id: str = Field(default="disabled-access-key", min_length=3)
+    object_storage_secret_access_key: SecretStr = Field(
+        default=SecretStr("disabled-secret-access-key"), min_length=8
+    )
+    asset_upload_ttl_seconds: int = Field(default=900, ge=600, le=900)
+    asset_download_ttl_seconds: int = Field(default=600, ge=300, le=900)
 
     @model_validator(mode="after")
     def reject_development_identity_in_deployed_environments(self) -> "Settings":
@@ -43,6 +56,11 @@ class Settings(BaseSettings):
             raise ValueError("development identity is forbidden outside development and test")
         if self.otel_mode == "otlp" and self.otel_exporter_otlp_endpoint is None:
             raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required in otlp mode")
+        if self.object_storage_backend == "s3" and self.app_env in {"staging", "production"}:
+            if self.object_storage_endpoint_url.host in {"localhost", "127.0.0.1"}:
+                raise ValueError("deployed S3 storage cannot use a loopback endpoint")
+            if self.object_storage_access_key_id.startswith("disabled-"):
+                raise ValueError("deployed S3 storage requires injected credentials")
         return self
 
 

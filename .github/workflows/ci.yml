@@ -31,6 +31,12 @@ jobs:
       TEST_DATABASE_ADMIN_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
       TEST_DATABASE_RUNTIME_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer
       TEST_DATABASE_PUBLISHER_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer
+      TEST_OBJECT_STORAGE_URL: http://localhost:9000
+      OBJECT_STORAGE_BACKEND: s3
+      OBJECT_STORAGE_ENDPOINT_URL: http://localhost:9000
+      OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      OBJECT_STORAGE_ACCESS_KEY_ID: creative-marketer-test
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: creative-marketer-test-secret
     defaults:
       run:
         working-directory: apps/api
@@ -41,10 +47,21 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --frozen
+      - name: Start private S3-compatible storage
+        run: docker run -d --name creative-marketer-minio -p 9000:9000 -e MINIO_ROOT_USER=creative-marketer-test -e MINIO_ROOT_PASSWORD=creative-marketer-test-secret minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+      - run: uv run python -m creative_marketer.infrastructure.object_storage.bootstrap
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f ../../infra/postgres/init/001-runtime-role.sql
       - run: uv run alembic upgrade 20260905_0001
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.users (id, external_identity_issuer, external_identity_subject, email, normalized_email, status) VALUES ('00000000-0000-0000-0000-000000000003', 'https://legacy.example', 'LegacySubject', 'legacy@example.test', 'legacy@example.test', 'active')"
       - run: uv run alembic upgrade head
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.tenants (id,name,slug,status) VALUES ('00000000-0000-0000-0000-000000000013','Asset downgrade','asset-downgrade','active'); INSERT INTO identity.users (id,email,normalized_email,status) VALUES ('00000000-0000-0000-0000-000000000013','asset-downgrade@example.test','asset-downgrade@example.test','active'); INSERT INTO catalog.brands (id,tenant_id,name,slug,status,created_by) VALUES ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','Asset downgrade','asset-downgrade','active','00000000-0000-0000-0000-000000000013'); INSERT INTO catalog.assets (id,tenant_id,brand_id,kind,role,origin,status,original_filename,declared_mime_type,rights_status,allowed_uses,upload_object_key,created_by) VALUES ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','image','other','user_upload','pending_upload','proof.png','image/png','unknown','[\"internal_analysis\"]','tenants/00000000-0000-0000-0000-000000000013/assets/00000000-0000-0000-0000-000000000013/uploads/proof','00000000-0000-0000-0000-000000000013')"
+      - name: Verify lossy Asset Library downgrade fails closed
+        run: |
+          if uv run alembic downgrade 20260905_0012; then
+            echo "lossy Asset Library downgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "DELETE FROM catalog.assets WHERE id='00000000-0000-0000-0000-000000000013'; DELETE FROM catalog.brands WHERE id='00000000-0000-0000-0000-000000000013'; DELETE FROM identity.users WHERE id='00000000-0000-0000-0000-000000000013'; DELETE FROM identity.tenants WHERE id='00000000-0000-0000-0000-000000000013'"
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/verify_0002_backfill.sql
       - run: uv run alembic downgrade base
       - run: uv run alembic upgrade head

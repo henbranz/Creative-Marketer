@@ -44,3 +44,19 @@ def test_observability_configuration_is_bounded_and_otlp_is_explicit() -> None:
         otel_trace_sample_ratio=0.25,
     )
     assert configured.otel_trace_sample_ratio == 0.25
+
+
+def test_deployed_s3_storage_rejects_local_or_placeholder_credentials() -> None:
+    common = {
+        "app_env": "production",
+        "database_url": "postgresql+psycopg://test:test@localhost:5432/test",
+        "object_storage_backend": "s3",
+    }
+    with pytest.raises(ValidationError, match="loopback"):
+        Settings(**common)  # type: ignore[arg-type]
+    with pytest.raises(ValidationError, match="injected credentials"):
+        Settings(
+            **common,  # type: ignore[arg-type]
+            object_storage_endpoint_url="https://storage.example.test",
+            object_storage_public_endpoint_url="https://storage.example.test",
+        )

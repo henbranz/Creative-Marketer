@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","x-event-type":"catalog.asset.archived.v1","type":"object","additionalProperties":false,"required":["asset_id","brand_id","product_id"],"properties":{"asset_id":{"type":"string","format":"uuid"},"brand_id":{"type":"string","format":"uuid"},"product_id":{"type":["string","null"],"format":"uuid"}}}

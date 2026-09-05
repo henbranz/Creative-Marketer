@@ -218,9 +218,22 @@ def test_temporal_sdk_is_isolated_from_domain_and_application_contracts() -> Non
     protected.extend(root.glob("**/application.py"))
     protected.extend((root / "workflow_orchestration").glob("*.py"))
     assert "temporalio" not in imported_roots(protected)
-
     temporal_root = root / "infrastructure" / "temporal"
     assert temporal_root.is_dir()
     worker_source = (temporal_root / "worker.py").read_text().lower()
     assert "fastapi" not in worker_source
     assert "creative_marketer_api" not in worker_source
+
+
+def test_asset_policy_is_provider_neutral_and_s3_sdk_is_infrastructure_only() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    protected = [root / "catalog" / "asset_domain.py", root / "catalog" / "asset_application.py"]
+    assert imported_roots(protected).isdisjoint(
+        {"fastapi", "sqlalchemy", "boto3", "botocore", "minio"}
+    )
+    sdk_imports = [
+        path
+        for path in root.glob("**/*.py")
+        if "boto3" in path.read_text() or "botocore" in path.read_text()
+    ]
+    assert sdk_imports == [root / "infrastructure" / "object_storage" / "s3.py"]

@@ -724,6 +724,107 @@ label small,
 .error {
   font-size: 0.8rem;
 }
+.assets-workspace {
+  display: grid;
+  gap: 1rem;
+  padding-top: 1.25rem;
+}
+.upload-card {
+  align-items: start;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: 1fr 1fr;
+  padding: 1.5rem;
+}
+.upload-card > div:first-child {
+  display: grid;
+  gap: 0.7rem;
+}
+.upload-card p:not(.eyebrow) {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.upload-controls {
+  display: grid;
+  gap: 0.7rem;
+}
+.attestation {
+  align-items: start;
+  display: grid;
+  font-weight: 500;
+  grid-template-columns: 18px 1fr;
+  line-height: 1.4;
+}
+.attestation input {
+  margin-top: 0.15rem;
+}
+.asset-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+.asset-toolbar select {
+  max-width: 170px;
+}
+.asset-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.asset-card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.75rem;
+  overflow: hidden;
+  padding-bottom: 1rem;
+}
+.asset-preview {
+  align-items: center;
+  background: #e4ebe5;
+  color: var(--accent);
+  display: flex;
+  font-size: 2rem;
+  font-weight: 800;
+  height: 145px;
+  justify-content: center;
+}
+.asset-preview.video {
+  background: #e6e5ea;
+}
+.asset-preview.document {
+  background: #eee8df;
+}
+.asset-card > div:not(.asset-preview),
+.asset-card > button {
+  margin-inline: 1rem;
+}
+.asset-card strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asset-card p,
+.asset-card small {
+  color: var(--muted);
+  font-size: 0.7rem;
+  margin-top: 0.25rem;
+  text-transform: capitalize;
+}
+.text-danger {
+  background: transparent;
+  border: 0;
+  color: var(--danger);
+  cursor: pointer;
+  font-size: 0.75rem;
+  justify-self: start;
+  padding: 0;
+}
 @media (max-width: 1100px) {
   .brief-layout {
     grid-template-columns: 140px minmax(0, 1fr);
@@ -778,6 +879,12 @@ label small,
   .completeness-panel {
     grid-column: auto;
   }
+  .upload-card {
+    grid-template-columns: 1fr;
+  }
+  .asset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 @media (max-width: 560px) {
   .topbar {
@@ -807,5 +914,8 @@ label small,
   }
   .tabs {
     gap: 0.9rem;
+  }
+  .asset-grid {
+    grid-template-columns: 1fr;
   }
 }

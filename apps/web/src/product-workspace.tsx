@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   ApiError,
+  type Asset,
   type Brand,
   type BriefWrite,
   catalogApi,
@@ -12,6 +13,7 @@ import {
   type Session,
   slugify,
   type Workspace,
+  uploadToGrant,
 } from "./catalog-api";
 
 const navigation = [
@@ -137,6 +139,192 @@ function EmptyPanel({ tab }: { tab: string }) {
       <p>{copy}</p>
       <span className="coming">Coming in a future product slice</span>
     </section>
+  );
+}
+
+function AssetsPanel({ workspace }: { workspace: Workspace }) {
+  const [assets, setAssets] = useState<Asset[]>([]);
+  const [file, setFile] = useState<File | null>(null);
+  const [role, setRole] = useState("product_detail");
+  const [rights, setRights] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
+  const [filter, setFilter] = useState("all");
+  const [error, setError] = useState("");
+  const session = useMemo(() => readSession(), []);
+  const refresh = useCallback(async () => {
+    setAssets(await catalogApi.listAssets(session, workspace.product.id));
+  }, [session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () => void refresh().catch(() => setError("Assets could not be loaded.")),
+    );
+  }, [refresh]);
+  const upload = async () => {
+    if (!file || !rights) return;
+    setError("");
+    setProgress(0);
+    try {
+      const kind = file.type.startsWith("image/")
+        ? "image"
+        : file.type.startsWith("video/")
+          ? "video"
+          : "document";
+      const grant = await catalogApi.createAsset(session, {
+        brand_id: workspace.brand.id,
+        product_id: workspace.product.id,
+        kind,
+        role: role as "product_detail",
+        original_filename: file.name,
+        mime_type: file.type as "image/jpeg",
+        rights_status: "confirmed",
+        allowed_uses: ["internal_analysis", "generation_input"],
+        parent_asset_id: null,
+        source_url: null,
+      });
+      await uploadToGrant(grant, file, setProgress);
+      await catalogApi.finalizeAsset(session, grant.asset.id);
+      await refresh();
+      setFile(null);
+      setProgress(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Upload failed.");
+      setProgress(null);
+    }
+  };
+  const shown = assets.filter(
+    (asset) => filter === "all" || asset.kind === filter,
+  );
+  return (
+    <div className="assets-workspace">
+      <section className="upload-card">
+        <div>
+          <p className="eyebrow">Secure media intake</p>
+          <h2>Product assets</h2>
+          <p>
+            Private files are verified by type and digest before agents can
+            reference them.
+          </p>
+        </div>
+        {workspace.product.can_edit ? (
+          <div className="upload-controls">
+            <input
+              aria-label="Choose asset"
+              type="file"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/webm,application/pdf"
+              onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+            />
+            <select
+              aria-label="Asset role"
+              value={role}
+              onChange={(event) => setRole(event.target.value)}
+            >
+              <option value="product_hero">Product hero</option>
+              <option value="product_detail">Product detail</option>
+              <option value="lifestyle">Lifestyle</option>
+              <option value="packaging">Packaging</option>
+              <option value="other">Other</option>
+            </select>
+            <label className="attestation">
+              <input
+                type="checkbox"
+                checked={rights}
+                onChange={(event) => setRights(event.target.checked)}
+              />
+              I confirm this workspace may use this file for analysis and
+              creative generation.
+            </label>
+            <button
+              className="primary"
+              disabled={!file || !rights || progress !== null}
+              onClick={() => void upload()}
+            >
+              {progress === null ? "Upload asset" : `Uploading ${progress}%`}
+            </button>
+          </div>
+        ) : (
+          <p className="readonly-note">
+            You have read-only access to this asset library.
+          </p>
+        )}
+      </section>
+      {error && (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="asset-toolbar">
+        <strong>{shown.length} assets</strong>
+        <select
+          aria-label="Filter assets"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+        >
+          <option value="all">All types</option>
+          <option value="image">Images</option>
+          <option value="video">Videos</option>
+          <option value="document">Documents</option>
+        </select>
+      </div>
+      {shown.length ? (
+        <div className="asset-grid">
+          {shown.map((asset) => (
+            <article className="asset-card" key={asset.id}>
+              <div className={`asset-preview ${asset.kind}`} aria-hidden="true">
+                {asset.kind.slice(0, 1).toUpperCase()}
+              </div>
+              <div>
+                <strong title={asset.original_filename}>
+                  {asset.original_filename}
+                </strong>
+                <p>
+                  {asset.role.replaceAll("_", " ")} · {asset.status}
+                </p>
+                <small>
+                  {asset.byte_size
+                    ? `${(asset.byte_size / 1024 / 1024).toFixed(1)} MB`
+                    : "Awaiting validation"}
+                </small>
+              </div>
+              {asset.status === "ready" && (
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    const grant = await catalogApi.downloadAsset(
+                      session,
+                      asset.id,
+                    );
+                    window.open(grant.url, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  Preview
+                </button>
+              )}
+              {asset.can_edit &&
+                ["ready", "rejected"].includes(asset.status) && (
+                  <button
+                    className="text-danger"
+                    onClick={async () => {
+                      await catalogApi.archiveAsset(session, asset.id);
+                      await refresh();
+                    }}
+                  >
+                    Archive
+                  </button>
+                )}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <section className="empty-panel">
+          <span className="empty-glyph">A</span>
+          <h2>No assets yet</h2>
+          <p>
+            Add approved product media to create a reusable, traceable shared
+            asset library.
+          </p>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -814,6 +1002,8 @@ export function ProductWorkspaceApp() {
                     />
                   ) : tab === "Brief" ? (
                     <BriefEditor workspace={workspace} onSaved={setWorkspace} />
+                  ) : tab === "Assets" ? (
+                    <AssetsPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

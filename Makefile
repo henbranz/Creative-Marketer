@@ -18,9 +18,10 @@ db-migrate:
 	docker compose run --rm migrate
 
 test-postgres:
-	docker compose up -d postgres
+	docker compose up -d postgres object-storage
 	docker compose run --rm migrate
-	cd apps/api && TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest -m postgres
+	docker compose run --rm object-storage-init
+	cd apps/api && TEST_OBJECT_STORAGE_URL=http://localhost:9000 TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest -m 'postgres or object_storage'
 
 api-dev:
 	cd apps/api && uv run uvicorn creative_marketer_api.main:app --reload --host 0.0.0.0 --port 8000
@@ -54,9 +55,10 @@ temporal-test:
 	cd apps/api && uv run pytest -m temporal
 
 phase0-gate: lint format-check typecheck
-	docker compose up -d postgres
+	docker compose up -d postgres object-storage
 	docker compose run --rm migrate
-	cd apps/api && TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest --junitxml=phase0-gate.xml
+	docker compose run --rm object-storage-init
+	cd apps/api && TEST_OBJECT_STORAGE_URL=http://localhost:9000 TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest --junitxml=phase0-gate.xml
 
 architecture-security: phase0-gate
 

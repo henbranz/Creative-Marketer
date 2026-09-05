@@ -515,3 +515,36 @@ class ProductKnowledgeSnapshot:
             digest=event_sha256_v1(semantic),
             created_by=created_by,
         )
+
+    @classmethod
+    def create_v2(
+        cls,
+        *,
+        brand: Brand,
+        brand_profile: BrandProfile,
+        product: Product,
+        profile: ProductProfile,
+        brief: ProductBrief,
+        created_by: UUID,
+        asset_manifest: tuple[dict[str, object], ...],
+    ) -> "ProductKnowledgeSnapshot":
+        v1 = cls.create(
+            brand=brand,
+            brand_profile=brand_profile,
+            product=product,
+            profile=profile,
+            brief=brief,
+            created_by=created_by,
+        )
+        content = dict(v1.content)
+        content["assets"] = sorted(asset_manifest, key=lambda value: str(value["asset_id"]))[:100]
+        semantic = {"schema_version": 2, "source_revision": brief.revision, "content": content}
+        return cls(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            source_revision=brief.revision,
+            content=content,
+            digest=event_sha256_v1(semantic),
+            created_by=created_by,
+            schema_version=2,
+        )

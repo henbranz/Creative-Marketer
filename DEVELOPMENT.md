@@ -25,12 +25,12 @@ Start PostgreSQL, the API, and the web app together:
 make dev-up
 ```
 
-The web app is available at <http://localhost:3000>; the API health endpoint is at <http://localhost:8000/health>. Compose applies Alembic migrations with the migration role before starting the API with the restricted runtime role.
+The web app is available at <http://localhost:3000>; the API health endpoint is at <http://localhost:8000/health>. MinIO's local console is at <http://localhost:9001>. Compose applies Alembic migrations with the migration role, creates a private `creative-marketer-assets` bucket with narrow localhost CORS, and starts the API with the restricted runtime role. Object storage credentials in Compose are development-only.
 
 To run processes directly during development, start PostgreSQL with Docker and run these in separate terminals:
 
 ```bash
-docker compose up postgres
+docker compose up postgres object-storage object-storage-init
 make api-dev
 make web-dev
 ```
@@ -164,6 +164,11 @@ uv run alembic upgrade head
 ```
 
 `make test-postgres` starts the repository PostgreSQL service, applies migrations, and runs the real RLS/security suite. If an existing volume predates the role bootstrap, create a fresh development volume intentionally with `docker compose down -v` before retrying; that command deletes local database data.
+
+Asset storage tests additionally use the real S3-compatible service. Set
+`TEST_OBJECT_STORAGE_URL=http://localhost:9000` with the local test credentials, or use the updated
+`make phase0-gate`, which starts and initializes it. Asset endpoints are the only API surface that
+depends on storage health; `/health/ready` deliberately continues to report database readiness.
 
 ## Environment and secrets
 

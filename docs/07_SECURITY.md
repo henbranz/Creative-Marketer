@@ -322,6 +322,21 @@ Must include:
 - provider error handling
 - object storage tenant escape
 
+## Private asset storage
+
+Asset buckets are private and public ACL/policy paths are blocked. Browsers receive a short-lived
+presigned POST restricted to one random tenant/Asset staging key, exact declared content type, and
+kind-specific byte limit. They never receive general storage credentials. Downloads use a fresh
+5–15 minute signed GET only after an authenticated tenant lookup of a READY Asset.
+
+Finalize does not trust extension, browser MIME, object metadata, or ETag. It heads and streams the
+object, enforces the size bound, recognizes an allow-listed magic signature, calculates SHA-256,
+then copies the verified bytes to a separate unpredictable server-only final key. Consequently an
+unexpired upload grant can overwrite only staging bytes, never READY identity. SVG, HTML, scripts,
+and other browser-active formats are not accepted. Storage keys, grants, credentials, and raw media
+are excluded from audit/events/telemetry. Object storage failure returns only from asset operations;
+general API readiness remains PostgreSQL-based.
+
 ## Tool execution controls
 
 Models cannot choose tenant identity, Agent versions, Tool versions, risk, permission, scopes,

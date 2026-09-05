@@ -49,6 +49,9 @@ Every event uses the implemented immutable canonical envelope:
 - `catalog.product.updated.v1`
 - `catalog.product.brief_completed.v1`
 - `catalog.product.snapshot_created.v1`
+- `catalog.product.snapshot_created.v2`
+- `catalog.asset.ready.v1`
+- `catalog.asset.archived.v1`
 - `catalog.asset.added.v1`
 
 ### Research

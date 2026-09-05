@@ -10,6 +10,9 @@ export type Product = components["schemas"]["ProductResponse"];
 export type ProductCreate = components["schemas"]["ProductCreate"];
 export type Workspace = components["schemas"]["WorkspaceResponse"];
 export type Snapshot = components["schemas"]["SnapshotResponse"];
+export type Asset = components["schemas"]["AssetResponse"];
+export type AssetCreate = components["schemas"]["AssetCreate"];
+export type UploadGrant = components["schemas"]["UploadGrantResponse"];
 
 export interface Session {
   readonly tenantId: string;
@@ -76,7 +79,56 @@ export const catalogApi = {
     request<Snapshot>(session, `/v1/products/${productId}/snapshots`, {
       method: "POST",
     }),
+  listAssets: (session: Session, productId: string) =>
+    request<Asset[]>(session, `/v1/products/${productId}/assets`),
+  createAsset: (session: Session, value: AssetCreate) =>
+    request<UploadGrant>(session, "/v1/assets", {
+      method: "POST",
+      body: JSON.stringify(value),
+    }),
+  finalizeAsset: (session: Session, assetId: string) =>
+    request<Asset>(session, `/v1/assets/${assetId}/finalize`, {
+      method: "POST",
+    }),
+  archiveAsset: (session: Session, assetId: string) =>
+    request<Asset>(session, `/v1/assets/${assetId}/archive`, {
+      method: "POST",
+    }),
+  downloadAsset: (session: Session, assetId: string) =>
+    request<{ url: string; expires_at: string }>(
+      session,
+      `/v1/assets/${assetId}/download`,
+      { method: "POST" },
+    ),
 };
+
+export async function uploadToGrant(
+  grant: UploadGrant,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<void> {
+  const body = new FormData();
+  Object.entries(grant.fields).forEach(([key, value]) =>
+    body.append(key, value),
+  );
+  body.append("file", file);
+  await new Promise<void>((resolve, reject) => {
+    const upload = new XMLHttpRequest();
+    upload.open("POST", grant.url);
+    upload.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable)
+        onProgress(Math.round((event.loaded / event.total) * 100));
+    });
+    upload.addEventListener("load", () => {
+      if (upload.status >= 200 && upload.status < 300) resolve();
+      else reject(new Error("Object storage rejected the upload."));
+    });
+    upload.addEventListener("error", () =>
+      reject(new Error("Object storage is unavailable.")),
+    );
+    upload.send(body);
+  });
+}
 
 export function listText(value: string): string[] {
   return value

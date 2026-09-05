@@ -9,6 +9,7 @@ from starlette.responses import Response
 
 from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.catalog.application import CatalogService
+from creative_marketer.catalog.asset_application import AssetService, UnavailableObjectStore
 from creative_marketer.infrastructure.authentication import (
     DevelopmentAuthenticationAdapter,
     UnavailableAuthenticationAdapter,
@@ -19,6 +20,7 @@ from creative_marketer.infrastructure.database import (
     create_session_factory,
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.observability.configuration import (
     ObservabilityConfiguration,
     build_runtime,
@@ -133,6 +135,21 @@ def create_app(
         else UnavailableAuthenticationAdapter()
     )
     identity_uow = SqlAlchemyUnitOfWorkFactory(session_factory)
+    catalog_uow = SqlAlchemyCatalogUnitOfWorkFactory(session_factory)
+    object_store = (
+        S3ObjectStore(
+            endpoint_url=str(resolved_settings.object_storage_endpoint_url),
+            public_endpoint_url=str(resolved_settings.object_storage_public_endpoint_url),
+            region=resolved_settings.object_storage_region,
+            bucket=resolved_settings.object_storage_bucket,
+            access_key_id=resolved_settings.object_storage_access_key_id,
+            secret_access_key=resolved_settings.object_storage_secret_access_key.get_secret_value(),
+            upload_ttl_seconds=resolved_settings.asset_upload_ttl_seconds,
+            download_ttl_seconds=resolved_settings.asset_download_ttl_seconds,
+        )
+        if resolved_settings.object_storage_backend == "s3"
+        else UnavailableObjectStore()
+    )
     application.include_router(
         create_authentication_router(
             authenticator,
@@ -145,7 +162,8 @@ def create_app(
         create_catalog_router(
             authenticator,
             identity_uow,
-            CatalogService(SqlAlchemyCatalogUnitOfWorkFactory(session_factory)),
+            CatalogService(catalog_uow),
+            AssetService(catalog_uow, object_store),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

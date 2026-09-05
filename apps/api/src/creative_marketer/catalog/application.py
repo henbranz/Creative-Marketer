@@ -8,6 +8,7 @@ from creative_marketer.audit.application import AuditWriter
 from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditOutcome
 from creative_marketer.audit.safety import safe_metadata
+from creative_marketer.catalog.asset_domain import Asset, AssetKind, AssetStatus
 from creative_marketer.catalog.domain import (
     Brand,
     BrandProfile,
@@ -77,6 +78,20 @@ class SnapshotRepository(Protocol):
     async def latest(self, product_id: UUID) -> ProductKnowledgeSnapshot | None: ...
 
 
+class AssetRepository(Protocol):
+    async def add(self, value: Asset) -> None: ...
+    async def get(self, value_id: UUID) -> Asset | None: ...
+    async def list(
+        self,
+        *,
+        product_id: UUID | None = None,
+        kind: AssetKind | None = None,
+        status: AssetStatus | None = None,
+    ) -> tuple[Asset, ...]: ...
+    async def list_ready_for_product(self, product_id: UUID) -> tuple[Asset, ...]: ...
+    async def update(self, value: Asset, expected_status: AssetStatus) -> None: ...
+
+
 class CatalogUnitOfWork(Protocol):
     brands: BrandRepository
     brand_profiles: BrandProfileRepository
@@ -84,6 +99,7 @@ class CatalogUnitOfWork(Protocol):
     product_profiles: ProductProfileRepository
     product_briefs: ProductBriefRepository
     snapshots: SnapshotRepository
+    assets: AssetRepository
     audit: AuditWriter
     outbox: OutboxWriter
 
@@ -120,13 +136,15 @@ async def _event(
     aggregate_type: str,
     aggregate_id: UUID,
     payload: dict[str, object],
+    *,
+    schema_version: int = 1,
 ) -> None:
     contracts = EventContractRegistry()
     await uow.outbox.append(
         tenant_event(
             context,
             event_type=event_type,
-            schema_version=1,
+            schema_version=schema_version,
             aggregate_type=aggregate_type,
             aggregate_id=aggregate_id,
             payload=payload,
@@ -489,13 +507,17 @@ class CatalogService:
             )
             if brand is None or brand_profile is None or profile is None or brief is None:
                 raise CatalogNotFound("product workspace incomplete")
-            snapshot = ProductKnowledgeSnapshot.create(
+            snapshot = ProductKnowledgeSnapshot.create_v2(
                 brand=brand,
                 brand_profile=brand_profile,
                 product=product,
                 profile=profile,
                 brief=brief,
                 created_by=context.user_id,
+                asset_manifest=tuple(
+                    asset.manifest()
+                    for asset in await uow.assets.list_ready_for_product(product_id)
+                ),
             )
             await uow.snapshots.add(snapshot)
             await uow.audit.append(
@@ -518,7 +540,7 @@ class CatalogService:
             await _event(
                 uow,
                 context,
-                "catalog.product.snapshot_created.v1",
+                "catalog.product.snapshot_created.v2",
                 "product",
                 product_id,
                 {
@@ -528,6 +550,7 @@ class CatalogService:
                     "schema_version": snapshot.schema_version,
                     "source_revision": snapshot.source_revision,
                 },
+                schema_version=2,
             )
             await uow.commit()
             return snapshot

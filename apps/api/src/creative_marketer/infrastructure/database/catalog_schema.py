@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Integer, MetaData, Numeric, String, Table, Text
+from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, Numeric, String, Table, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from creative_marketer.infrastructure.database.schema import NAMING_CONVENTION
@@ -115,5 +115,37 @@ product_knowledge_snapshots = Table(
     Column("digest", String(71), nullable=False),
     Column("created_by", UUID(as_uuid=True), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    schema="catalog",
+)
+
+assets = Table(
+    "assets",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("tenant_id", UUID(as_uuid=True), nullable=False),
+    Column("brand_id", UUID(as_uuid=True), nullable=False),
+    Column("product_id", UUID(as_uuid=True)),
+    Column("kind", String(32), nullable=False),
+    Column("role", String(64), nullable=False),
+    Column("origin", String(32), nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("original_filename", String(255), nullable=False),
+    Column("declared_mime_type", String(100), nullable=False),
+    Column("detected_mime_type", String(100)),
+    Column("rights_status", String(32), nullable=False),
+    Column("allowed_uses", JSONB, nullable=False),
+    Column("upload_object_key", String(1024), nullable=False),
+    Column("object_key", String(1024)),
+    Column("byte_size", BigInteger()),
+    Column("digest", String(71)),
+    Column("width", Integer()),
+    Column("height", Integer()),
+    Column("duration_ms", BigInteger()),
+    Column("rejection_code", String(64)),
+    Column("parent_asset_id", UUID(as_uuid=True)),
+    Column("source_url", String(2048)),
+    Column("created_by", UUID(as_uuid=True), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
     schema="catalog",
 )

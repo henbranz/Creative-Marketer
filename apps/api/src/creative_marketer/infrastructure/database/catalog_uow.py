@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_
 
 from creative_marketer.audit.application import AuditWriter
 from creative_marketer.catalog.application import (
+    AssetRepository,
     BrandProfileRepository,
     BrandRepository,
     CatalogUnitOfWork,
@@ -17,6 +18,7 @@ from creative_marketer.events.application import OutboxWriter
 from creative_marketer.identity.application.authentication import ExecutionContext
 from creative_marketer.infrastructure.database.audit import PostgresAuditWriter
 from creative_marketer.infrastructure.database.catalog_repositories import (
+    SqlAlchemyAssetRepository,
     SqlAlchemyBrandProfileRepository,
     SqlAlchemyBrandRepository,
     SqlAlchemyProductBriefRepository,
@@ -34,6 +36,7 @@ class SqlAlchemyCatalogUnitOfWork:
     product_profiles: ProductProfileRepository
     product_briefs: ProductBriefRepository
     snapshots: SnapshotRepository
+    assets: AssetRepository
     audit: AuditWriter
     outbox: OutboxWriter
 
@@ -57,6 +60,7 @@ class SqlAlchemyCatalogUnitOfWork:
         self.product_profiles = SqlAlchemyProductProfileRepository(self._session)
         self.product_briefs = SqlAlchemyProductBriefRepository(self._session)
         self.snapshots = SqlAlchemySnapshotRepository(self._session)
+        self.assets = SqlAlchemyAssetRepository(self._session)
         self.audit = PostgresAuditWriter(self._session)
         self.outbox = PostgresOutboxWriter(self._session)
         return self

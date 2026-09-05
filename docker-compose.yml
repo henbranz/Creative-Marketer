@@ -26,6 +26,39 @@ services:
       postgres:
         condition: service_healthy
 
+  object-storage:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - object-storage-data:/data
+
+  object-storage-init:
+    build:
+      context: ./apps/api
+    command:
+      [
+        "python",
+        "-m",
+        "creative_marketer.infrastructure.object_storage.bootstrap",
+      ]
+    environment:
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      OBJECT_STORAGE_BACKEND: s3
+      OBJECT_STORAGE_ENDPOINT_URL: http://object-storage:9000
+      OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
+    depends_on:
+      - object-storage
+
   api:
     build:
       context: ./apps/api
@@ -37,6 +70,11 @@ services:
       DEV_IDENTITY_ENABLED: "true"
       AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
       CORS_ORIGINS: '["http://localhost:3000"]'
+      OBJECT_STORAGE_BACKEND: s3
+      OBJECT_STORAGE_ENDPOINT_URL: http://object-storage:9000
+      OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -91,3 +129,4 @@ services:
 volumes:
   postgres-data:
   temporal-data:
+  object-storage-data:

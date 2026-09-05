@@ -55,6 +55,91 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/assets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Asset */
+    post: operations["create_asset_v1_assets_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/assets/{asset_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Asset */
+    get: operations["get_asset_v1_assets__asset_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/assets/{asset_id}/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Archive Asset */
+    post: operations["archive_asset_v1_assets__asset_id__archive_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/assets/{asset_id}/download": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Download Asset */
+    post: operations["download_asset_v1_assets__asset_id__download_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/assets/{asset_id}/finalize": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Finalize Asset */
+    post: operations["finalize_asset_v1_assets__asset_id__finalize_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/brands": {
     parameters: {
       query?: never;
@@ -89,6 +174,23 @@ export interface paths {
     head?: never;
     /** Update Brand */
     patch: operations["update_brand_v1_brands__brand_id__patch"];
+    trace?: never;
+  };
+  "/v1/brands/{brand_id}/assets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Brand Assets */
+    get: operations["list_brand_assets_v1_brands__brand_id__assets_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   "/v1/brands/{brand_id}/products": {
@@ -142,6 +244,23 @@ export interface paths {
     head?: never;
     /** Update Product */
     patch: operations["update_product_v1_products__product_id__patch"];
+    trace?: never;
+  };
+  "/v1/products/{product_id}/assets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Assets */
+    get: operations["list_assets_v1_products__product_id__assets_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
     trace?: never;
   };
   "/v1/products/{product_id}/brief": {
@@ -234,6 +353,144 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AssetCreate */
+    AssetCreate: {
+      /** Allowed Uses */
+      allowed_uses: (
+        | "internal_analysis"
+        | "generation_input"
+        | "organic_publishing"
+        | "paid_advertising"
+      )[];
+      /**
+       * Brand Id
+       * Format: uuid
+       */
+      brand_id: string;
+      /**
+       * Kind
+       * @enum {string}
+       */
+      kind: "image" | "video" | "document";
+      /**
+       * Mime Type
+       * @enum {string}
+       */
+      mime_type:
+        | "image/jpeg"
+        | "image/png"
+        | "image/webp"
+        | "video/mp4"
+        | "video/webm"
+        | "application/pdf";
+      /** Original Filename */
+      original_filename: string;
+      /** Parent Asset Id */
+      parent_asset_id?: string | null;
+      /** Product Id */
+      product_id?: string | null;
+      /**
+       * Rights Status
+       * @enum {string}
+       */
+      rights_status: "confirmed" | "unknown" | "restricted";
+      /**
+       * Role
+       * @enum {string}
+       */
+      role:
+        | "product_hero"
+        | "product_detail"
+        | "lifestyle"
+        | "logo"
+        | "brand_guideline"
+        | "packaging"
+        | "other";
+      /** Source Url */
+      source_url?: string | null;
+    };
+    /**
+     * AssetKind
+     * @enum {string}
+     */
+    AssetKind: "image" | "video" | "document";
+    /** AssetResponse */
+    AssetResponse: {
+      /** Allowed Uses */
+      allowed_uses: string[];
+      /**
+       * Brand Id
+       * Format: uuid
+       */
+      brand_id: string;
+      /** Byte Size */
+      byte_size: number | null;
+      /** Can Edit */
+      can_edit: boolean;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Created By
+       * Format: uuid
+       */
+      created_by: string;
+      /** Declared Mime Type */
+      declared_mime_type: string;
+      /** Detected Mime Type */
+      detected_mime_type: string | null;
+      /** Digest */
+      digest: string | null;
+      /** Duration Ms */
+      duration_ms: number | null;
+      /** Height */
+      height: number | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Kind */
+      kind: string;
+      /** Origin */
+      origin: string;
+      /** Original Filename */
+      original_filename: string;
+      /** Parent Asset Id */
+      parent_asset_id: string | null;
+      /** Product Id */
+      product_id: string | null;
+      /** Rejection Code */
+      rejection_code: string | null;
+      /** Rights Status */
+      rights_status: string;
+      /** Role */
+      role: string;
+      /** Source Url */
+      source_url: string | null;
+      /** Status */
+      status: string;
+      /**
+       * Tenant Id
+       * Format: uuid
+       */
+      tenant_id: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Width */
+      width: number | null;
+    };
+    /**
+     * AssetStatus
+     * @enum {string}
+     */
+    AssetStatus:
+      "pending_upload" | "validating" | "ready" | "rejected" | "archived";
     /** AudienceContract */
     AudienceContract: {
       /**
@@ -549,6 +806,16 @@ export interface components {
        */
       user_id: string;
     };
+    /** DownloadGrantResponse */
+    DownloadGrantResponse: {
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Url */
+      url: string;
+    };
     /** ExecutionContextResponse */
     ExecutionContextResponse: {
       /** Actor Kind */
@@ -798,6 +1065,21 @@ export interface components {
       /** Source Revision */
       source_revision: number;
     };
+    /** UploadGrantResponse */
+    UploadGrantResponse: {
+      asset: components["schemas"]["AssetResponse"];
+      /**
+       * Expires At
+       * Format: date-time
+       */
+      expires_at: string;
+      /** Fields */
+      fields: {
+        [key: string]: string;
+      };
+      /** Url */
+      url: string;
+    };
     /** ValidationError */
     ValidationError: {
       /** Context */
@@ -890,6 +1172,183 @@ export interface operations {
           "application/json": {
             [key: string]: string;
           };
+        };
+      };
+    };
+  };
+  create_asset_v1_assets_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AssetCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["UploadGrantResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_asset_v1_assets__asset_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        asset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  archive_asset_v1_assets__asset_id__archive_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        asset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  download_asset_v1_assets__asset_id__download_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        asset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["DownloadGrantResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  finalize_asset_v1_assets__asset_id__finalize_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        asset_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -1025,6 +1484,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["BrandResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_brand_assets_v1_brands__brand_id__assets_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        brand_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetResponse"][];
         };
       };
       /** @description Validation Error */
@@ -1204,6 +1698,44 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkspaceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_assets_v1_products__product_id__assets_get: {
+    parameters: {
+      query?: {
+        kind?: components["schemas"]["AssetKind"] | null;
+        status?: components["schemas"]["AssetStatus"] | null;
+      };
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssetResponse"][];
         };
       };
       /** @description Validation Error */

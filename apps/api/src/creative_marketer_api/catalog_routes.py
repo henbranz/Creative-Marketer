@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from creative_marketer.audit.identity import IdentityAuditService
@@ -13,6 +13,15 @@ from creative_marketer.catalog.application import (
     CatalogPermissionDenied,
     CatalogService,
     ProductWorkspace,
+)
+from creative_marketer.catalog.asset_application import AssetService, ObjectStoreUnavailable
+from creative_marketer.catalog.asset_domain import (
+    AllowedUse,
+    Asset,
+    AssetKind,
+    AssetRole,
+    AssetStatus,
+    RightsStatus,
 )
 from creative_marketer.catalog.domain import (
     Audience,
@@ -200,6 +209,71 @@ class WorkspaceResponse(Contract):
     latest_snapshot: SnapshotResponse | None
 
 
+class AssetCreate(Contract):
+    brand_id: UUID
+    product_id: UUID | None = None
+    kind: Literal["image", "video", "document"]
+    role: Literal[
+        "product_hero",
+        "product_detail",
+        "lifestyle",
+        "logo",
+        "brand_guideline",
+        "packaging",
+        "other",
+    ]
+    original_filename: str = Field(min_length=1, max_length=255)
+    mime_type: Literal[
+        "image/jpeg", "image/png", "image/webp", "video/mp4", "video/webm", "application/pdf"
+    ]
+    rights_status: Literal["confirmed", "unknown", "restricted"]
+    allowed_uses: list[
+        Literal["internal_analysis", "generation_input", "organic_publishing", "paid_advertising"]
+    ] = Field(min_length=1, max_length=4)
+    parent_asset_id: UUID | None = None
+    source_url: str | None = Field(default=None, max_length=2048)
+
+
+class AssetResponse(Contract):
+    id: UUID
+    tenant_id: UUID
+    brand_id: UUID
+    product_id: UUID | None
+    kind: str
+    role: str
+    origin: str
+    status: str
+    original_filename: str
+    declared_mime_type: str
+    detected_mime_type: str | None
+    rights_status: str
+    allowed_uses: list[str]
+    byte_size: int | None
+    digest: str | None
+    width: int | None
+    height: int | None
+    duration_ms: int | None
+    rejection_code: str | None
+    parent_asset_id: UUID | None
+    source_url: str | None
+    created_by: UUID
+    created_at: datetime
+    updated_at: datetime
+    can_edit: bool
+
+
+class UploadGrantResponse(Contract):
+    asset: AssetResponse
+    url: str
+    fields: dict[str, str]
+    expires_at: datetime
+
+
+class DownloadGrantResponse(Contract):
+    url: str
+    expires_at: datetime
+
+
 def _audience(value: AudienceContract) -> Audience:
     return Audience(
         name=value.name,
@@ -361,10 +435,41 @@ def _workspace_response(value: ProductWorkspace, can_edit: bool) -> WorkspaceRes
     )
 
 
+def _asset_response(value: Asset, can_edit: bool) -> AssetResponse:
+    return AssetResponse(
+        id=value.id,
+        tenant_id=value.tenant_id,
+        brand_id=value.brand_id,
+        product_id=value.product_id,
+        kind=value.kind.value,
+        role=value.role.value,
+        origin=value.origin.value,
+        status=value.status.value,
+        original_filename=value.original_filename,
+        declared_mime_type=value.declared_mime_type,
+        detected_mime_type=value.detected_mime_type,
+        rights_status=value.rights_status.value,
+        allowed_uses=[use.value for use in value.allowed_uses],
+        byte_size=value.byte_size,
+        digest=value.digest,
+        width=value.width,
+        height=value.height,
+        duration_ms=value.duration_ms,
+        rejection_code=value.rejection_code,
+        parent_asset_id=value.parent_asset_id,
+        source_url=value.source_url,
+        created_by=value.created_by,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+        can_edit=can_edit,
+    )
+
+
 def create_catalog_router(
     authenticator: AuthenticationPort,
     identity_uow: UnitOfWorkFactory,
     service: CatalogService,
+    asset_service: AssetService,
     environment: str,
     audit: IdentityAuditService,
 ) -> APIRouter:
@@ -590,5 +695,112 @@ def create_catalog_router(
         if value is None:
             raise HTTPException(status_code=404, detail="snapshot_not_found")
         return _snapshot_response(value)  # type: ignore[return-value]
+
+    @router.get("/products/{product_id}/assets", response_model=list[AssetResponse])
+    async def list_assets(
+        product_id: UUID,
+        ctx: Context,
+        kind: AssetKind | None = None,
+        asset_status: Annotated[AssetStatus | None, Query(alias="status")] = None,
+    ) -> list[AssetResponse]:
+        return [
+            _asset_response(value, _editable(ctx))
+            for value in await asset_service.list(
+                ctx, product_id=product_id, kind=kind, status=asset_status
+            )
+        ]
+
+    @router.get("/brands/{brand_id}/assets", response_model=list[AssetResponse])
+    async def list_brand_assets(brand_id: UUID, ctx: Context) -> list[AssetResponse]:
+        return [
+            _asset_response(value, _editable(ctx))
+            for value in await asset_service.list(ctx)
+            if value.brand_id == brand_id
+        ]
+
+    @router.post("/assets", response_model=UploadGrantResponse, status_code=status.HTTP_201_CREATED)
+    async def create_asset(value: AssetCreate, ctx: Context) -> UploadGrantResponse:
+        try:
+            asset_id = uuid4()
+            created = await asset_service.create(
+                ctx,
+                Asset(
+                    id=asset_id,
+                    tenant_id=ctx.tenant_id,
+                    brand_id=value.brand_id,
+                    product_id=value.product_id,
+                    kind=AssetKind(value.kind),
+                    role=AssetRole(value.role),
+                    original_filename=value.original_filename,
+                    declared_mime_type=value.mime_type,
+                    rights_status=RightsStatus(value.rights_status),
+                    allowed_uses=tuple(AllowedUse(use) for use in value.allowed_uses),
+                    created_by=ctx.user_id,
+                    upload_object_key=(
+                        f"tenants/{ctx.tenant_id}/assets/{asset_id}/uploads/{uuid4().hex}"
+                    ),
+                    parent_asset_id=value.parent_asset_id,
+                    source_url=value.source_url,
+                ),
+            )
+            return UploadGrantResponse(
+                asset=_asset_response(created.asset, True),
+                url=created.upload.url,
+                fields=created.upload.fields,
+                expires_at=created.upload.expires_at,
+            )
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail=str(error).replace(" ", "_")) from error
+        except CatalogPermissionDenied as error:
+            raise HTTPException(status_code=403, detail="catalog_mutation_denied") from error
+        except CatalogValidationError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except CatalogConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ObjectStoreUnavailable as error:
+            raise HTTPException(status_code=503, detail="object_storage_unavailable") from error
+
+    @router.get("/assets/{asset_id}", response_model=AssetResponse)
+    async def get_asset(asset_id: UUID, ctx: Context) -> AssetResponse:
+        try:
+            return _asset_response(await asset_service.get(ctx, asset_id), _editable(ctx))
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail="asset_not_found") from error
+
+    @router.post("/assets/{asset_id}/finalize", response_model=AssetResponse)
+    async def finalize_asset(asset_id: UUID, ctx: Context) -> AssetResponse:
+        try:
+            return _asset_response(await asset_service.finalize(ctx, asset_id), True)
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail="asset_not_found") from error
+        except CatalogPermissionDenied as error:
+            raise HTTPException(status_code=403, detail="catalog_mutation_denied") from error
+        except CatalogConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ObjectStoreUnavailable as error:
+            raise HTTPException(status_code=503, detail="object_storage_unavailable") from error
+
+    @router.post("/assets/{asset_id}/download", response_model=DownloadGrantResponse)
+    async def download_asset(asset_id: UUID, ctx: Context) -> DownloadGrantResponse:
+        try:
+            grant = await asset_service.download(ctx, asset_id)
+            return DownloadGrantResponse(url=grant.url, expires_at=grant.expires_at)
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail="asset_not_found") from error
+        except CatalogConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ObjectStoreUnavailable as error:
+            raise HTTPException(status_code=503, detail="object_storage_unavailable") from error
+
+    @router.post("/assets/{asset_id}/archive", response_model=AssetResponse)
+    async def archive_asset(asset_id: UUID, ctx: Context) -> AssetResponse:
+        try:
+            return _asset_response(await asset_service.archive(ctx, asset_id), True)
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail="asset_not_found") from error
+        except CatalogPermissionDenied as error:
+            raise HTTPException(status_code=403, detail="catalog_mutation_denied") from error
+        except (CatalogValidationError, CatalogConflict) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     return router

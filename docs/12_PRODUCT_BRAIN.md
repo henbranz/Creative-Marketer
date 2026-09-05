@@ -69,7 +69,7 @@ tenant selector. The database tenant setting is transaction-local. Active OWNER 
 may mutate; MEMBER is read-only. Browser role headers, body tenant IDs, and route resource IDs do
 not confer authority.
 
-All six Catalog tables use forced RLS. Tenant-owned relationships use composite tenant foreign
+All seven Catalog tables use forced RLS. Tenant-owned relationships use composite tenant foreign
 keys. The runtime role has no delete permission and snapshots permit only select/insert. Normal
 runtime lifecycle uses archive states.
 
@@ -89,6 +89,9 @@ Outbox event in one PostgreSQL transaction. Registered facts are:
 - `catalog.product.updated.v1`
 - `catalog.product.brief_completed.v1`
 - `catalog.product.snapshot_created.v1`
+- `catalog.product.snapshot_created.v2`
+- `catalog.asset.ready.v1`
+- `catalog.asset.archived.v1`
 
 Brief completion is emitted only when required context crosses from incomplete to 100 percent.
 Ordinary edits are audited but do not create per-keystroke events.
@@ -105,9 +108,19 @@ Overview, structured Brief sections, save/error/read-only states, completeness g
 intentional empty states for future workspace tabs. Production authentication remains dependent
 on the deferred identity-provider adapter; local development uses the explicit Phase-0 adapter.
 
+## Product assets and Snapshot V2
+
+The Assets tab is backed by the `catalog` Asset aggregate and private object storage described in
+`docs/13_ASSET_LIBRARY.md`. OWNER/ADMIN may upload and archive; MEMBER is read-only. Rights status
+and an allowed-use set travel with every Asset. Only READY, Product-associated, non-archived Assets
+enter new ProductKnowledgeSnapshot V2 manifests. The manifest is capped at 100 entries, sorted by
+Asset ID, and contains stable metadata/digest/rights/lineage but no object key or signed URL.
+
+Snapshot V1 construction and its event contract remain available and immutable. New explicit
+snapshots use V2 and emit `catalog.product.snapshot_created.v2`; the digest covers the manifest.
+
 ## Deferred
 
-- binary asset storage and uploads
 - Product research and evidence
 - AI enrichment and agent execution
 - production identity provider and tenant discovery UI

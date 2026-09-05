@@ -9,6 +9,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from creative_marketer.catalog.application import CatalogConflict
+from creative_marketer.catalog.asset_domain import (
+    AllowedUse,
+    Asset,
+    AssetKind,
+    AssetOrigin,
+    AssetRole,
+    AssetStatus,
+    RightsStatus,
+)
 from creative_marketer.catalog.domain import (
     Audience,
     Brand,
@@ -23,6 +32,7 @@ from creative_marketer.catalog.domain import (
 )
 from creative_marketer.events.domain import canonical_event_json_v1
 from creative_marketer.infrastructure.database.catalog_schema import (
+    assets,
     brand_profiles,
     brands,
     product_briefs,
@@ -482,3 +492,117 @@ class SqlAlchemySnapshotRepository:
             created_by=d["created_by"],
             created_at=cast(datetime, d["created_at"]),
         )
+
+
+def _asset(row: object) -> Asset:
+    d = _data(row)
+    return Asset(
+        id=d["id"],
+        tenant_id=d["tenant_id"],
+        brand_id=d["brand_id"],
+        product_id=d["product_id"],
+        kind=AssetKind(d["kind"]),
+        role=AssetRole(d["role"]),
+        origin=AssetOrigin(d["origin"]),
+        status=AssetStatus(d["status"]),
+        original_filename=d["original_filename"],
+        declared_mime_type=d["declared_mime_type"],
+        detected_mime_type=d["detected_mime_type"],
+        rights_status=RightsStatus(d["rights_status"]),
+        allowed_uses=tuple(AllowedUse(value) for value in d["allowed_uses"]),
+        upload_object_key=d["upload_object_key"],
+        object_key=d["object_key"],
+        byte_size=d["byte_size"],
+        digest=d["digest"],
+        width=d["width"],
+        height=d["height"],
+        duration_ms=d["duration_ms"],
+        rejection_code=d["rejection_code"],
+        parent_asset_id=d["parent_asset_id"],
+        source_url=d["source_url"],
+        created_by=d["created_by"],
+        created_at=d["created_at"],
+        updated_at=d["updated_at"],
+    )
+
+
+def _asset_values(value: Asset) -> dict[str, object]:
+    return {
+        "id": value.id,
+        "tenant_id": value.tenant_id,
+        "brand_id": value.brand_id,
+        "product_id": value.product_id,
+        "kind": value.kind.value,
+        "role": value.role.value,
+        "origin": value.origin.value,
+        "status": value.status.value,
+        "original_filename": value.original_filename,
+        "declared_mime_type": value.declared_mime_type,
+        "detected_mime_type": value.detected_mime_type,
+        "rights_status": value.rights_status.value,
+        "allowed_uses": [use.value for use in value.allowed_uses],
+        "upload_object_key": value.upload_object_key,
+        "object_key": value.object_key,
+        "byte_size": value.byte_size,
+        "digest": value.digest,
+        "width": value.width,
+        "height": value.height,
+        "duration_ms": value.duration_ms,
+        "rejection_code": value.rejection_code,
+        "parent_asset_id": value.parent_asset_id,
+        "source_url": value.source_url,
+        "created_by": value.created_by,
+        "created_at": value.created_at,
+        "updated_at": value.updated_at,
+    }
+
+
+class SqlAlchemyAssetRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def add(self, value: Asset) -> None:
+        try:
+            await self.session.execute(insert(assets).values(**_asset_values(value)))
+        except IntegrityError as error:
+            raise CatalogConflict("asset already exists or association is invalid") from error
+
+    async def get(self, value_id: UUID) -> Asset | None:
+        row = (await self.session.execute(select(assets).where(assets.c.id == value_id))).first()
+        return None if row is None else _asset(row)
+
+    async def list(
+        self,
+        *,
+        product_id: UUID | None = None,
+        kind: AssetKind | None = None,
+        status: AssetStatus | None = None,
+    ) -> tuple[Asset, ...]:
+        query = select(assets)
+        if product_id is not None:
+            query = query.where(assets.c.product_id == product_id)
+        if kind is not None:
+            query = query.where(assets.c.kind == kind.value)
+        if status is not None:
+            query = query.where(assets.c.status == status.value)
+        rows = (await self.session.execute(query.order_by(assets.c.created_at.desc()))).all()
+        return tuple(_asset(row) for row in rows)
+
+    async def list_ready_for_product(self, product_id: UUID) -> tuple[Asset, ...]:
+        return await self.list(product_id=product_id, status=AssetStatus.READY)
+
+    async def update(self, value: Asset, expected_status: AssetStatus) -> None:
+        values = _asset_values(value)
+        values.pop("id")
+        values.pop("tenant_id")
+        values.pop("created_at")
+        result = cast(
+            CursorResult[Any],
+            await self.session.execute(
+                update(assets)
+                .where(assets.c.id == value.id, assets.c.status == expected_status.value)
+                .values(**values)
+            ),
+        )
+        if result.rowcount != 1:
+            raise CatalogConflict("asset state changed concurrently")

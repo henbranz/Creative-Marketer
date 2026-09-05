@@ -543,6 +543,19 @@ Tenant-owned relationships must not reference a resource belonging to another te
 
 Database timestamps use timezone-aware UTC values. Transaction boundaries follow application use cases. State changes and their cross-context domain events are committed atomically through a transactional outbox.
 
+## Asset
+
+`catalog.assets` owns private binary metadata while the object store owns bytes. An Asset is
+tenant- and Brand-scoped, optionally Product-scoped, and may reference a same-tenant parent Asset
+for derivation lineage. Composite tenant foreign keys prevent cross-tenant Brand, Product, and
+parent attachment. Its lifecycle is `pending_upload` → `validating` → `ready` or `rejected`, with
+`archived` as the runtime terminal visibility state. Runtime receives no delete privilege.
+
+The row records bounded kind/role/origin, original filename, declared and detected MIME types,
+rights status, allowed uses, byte size, SHA-256 digest, optional dimensions/duration, rejection
+code, lineage, and source URL. Storage keys are internal metadata and are never API/event/snapshot
+fields. A database trigger makes READY object key, digest, MIME, size, and associations immutable.
+
 ## ToolCall
 
 `tool_execution.tool_calls` represents one logical Tool operation. It stores the immutable action

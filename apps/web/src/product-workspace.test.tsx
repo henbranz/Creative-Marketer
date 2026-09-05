@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { catalogApi, type Workspace } from "./catalog-api";
+import { catalogApi, type Asset, type Workspace } from "./catalog-api";
 import { ProductWorkspaceApp } from "./product-workspace";
 
 const brand = {
@@ -122,6 +122,33 @@ const workspace: Workspace = {
   },
   latest_snapshot: null,
 };
+const readyAsset: Asset = {
+  id: "50000000-0000-0000-0000-000000000001",
+  tenant_id: brand.tenant_id,
+  brand_id: brand.id,
+  product_id: product.id,
+  kind: "image",
+  role: "product_hero",
+  origin: "user_upload",
+  status: "ready",
+  original_filename: "atlas-hero.png",
+  declared_mime_type: "image/png",
+  detected_mime_type: "image/png",
+  rights_status: "confirmed",
+  allowed_uses: ["internal_analysis", "generation_input"],
+  byte_size: 1024,
+  digest: `sha256:${"a".repeat(64)}`,
+  width: 100,
+  height: 100,
+  duration_ms: null,
+  rejection_code: null,
+  parent_asset_id: null,
+  source_url: null,
+  created_by: brand.created_by,
+  created_at: brand.created_at,
+  updated_at: brand.updated_at,
+  can_edit: true,
+};
 
 function mocks() {
   vi.spyOn(catalogApi, "listBrands").mockResolvedValue([brand]);
@@ -133,6 +160,7 @@ function mocks() {
   });
   vi.spyOn(catalogApi, "createBrand").mockResolvedValue(brand);
   vi.spyOn(catalogApi, "createProduct").mockResolvedValue(workspace);
+  vi.spyOn(catalogApi, "listAssets").mockResolvedValue([]);
 }
 
 async function renderConnected() {
@@ -227,6 +255,35 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     expect(screen.getByText("No assets yet")).toBeInTheDocument();
     expect(screen.getByText(/shared asset library/)).toBeInTheDocument();
+  });
+
+  it("renders verified asset metadata and filters", async () => {
+    vi.mocked(catalogApi.listAssets).mockResolvedValue([readyAsset]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+    expect(await screen.findByText("atlas-hero.png")).toBeInTheDocument();
+    expect(screen.getByText(/product hero/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Filter assets"), {
+      target: { value: "video" },
+    });
+    expect(screen.getByText("No assets yet")).toBeInTheDocument();
+  });
+
+  it("keeps member asset uploads read-only", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      product: { ...product, can_edit: false },
+    });
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+    expect(
+      await screen.findByText(/read-only access to this asset library/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Choose asset")).not.toBeInTheDocument();
   });
 
   it("shows backend loading errors and no invented product state", async () => {

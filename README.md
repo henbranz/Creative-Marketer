@@ -54,7 +54,9 @@ Read in this order:
 12. [`docs/10_MVP_ROADMAP.md`](docs/10_MVP_ROADMAP.md)
 13. [`docs/11_PHASE_0_IMPLEMENTATION_PLAN.md`](docs/11_PHASE_0_IMPLEMENTATION_PLAN.md)
 14. [`docs/12_CODEX_BOOTSTRAP_PROMPT.md`](docs/12_CODEX_BOOTSTRAP_PROMPT.md)
-15. [`docs/ADR/`](docs/ADR/)
+15. [`docs/12_PRODUCT_BRAIN.md`](docs/12_PRODUCT_BRAIN.md)
+16. [`docs/13_ASSET_LIBRARY.md`](docs/13_ASSET_LIBRARY.md)
+17. [`docs/ADR/`](docs/ADR/)
 
 ## Initial Technology Direction
 
