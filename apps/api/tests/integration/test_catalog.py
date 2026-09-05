@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -8,6 +10,27 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from creative_marketer.catalog.application import CatalogService
+from creative_marketer.catalog.domain import (
+    Audience,
+    Brand,
+    BrandProfile,
+    Product,
+    ProductBrief,
+    ProductKnowledgeSnapshot,
+    ProductProfile,
+    ProductStatus,
+)
+from creative_marketer.identity.application.authentication import (
+    Actor,
+    ActorKind,
+    AuthenticationAssurance,
+    ExecutionContext,
+)
+from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.infrastructure.database.catalog_uow import (
+    SqlAlchemyCatalogUnitOfWorkFactory,
+)
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
 
@@ -98,6 +121,7 @@ def product_body() -> dict[str, object]:
         "motivations": ["Lower waste"],
         "objections": ["Price"],
     }
+
     return {
         "name": "Atlas",
         "slug": "atlas",
@@ -150,6 +174,88 @@ def product_body() -> dict[str, object]:
             "geographical_restrictions": [],
         },
     }
+
+
+def owner_context(tenant_id: UUID, user_id: UUID) -> ExecutionContext:
+    return ExecutionContext(
+        tenant_id=tenant_id,
+        actor=Actor(ActorKind.USER, user_id),
+        user_id=user_id,
+        membership_role=MembershipRole.OWNER,
+        membership_status=MembershipStatus.ACTIVE,
+        environment="test",
+        authentication=AuthenticationAssurance(datetime.now(UTC), "test", "high"),
+    )
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_catalog_service_lifecycle_is_explicitly_covered(
+    admin_engine: AsyncEngine, catalog_factory: SqlAlchemyCatalogUnitOfWorkFactory
+) -> None:
+    tenant_id, user_id = await seed_catalog_identity(admin_engine)
+    context = owner_context(tenant_id, user_id)
+    service = CatalogService(catalog_factory)
+    brand = Brand(
+        tenant_id=tenant_id, name="Service Brand", slug="service-brand", created_by=user_id
+    )
+    brand_profile = BrandProfile(
+        tenant_id=tenant_id,
+        brand_id=brand.id,
+        industry="Software",
+        brand_voice="Clear",
+    )
+    assert await service.create_brand(context, brand, brand_profile) == brand
+    assert await service.list_brands(context) == (brand,)
+    assert (await service.get_brand(context, brand.id))[1] == brand_profile
+    updated_brand = replace(brand, website_url="https://service.example")
+    assert await service.update_brand(context, updated_brand, brand_profile) == updated_brand
+
+    audience = Audience(name="Operators", pain_points=("Manual work",))
+    product = Product(
+        tenant_id=tenant_id,
+        brand_id=brand.id,
+        name="Service Product",
+        slug="service-product",
+        category="Software",
+        created_by=user_id,
+    )
+    profile = ProductProfile(
+        tenant_id=tenant_id,
+        product_id=product.id,
+        description="A governed product",
+        features=("Deterministic controls",),
+        benefits=("Confidence",),
+        target_audiences=(audience,),
+        differentiators=("Auditable",),
+        prohibited_claims=("Perfect",),
+    )
+    brief = ProductBrief(
+        tenant_id=tenant_id,
+        product_id=product.id,
+        product_why="Make operations dependable",
+        primary_audience=audience,
+        positioning_statement="The governed workspace",
+        desired_creative_style="Editorial",
+    )
+    assert await service.create_product(context, product, profile, brief) == product
+    assert await service.list_products(context, brand.id) == (product,)
+    assert await service.list_products(context) == (product,)
+    assert (await service.get_workspace(context, product.id)).completeness.score == 100
+
+    active_product = replace(product, status=ProductStatus.ACTIVE)
+    active_profile = replace(profile, materials=("Digital",))
+    assert await service.update_product(context, active_product, active_profile) == active_product
+    saved_brief, completeness = await service.save_brief(
+        context, replace(brief, product_why="A revised governed purpose")
+    )
+    assert saved_brief.revision == 2 and completeness.score == 100
+    snapshot = await service.create_snapshot(context, product.id)
+    assert isinstance(snapshot, ProductKnowledgeSnapshot)
+    workspace = await service.get_workspace(context, product.id)
+    assert (
+        workspace.latest_snapshot == snapshot and workspace.product.status is ProductStatus.ACTIVE
+    )
 
 
 @pytest.mark.postgres
