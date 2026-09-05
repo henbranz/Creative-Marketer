@@ -34,8 +34,8 @@ idempotency_records = Table(
     CheckConstraint("request_digest ~ '^sha256:[0-9a-f]{64}$'", name="digest"),
     CheckConstraint("attempt_count >= 0", name="attempt_count"),
     CheckConstraint(
-        "result_ref IS NULL OR (result_ref ~ "
-        "'^result://[A-Za-z0-9][A-Za-z0-9._~:/-]{0,479}$' AND lower(result_ref) "
+        "result_ref IS NULL OR (length(result_ref) <= 489 AND result_ref ~ "
+        "'^result://[A-Za-z0-9][A-Za-z0-9._~:/-]*$' AND lower(result_ref) "
         "!~ '(sk-[a-z0-9_-]{8,}|shpat_[a-z0-9]{8,}|gh[pousr]_[a-z0-9]{12,})')",
         name="safe_result_ref",
     ),

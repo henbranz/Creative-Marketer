@@ -266,8 +266,8 @@ def _idempotency_table() -> None:
         ),
         sa.CheckConstraint("attempt_count >= 0", name="ck_idempotency_records_attempt_count"),
         sa.CheckConstraint(
-            "result_ref IS NULL OR (result_ref ~ "
-            "'^result://[A-Za-z0-9][A-Za-z0-9._~:/-]{0,479}$' AND lower(result_ref) "
+            "result_ref IS NULL OR (length(result_ref) <= 489 AND result_ref ~ "
+            "'^result://[A-Za-z0-9][A-Za-z0-9._~:/-]*$' AND lower(result_ref) "
             "!~ '(sk-[a-z0-9_-]{8,}|shpat_[a-z0-9]{8,}|gh[pousr]_[a-z0-9]{12,})')",
             name="ck_idempotency_records_safe_result_ref",
         ),
