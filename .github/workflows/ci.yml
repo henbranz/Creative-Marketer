@@ -47,6 +47,14 @@ jobs:
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/verify_0002_backfill.sql
       - run: uv run alembic downgrade base
       - run: uv run alembic upgrade head
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_tool_gateway_lossy_downgrade.sql
+      - name: Verify lossy Tool Gateway downgrade fails closed
+        run: |
+          if uv run alembic downgrade 20260905_0008; then
+            echo "lossy Tool Gateway downgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "DELETE FROM audit.audit_records WHERE id='00000000-0000-0000-0000-000000000010'"
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_event_delivery_lossy_downgrade.sql
       - name: Verify lossy event-delivery downgrade fails closed
         run: |

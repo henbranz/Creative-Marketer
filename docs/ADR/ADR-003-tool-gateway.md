@@ -30,3 +30,11 @@ Creates one enforceable contract for consequential capabilities while allowing p
 
 ## Consequences
 Agents cannot use provider SDKs directly. Tool interfaces and canonical inputs become first-class versioned contracts. Every deployment topology must preserve the complete enforcement sequence and fail closed when a required component is unavailable.
+
+## Phase 0 implementation clarification
+
+The gateway uses the enforcement order documented in `docs/04_TOOL_PERMISSION_MATRIX.md`. It binds
+execution to immutable governance IDs/digests and an exact-version runtime executor mapping. The
+final authorization snapshot and idempotency attempt are durably committed before external I/O;
+terminal ToolCall, idempotency, Audit, and Outbox evidence are committed atomically afterward.
+Unknown post-start outcomes fail closed and cannot be automatically retried.

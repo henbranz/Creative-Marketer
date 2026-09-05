@@ -21,6 +21,9 @@ from creative_marketer.infrastructure.database.execution_control_uow import (
 from creative_marketer.infrastructure.database.permission_governance_uow import (
     SqlAlchemyPermissionUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.tool_execution_uow import (
+    SqlAlchemyGatewayUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.tool_governance_uow import (
     SqlAlchemyToolRegistryUnitOfWorkFactory,
 )
@@ -59,6 +62,7 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text(
                 "TRUNCATE event_delivery.inbox_receipts, event_delivery.outbox_events, "
+                "tool_execution.tool_calls, "
                 "approval_governance.approval_revocations, "
                 "approval_governance.approval_decisions, "
                 "approval_governance.approval_requests, "
@@ -136,3 +140,8 @@ def approval_factory(runtime_database_url: str) -> SqlAlchemyApprovalUnitOfWorkF
 @pytest.fixture
 def idempotency_factory(runtime_database_url: str) -> SqlAlchemyIdempotencyUnitOfWorkFactory:
     return SqlAlchemyIdempotencyUnitOfWorkFactory(create_session_factory(runtime_database_url))
+
+
+@pytest.fixture
+def gateway_factory(runtime_database_url: str) -> SqlAlchemyGatewayUnitOfWorkFactory:
+    return SqlAlchemyGatewayUnitOfWorkFactory(create_session_factory(runtime_database_url))

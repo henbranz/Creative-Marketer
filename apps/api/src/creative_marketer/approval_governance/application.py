@@ -80,6 +80,18 @@ class ApprovalUnitOfWorkFactory(Protocol):
     def __call__(self, context: TenantContext) -> ApprovalUnitOfWork: ...
 
 
+async def append_approval_request(
+    uow: ApprovalUnitOfWork,
+    context: ExecutionContext,
+    request: ApprovalRequest,
+    contracts: EventContractRegistry,
+) -> None:
+    """Append Approval state, Audit, and event to an existing application transaction."""
+    await uow.requests.add(request)
+    await uow.audit.append(_request_audit(context, request))
+    await uow.outbox.append(approval_requested_event(context, request, contracts))
+
+
 def _human_authorized(context: ExecutionContext, risk: RiskLevel) -> None:
     allowed_roles = (
         {MembershipRole.OWNER}
@@ -139,9 +151,7 @@ class CreateApprovalRequest:
             expires_at=now + approval_ttl(binding.risk_level),
         )
         async with self.uow_factory(context.tenant_context()) as uow:
-            await uow.requests.add(request)
-            await uow.audit.append(_request_audit(context, request))
-            await uow.outbox.append(approval_requested_event(context, request, self.contracts))
+            await append_approval_request(uow, context, request, self.contracts)
             await uow.commit()
         return request
 

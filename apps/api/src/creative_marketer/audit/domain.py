@@ -57,6 +57,7 @@ class AuditRecord:
     permission_id: UUID | None = None
     permission_version_id: UUID | None = None
     approval_request_id: UUID | None = None
+    tool_call_id: UUID | None = None
     idempotency_record_id: UUID | None = None
     attempt_id: UUID | None = None
     before_digest: str | None = None

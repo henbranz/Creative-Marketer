@@ -131,3 +131,12 @@ Tenant, actor, agent-version, and run identity are supplied from trusted runtime
 ## Deny by Default
 
 Unknown agent, unknown tool, unknown resource scope, malformed input, missing approval, or ambiguous tenant must result in denial.
+
+## Gateway enforcement order
+
+The implemented order is: trusted context → active Agent resolution → active Tool resolution →
+exact executor binding → strict input validation and canonical normalization → trusted resource
+ownership/scope derivation → deterministic permission evaluation → obligation enforcement →
+immutable ToolCall/approval binding → final locked authorization snapshot → idempotency attempt →
+executor → strict output validation → atomic outcome evidence. Missing budget or credential
+capability, unsupported obligations, stale versions, and unavailable exact executors fail closed.

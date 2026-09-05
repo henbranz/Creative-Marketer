@@ -232,3 +232,12 @@ Phase 0 is complete when a fake agent can request a fake side-effecting tool and
 - trace the operation end-to-end
 
 No external social/commerce provider is required to pass Phase 0.
+
+## TASK-010 completion scope
+
+The internal governed Tool Gateway foundation now includes exact-version executor bindings,
+strict input/output contracts, trusted resource-scope derivation, full permission obligation
+enforcement, immutable tenant-isolated ToolCalls, approval resume, idempotent attempt ownership,
+unknown-outcome safety, reference-only Audit/Outbox evidence, and deterministic fake-executor tests.
+Real connector/provider adapters, a public execution API, Agent Runtime, and durable orchestration
+remain intentionally out of scope.

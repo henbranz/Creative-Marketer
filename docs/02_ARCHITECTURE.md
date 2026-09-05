@@ -259,3 +259,13 @@ Phase 0 does not yet select or fully specify:
 - provider-specific commerce, social, research, or media integrations
 
 These decisions require product, compliance, scale, or provider evidence not yet available. Their boundaries must still be preserved during Phase 0.
+
+## Implemented Tool Gateway boundary (Phase 0)
+
+Tool execution is an internal application boundary, not an HTTP execution endpoint. A trusted
+agent invocation supplies only the initiating `ExecutionContext` and requested tenant Agent ID.
+The gateway authoritatively resolves active Agent, Tool, and Permission versions, validates and
+normalizes input, derives resource requirements, evaluates permission, enforces every obligation,
+binds one immutable `ToolCall` to the exact versions, and only then invokes an exact-version
+executor mapping. Executor I/O occurs after durable `EXECUTING` state commits and outside the
+database transaction. Outcome state, idempotency state, Audit, and Outbox evidence commit together.

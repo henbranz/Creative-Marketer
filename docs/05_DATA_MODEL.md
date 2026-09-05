@@ -536,3 +536,12 @@ Most tenant-owned entities should include:
 Tenant-owned relationships must not reference a resource belonging to another tenant. Where practical, tenant-owned tables expose a unique `(tenant_id, id)` key and tenant-owned foreign keys include both columns. Application authorization remains mandatory; database constraints and RLS provide defense in depth.
 
 Database timestamps use timezone-aware UTC values. Transaction boundaries follow application use cases. State changes and their cross-context domain events are committed atomically through a transactional outbox.
+
+## ToolCall
+
+`tool_execution.tool_calls` represents one logical Tool operation. It stores the immutable action
+binding (tenant, requested/resolved Agent version, Tool version, Permission version, scopes,
+resource, environment, normalized-input digest, operation ID, and action digest) plus controlled
+lifecycle fields. The operation is unique per tenant, Tool definition, and operation ID. Runtime
+access is tenant-scoped with forced RLS; binding mutation and invalid lifecycle transitions are
+rejected by a database trigger. Audit records have a nullable indexed `tool_call_id` linkage.

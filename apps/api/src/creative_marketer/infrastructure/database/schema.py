@@ -118,6 +118,7 @@ audit_records = Table(
     Column("permission_id", UUID(as_uuid=True)),
     Column("permission_version_id", UUID(as_uuid=True)),
     Column("approval_request_id", UUID(as_uuid=True)),
+    Column("tool_call_id", UUID(as_uuid=True)),
     Column("idempotency_record_id", UUID(as_uuid=True)),
     Column("attempt_id", UUID(as_uuid=True)),
     Column("before_digest", String(80)),
@@ -148,6 +149,7 @@ Index("ix_audit_records_action_occurred", audit_records.c.action, audit_records.
 Index("ix_audit_records_resource", audit_records.c.resource_type, audit_records.c.resource_id)
 Index("ix_audit_records_permission", audit_records.c.permission_id, audit_records.c.occurred_at)
 Index("ix_audit_records_approval", audit_records.c.approval_request_id, audit_records.c.occurred_at)
+Index("ix_audit_records_tool_call", audit_records.c.tool_call_id, audit_records.c.occurred_at)
 Index(
     "ix_audit_records_idempotency",
     audit_records.c.idempotency_record_id,

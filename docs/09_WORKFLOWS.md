@@ -162,7 +162,17 @@ REQUIRES_APPROVAL PermissionDecision
   → one leased execution attempt
 ```
 
-No tool is executed in this flow yet. `FAILED_PRE_EFFECT` may acquire a new attempt. A success is
+The Phase-0 gateway now enforces this control flow with fake executors in tests; production
+provider execution remains deferred. `FAILED_PRE_EFFECT` may acquire a new attempt. A success is
 replayed through a safe result reference. `UNKNOWN_EXTERNAL_OUTCOME`, including a crash after a
 possible side effect, blocks retry until an active owner/admin records explicit reconciliation.
 Lease expiry alone never proves that no external effect occurred.
+
+## Governed Tool operation lifecycle
+
+A low-risk allowed operation progresses `READY → EXECUTING → SUCCEEDED` (or a safe failure/unknown
+outcome). Approval-required work first commits `AWAITING_APPROVAL` with the immutable ApprovalRequest,
+Audit, and Outbox evidence. Resume reuses the same operation and approval; any changed payload or
+binding conflicts. `FAILED_PRE_EFFECT` can retry the same operation. `UNKNOWN_EXTERNAL_OUTCOME`
+cannot retry until deterministic reconciliation establishes whether an effect occurred. A confirmed
+success replays its stored result reference without another executor invocation.

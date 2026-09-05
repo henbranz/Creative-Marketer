@@ -170,3 +170,12 @@ marketing.metrics.observed.v1
         ↓
 intelligence.insight.proposed.v1
 ```
+
+## Tool execution events
+
+Phase 0 defines `governance.tool.execution_succeeded.v1`,
+`governance.tool.execution_failed.v1`, and
+`governance.tool.execution_outcome_unknown.v1`. They contain bounded governance identifiers,
+operation/result references, and stable error codes only. Raw Tool input, provider responses,
+credentials, prompts, and PII are forbidden. The terminal ToolCall update, idempotency update,
+Audit record, and Outbox append share one transaction.

@@ -38,6 +38,7 @@ class PostgresAuditWriter:
                 permission_id=record.permission_id,
                 permission_version_id=record.permission_version_id,
                 approval_request_id=record.approval_request_id,
+                tool_call_id=record.tool_call_id,
                 idempotency_record_id=record.idempotency_record_id,
                 attempt_id=record.attempt_id,
                 before_digest=record.before_digest,

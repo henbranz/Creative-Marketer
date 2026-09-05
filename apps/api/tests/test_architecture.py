@@ -167,6 +167,29 @@ def test_no_public_event_injection_route_exists() -> None:
         assert route not in source
 
 
+def test_tool_gateway_is_internal_and_provider_independent() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer" / "tool_execution"
+    source_files = list(root.glob("*.py"))
+    forbidden = {
+        "fastapi",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "openai",
+        "anthropic",
+        "shopify",
+        "meta",
+        "temporalio",
+    }
+    assert imported_roots(source_files).isdisjoint(forbidden)
+    delivery_root = Path(__file__).parents[1] / "src" / "creative_marketer_api"
+    delivery = "\n".join(path.read_text().lower() for path in delivery_root.glob("*.py"))
+    assert "toolgateway" not in delivery
+    for package in ("agent_governance", "permission_governance", "approval_governance"):
+        domain = Path(__file__).parents[1] / "src" / "creative_marketer" / package / "domain.py"
+        assert "toolexecutor" not in domain.read_text().lower()
+
+
 def test_delivery_does_not_construct_authoritative_identity() -> None:
     route_source = (
         Path(__file__).parents[1] / "src" / "creative_marketer_api" / "authentication_routes.py"

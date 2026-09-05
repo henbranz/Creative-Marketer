@@ -308,3 +308,13 @@ Must include:
 - secret redaction
 - provider error handling
 - object storage tenant escape
+
+## Tool execution controls
+
+Models cannot choose tenant identity, Agent versions, Tool versions, risk, permission, scopes,
+credentials, or approval state. Resource requirements are derived by trusted resolvers and concrete
+executors are registered against an exact `(ToolDefinition ID, ToolVersion ID)` pair. Before every
+attempt, the gateway locks and revalidates active Agent, Tool, and Permission pointers. External
+execution starts only after durable attempt ownership commits. Unexpected failures after that point
+are treated as an unknown external outcome and block retry pending reconciliation. Audit/events use
+references and digests, never raw inputs or credential material.
