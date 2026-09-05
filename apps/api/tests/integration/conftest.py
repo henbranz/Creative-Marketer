@@ -46,18 +46,9 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
             text(
                 "TRUNCATE permission_governance.tool_permission_activations, "
                 "permission_governance.tool_permission_versions, "
-                "permission_governance.tool_permissions"
-            )
-        )
-        await connection.execute(
-            text(
-                "TRUNCATE tool_governance.tool_activations, tool_governance.tool_versions, "
-                "tool_governance.tool_definitions"
-            )
-        )
-        await connection.execute(
-            text(
-                "TRUNCATE agent_governance.agent_activations, "
+                "permission_governance.tool_permissions, "
+                "tool_governance.tool_activations, tool_governance.tool_versions, "
+                "tool_governance.tool_definitions, agent_governance.agent_activations, "
                 "agent_governance.agent_versions, agent_governance.agent_definitions"
             )
         )
