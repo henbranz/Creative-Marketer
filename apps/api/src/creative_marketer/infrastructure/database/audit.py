@@ -30,6 +30,8 @@ class PostgresAuditWriter:
                 policy_version=record.policy_version,
                 tool_name=record.tool_name,
                 tool_version=record.tool_version,
+                tool_definition_id=record.tool_definition_id,
+                tool_version_id=record.tool_version_id,
                 agent_definition_id=record.agent_definition_id,
                 agent_version_id=record.agent_version_id,
                 agent_run_id=record.agent_run_id,

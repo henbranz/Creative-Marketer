@@ -115,12 +115,43 @@ definition. Activation changes never mutate a version and support audited rollba
 
 ### ToolDefinition
 - id
-- name
-- version
-- input_schema
-- output_schema
-- risk_level
-- side_effect_type
+- tool_key (globally unique, stable, canonical, never reused)
+- category
+- status (`active`, `disabled`, `archived`)
+- created_by_actor_kind / created_by_actor_id
+- created_at / updated_at
+
+Definitions are platform-global capability identities. Tenants cannot create them. Archived keys
+remain reserved, stable identity fields are database-trigger protected, and archived is terminal.
+
+### ToolVersion
+- id
+- definition_id / version_number
+- display_name / description
+- risk_level (`R0`–`R7`)
+- side_effect_class
+- execution_class
+- credential_boundary
+- idempotency_requirement
+- input_schema / output_schema (immutable JSON Schema 2020-12 snapshots)
+- input_schema_digest / output_schema_digest
+- capability_tags
+- configuration_schema_version / configuration_digest
+- created_by_actor_kind / created_by_actor_id / created_at
+
+Versions are immutable and unique by `(definition_id, version_number)`. Definition row locks
+serialize monotonic allocation. Canonical SHA-256 digests cover schema snapshots and all semantic
+classification fields. A schema or classification change creates a new version.
+
+### ToolActivation
+- definition_id (primary key)
+- active_version_id
+- activated_by_actor_kind / activated_by_actor_id
+- activated_at
+
+The composite definition/version foreign key proves ownership. Activation supports audited
+forward rollout and rollback without rewriting history. Active resolution fails closed for
+unknown, disabled, archived, unactivated, or internally inconsistent records.
 
 ### ToolPermission
 - tenant_id
@@ -128,6 +159,9 @@ definition. Activation changes never mutate a version and support audited rollba
 - tool_id
 - scope
 - policy
+
+`ToolPermission` is deliberately not implemented by TASK-006. Agent tool keys and Registry
+existence are declarations, not permission.
 
 ### ToolCall
 - id

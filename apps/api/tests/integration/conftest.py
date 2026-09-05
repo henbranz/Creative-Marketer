@@ -12,6 +12,9 @@ from creative_marketer.infrastructure.database.agent_governance_uow import (
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.tool_governance_uow import (
+    SqlAlchemyToolRegistryUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
 from tests.integration.support import IdentityStack
 
@@ -36,6 +39,12 @@ def runtime_database_url() -> str:
 async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "TRUNCATE tool_governance.tool_activations, tool_governance.tool_versions, "
+                "tool_governance.tool_definitions"
+            )
+        )
         await connection.execute(
             text(
                 "TRUNCATE agent_governance.agent_activations, "
@@ -71,3 +80,17 @@ def agent_registry_factory(
     runtime_database_url: str,
 ) -> SqlAlchemyAgentRegistryUnitOfWorkFactory:
     return SqlAlchemyAgentRegistryUnitOfWorkFactory(create_session_factory(runtime_database_url))
+
+
+@pytest.fixture
+def tool_control_factory(
+    admin_database_url: str,
+) -> SqlAlchemyToolRegistryUnitOfWorkFactory:
+    return SqlAlchemyToolRegistryUnitOfWorkFactory(create_session_factory(admin_database_url))
+
+
+@pytest.fixture
+def tool_runtime_factory(
+    runtime_database_url: str,
+) -> SqlAlchemyToolRegistryUnitOfWorkFactory:
+    return SqlAlchemyToolRegistryUnitOfWorkFactory(create_session_factory(runtime_database_url))

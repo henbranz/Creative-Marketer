@@ -127,6 +127,26 @@ System instructions are bounded and reject recognizable credential-shaped conten
 inside immutable registry configuration and are not copied into audit, logs, or telemetry. Agent
 configuration contains logical model/tool references only and never connector credentials.
 
+The platform Tool Registry is global catalog data rather than tenant-owned data. It therefore does
+not add a fictitious `tenant_id` or RLS policy. The ordinary runtime role has schema usage and
+`SELECT` only across definitions, versions, and activations; it has no insert, update, delete, or
+truncate privilege. Writes require a separately configured internal control-plane connection and
+an explicit trusted system/workload context. There is no public or tenant mutation route. Agent
+actors cannot construct valid control-plane authority, and database privileges prevent runtime
+mutation even through raw SQL.
+
+Tool versions contain self-contained JSON Schema 2020-12 snapshots. Registration rejects remote
+and relative `$ref`, oversized/pathological structures, and credential-shaped values while
+allowing logical internal resource-reference property names. No schema validation path performs
+network retrieval. Versions store only `NONE`/`CONNECTOR` credential-boundary classification, not
+credential material, executor paths, endpoints, or provider SDK objects.
+
+Tool Registry mutations and compact platform audit evidence commit atomically. Audit includes
+authoritative actor, correlation ID, tool definition/version IDs, tool key, version, risk and
+digests, but excludes full schemas and descriptions. Archived keys remain reserved, version rows
+are immutable to runtime, and a composite activation foreign key prevents cross-definition
+activation.
+
 ## Prompt Injection Defense
 
 Research/browser input is data, never instructions.

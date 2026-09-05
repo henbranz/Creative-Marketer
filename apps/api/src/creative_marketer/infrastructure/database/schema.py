@@ -110,6 +110,8 @@ audit_records = Table(
     Column("policy_version", String(100)),
     Column("tool_name", String(160)),
     Column("tool_version", String(100)),
+    Column("tool_definition_id", UUID(as_uuid=True)),
+    Column("tool_version_id", UUID(as_uuid=True)),
     Column("agent_definition_id", UUID(as_uuid=True)),
     Column("agent_version_id", UUID(as_uuid=True)),
     Column("agent_run_id", UUID(as_uuid=True)),

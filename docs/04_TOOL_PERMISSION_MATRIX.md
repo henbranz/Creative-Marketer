@@ -4,6 +4,51 @@
 
 Tools are capabilities granted to agents through policy. Possessing a tool definition does not imply permission to execute it.
 
+## Phase 0 Tool Registry
+
+The platform-global Tool Registry separates stable identity, immutable contract, and mutable
+activation:
+
+```text
+ToolDefinition → ToolVersion[] → ToolActivation → ResolvedToolVersion
+```
+
+`ToolDefinition` reserves one provider-neutral, lowercase, dot-separated capability key.
+`ToolVersion` snapshots JSON Schema 2020-12 input/output contracts and explicit risk,
+side-effect, execution, credential-boundary, idempotency, and capability-tag declarations.
+`ToolActivation` selects one immutable version and may point back to a historical version for
+rollback. Disabled or archived definitions and definitions without activation do not resolve.
+
+These layers remain deliberately separate:
+
+```text
+AgentVersion.allowed_tool_keys  declaration only
+ToolDefinition                  known capability only
+ToolPermission                  future tenant policy
+Permission Engine               future authoritative decision
+```
+
+Unknown declarations remain `unknown`; they are never auto-created or treated as authorized.
+Diagnostic reconciliation classifies allowed declarations as known-active, known-unavailable, or
+unknown and preserves denied declarations, but produces no allow/deny decision.
+
+The Tool Registry is not the Tool Gateway, and a ToolVersion is not an implementation adapter.
+No callable, SDK type, endpoint, credential, routing decision, provider request, or execution
+record belongs in the Registry.
+
+### Contract classifications
+
+- risk: `R0` through `R7`, stored as policy input only
+- side effect: `READ_ONLY`, `INTERNAL_MUTATION`, or `EXTERNAL_MUTATION`
+- execution: provider-neutral `INTERNAL`, `CONNECTOR`, or `PROVIDER`
+- credential boundary: `NONE` or `CONNECTOR`; agents never receive credentials
+- idempotency: `NOT_APPLICABLE`, `SUPPORTED`, or `REQUIRED`; enforcement is deferred
+
+Input and output schemas are self-contained JSON Schema 2020-12 object contracts. Remote and
+relative `$ref` values are rejected; local `#` references are allowed. Registration bounds schema
+size, nesting, and node count and rejects credential-shaped values in defaults, examples, or other
+schema content. Contract changes always create a new version.
+
 ## Baseline Matrix
 
 | Capability | Orchestrator | Researcher | Creative | Producer | Marketer | Commerce | Intelligence |

@@ -89,6 +89,15 @@ may insert tenant definitions/versions and change tenant lifecycle/activation on
 internal application boundary, and cannot mutate or delete historical versions. Platform writes
 require the migration/internal control-plane role. No public registry mutation endpoints exist.
 
+Migration `20260905_0005` creates the platform-global `tool_governance` catalog with stable tool
+definitions, immutable contract versions, and separate activation pointers. Runtime receives
+read-only access. Internal control-plane/bootstrap writes use a separately configured privileged
+connection and require explicit trusted system/workload context; the API does not expose this
+credential or a mutation route. Every mutation appends platform audit in the same transaction.
+Tool contracts are self-contained JSON Schema 2020-12 object schemas with bounded validation and
+canonical SHA-256 digests. The downgrade refuses to discard Registry or referenced audit history.
+No production demo catalog is seeded.
+
 Run migrations directly only with the migration URL:
 
 ```bash

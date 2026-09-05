@@ -7,6 +7,8 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID, uuid4
 
+from creative_marketer.governance_keys import canonical_tool_keys
+
 CANONICAL_KEY = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
 AGENT_KEY = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 CURRENCY = re.compile(r"^[A-Z]{3}$")
@@ -250,12 +252,12 @@ class AgentVersionConfiguration:
         object.__setattr__(
             self,
             "allowed_tool_keys",
-            _canonical_set(self.allowed_tool_keys, field_name="allowed_tool_keys"),
+            canonical_tool_keys(self.allowed_tool_keys, field_name="allowed_tool_keys"),
         )
         object.__setattr__(
             self,
             "denied_tool_keys",
-            _canonical_set(self.denied_tool_keys, field_name="denied_tool_keys"),
+            canonical_tool_keys(self.denied_tool_keys, field_name="denied_tool_keys"),
         )
         if set(self.allowed_tool_keys) & set(self.denied_tool_keys):
             raise ValueError("a tool key cannot be both allowed and denied")

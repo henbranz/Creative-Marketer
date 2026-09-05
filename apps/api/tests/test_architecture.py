@@ -57,6 +57,33 @@ def test_no_public_agent_registry_mutation_routes_exist() -> None:
     assert '@router.post("/agents' not in source
 
 
+def test_tool_registry_is_framework_provider_and_executor_independent() -> None:
+    registry_root = Path(__file__).parents[1] / "src" / "creative_marketer" / "tool_governance"
+    source_files = [registry_root / "domain.py", registry_root / "application.py"]
+    forbidden_imports = {
+        "fastapi",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "openai",
+        "anthropic",
+        "google",
+        "langgraph",
+        "temporalio",
+    }
+    assert imported_roots(source_files).isdisjoint(forbidden_imports)
+    source = "\n".join(path.read_text().lower() for path in source_files)
+    for forbidden in ("functiontool", "python.module", "tool gateway", "provider sdk"):
+        assert forbidden not in source
+
+
+def test_no_public_tool_registry_mutation_routes_exist() -> None:
+    delivery_root = Path(__file__).parents[1] / "src" / "creative_marketer_api"
+    source = "\n".join(path.read_text() for path in delivery_root.glob("*.py"))
+    assert "POST /tools" not in source
+    assert '@router.post("/tools' not in source
+
+
 def test_delivery_does_not_construct_authoritative_identity() -> None:
     route_source = (
         Path(__file__).parents[1] / "src" / "creative_marketer_api" / "authentication_routes.py"

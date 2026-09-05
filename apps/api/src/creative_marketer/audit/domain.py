@@ -49,6 +49,8 @@ class AuditRecord:
     policy_version: str | None = None
     tool_name: str | None = None
     tool_version: str | None = None
+    tool_definition_id: UUID | None = None
+    tool_version_id: UUID | None = None
     agent_definition_id: UUID | None = None
     agent_version_id: UUID | None = None
     agent_run_id: UUID | None = None

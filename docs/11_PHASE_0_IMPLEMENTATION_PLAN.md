@@ -76,6 +76,8 @@ No LLM calls required.
 
 ## Workstream 5 — Tool Registry & Permission Engine
 
+Tool Registry status: completed by `TASK-006`; Permission Engine remains pending.
+
 Implement:
 - ToolDefinition
 - risk level
@@ -85,6 +87,9 @@ Implement:
 - policy evaluation result with machine-readable denial reasons
 
 Start deny-by-default.
+
+TASK-006 intentionally did not create `ToolPermission`, authorization decisions, tool calls, or
+gateway execution. Its declaration-reconciliation query is diagnostic only.
 
 ## Workstream 6 — Approval Engine
 
