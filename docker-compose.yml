@@ -43,6 +43,20 @@ services:
     ports:
       - "8000:8000"
 
+  event-publisher:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "creative_marketer.events.worker"]
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+    profiles: ["event-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   web:
     build:
       context: .

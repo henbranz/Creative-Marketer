@@ -9,3 +9,17 @@ END
 $$;
 
 ALTER ROLE creative_marketer_runtime NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+-- Dedicated cross-tenant Outbox publisher. It receives only event_delivery grants in migrations.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT FROM pg_catalog.pg_roles WHERE rolname = 'creative_marketer_event_publisher'
+  ) THEN
+    CREATE ROLE creative_marketer_event_publisher LOGIN PASSWORD 'creative_marketer_event_publisher';
+  END IF;
+END
+$$;
+
+ALTER ROLE creative_marketer_event_publisher
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;

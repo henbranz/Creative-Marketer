@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:creative-marketer:event:governance.approval.requested.v1",
+  "x-event-type": "governance.approval.requested.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approval_request_id", "tool_definition_id", "tool_version_id", "risk_level", "action_digest", "expires_at"],
+  "properties": {
+    "approval_request_id": {"type": "string", "format": "uuid"},
+    "tool_definition_id": {"type": "string", "format": "uuid"},
+    "tool_version_id": {"type": "string", "format": "uuid"},
+    "risk_level": {"enum": ["R0", "R1", "R2", "R3", "R4", "R5", "R6"]},
+    "action_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "expires_at": {"type": "string", "format": "date-time"}
+  }
+}

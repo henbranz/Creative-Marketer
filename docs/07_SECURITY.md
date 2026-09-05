@@ -251,6 +251,21 @@ Never log:
 - payment credentials
 - full unnecessary PII
 
+## Event delivery security
+
+Events can be created only by trusted application use cases; there is no public event/outbox API.
+Tenant and actor authority come from `ExecutionContext`, and a consumer derives tenant context
+only from a validated immutable envelope, never from payload claims. Current general-event
+contracts reject credentials, prompts, customer contact/address fields, unexpected properties,
+and payloads above the bound.
+
+Forced RLS protects Outbox and Inbox. Tenant runtime has tenant-matching Outbox `INSERT` and
+tenant-matching Inbox `SELECT`/`INSERT`, but no Outbox claim/update/delete authority. A separate
+non-owner publisher role has cross-tenant Outbox select plus column-scoped delivery updates and no
+business-schema access. Database triggers protect immutable event content and Inbox history even
+from accidentally broader SQL grants. Production publisher credentials are externally managed and
+separate from runtime and migrator credentials.
+
 Audit metadata should remain useful without exposing secrets.
 
 ## Security Audit

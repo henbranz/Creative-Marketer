@@ -136,6 +136,17 @@ Every durable workflow should define:
 - user escalation
 - dead-letter/manual intervention path
 
+## Transactional event propagation
+
+Completed facts cross context boundaries through PostgreSQL Outbox publication. Application state,
+required Audit evidence, and the Outbox event commit together. Publishers claim short leased
+batches and perform transport I/O outside database transactions. A crash after send can redeliver;
+that is expected and safe because consumer state and its Inbox receipt commit together.
+
+When a tenant consumer emits a new fact, the new event keeps the source correlation ID and uses the
+source event ID as causation. It can join the handler state and Inbox receipt in the same local
+transaction. No global event order is inferred from timestamps.
+
 ## Approval and Idempotency Preparation
 
 Phase 0 now persists the safety state that a future Tool Gateway will consume:

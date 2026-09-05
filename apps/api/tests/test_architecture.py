@@ -140,6 +140,33 @@ def test_no_public_normalization_or_approval_request_creation_route_exists() -> 
     assert '@router.post("/approvals"' not in source
 
 
+def test_event_domain_and_application_are_worker_safe_and_provider_independent() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer" / "events"
+    source_files = [root / "domain.py", root / "application.py", root / "contracts.py"]
+    forbidden = {
+        "fastapi",
+        "sqlalchemy",
+        "psycopg",
+        "alembic",
+        "openai",
+        "anthropic",
+        "temporalio",
+        "redis",
+        "kafka",
+    }
+    assert imported_roots(source_files).isdisjoint(forbidden)
+    source = "\n".join(path.read_text().lower() for path in source_files)
+    for value in ("requests.post", "httpx", "functiontool", "tool gateway", "eventstore"):
+        assert value not in source
+
+
+def test_no_public_event_injection_route_exists() -> None:
+    delivery_root = Path(__file__).parents[1] / "src" / "creative_marketer_api"
+    source = "\n".join(path.read_text() for path in delivery_root.glob("*.py"))
+    for route in ('@router.post("/events', '@router.post("/outbox', "POST /publish-event"):
+        assert route not in source
+
+
 def test_delivery_does_not_construct_authoritative_identity() -> None:
     route_source = (
         Path(__file__).parents[1] / "src" / "creative_marketer_api" / "authentication_routes.py"

@@ -29,6 +29,7 @@ jobs:
       MIGRATION_DATABASE_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
       TEST_DATABASE_ADMIN_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer
       TEST_DATABASE_RUNTIME_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer
+      TEST_DATABASE_PUBLISHER_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer
     defaults:
       run:
         working-directory: apps/api
@@ -46,6 +47,14 @@ jobs:
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/verify_0002_backfill.sql
       - run: uv run alembic downgrade base
       - run: uv run alembic upgrade head
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_event_delivery_lossy_downgrade.sql
+      - name: Verify lossy event-delivery downgrade fails closed
+        run: |
+          if uv run alembic downgrade 20260905_0007; then
+            echo "lossy event-delivery downgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "DELETE FROM event_delivery.outbox_events WHERE event_id='00000000-0000-0000-0000-000000000009'; DELETE FROM identity.tenants WHERE id='00000000-0000-0000-0000-000000000009'"
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_approval_idempotency_lossy_downgrade.sql
       - name: Verify lossy Approval and Idempotency downgrade fails closed
         run: |

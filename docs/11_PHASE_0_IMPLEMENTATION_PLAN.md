@@ -129,6 +129,9 @@ Audit must avoid raw secrets.
 
 ## Workstream 8 — Event Contracts
 
+Status: completed by `TASK-009`; production broker selection, retention/partitioning, platform
+consumer authorization, and operational replay administration remain deferred.
+
 Implement:
 - event envelope
 - schema versioning
@@ -138,6 +141,11 @@ Implement:
 - test events
 
 Do not prematurely adopt Kafka. Start with the simplest durable event mechanism compatible with scale path.
+
+TASK-009 implements canonical Approval event schemas, an immutable digest-bound envelope,
+transactional PostgreSQL Outbox, narrow leased publisher, `EventTransport` port, explicit retry and
+terminal failure state, consumer registry, and atomic idempotent Inbox processing. It introduces no
+broker, Redis durability, Temporal, Tool Gateway, Agent Runtime, or event sourcing.
 
 ## Workstream 9 — Tool Gateway Skeleton
 

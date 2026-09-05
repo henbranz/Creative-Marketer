@@ -30,3 +30,27 @@ Outbox polling/publication introduces latency, table growth, retries, and operat
 - retention and partitioning are reviewed as volume grows
 - schema compatibility is validated before deployment
 - no external broker is required during initial Phase 0
+
+## TASK-009 implementation notes
+
+The `event_delivery` PostgreSQL schema now contains immutable `outbox_events` and
+`inbox_receipts`. Approval request, decision, and revocation use cases append their governance
+fact through the same SQLAlchemy session that owns domain mutation and Audit. There is no hidden
+connection and no post-commit callback.
+
+Publisher workers claim ready rows in a short transaction with `FOR UPDATE SKIP LOCKED`, change
+them to `PUBLISHING`, increment the attempt, and establish a bounded owner lease. Transport I/O
+happens after that transaction commits. A crash after transport acceptance but before the
+`PUBLISHED` update deliberately permits redelivery after lease expiry. Retryable failures return
+to `PENDING` with capped exponential backoff; exhausted or non-retryable failures remain
+`FAILED_TERMINAL` and queryable. `PUBLISHED` means transport acceptance, not consumer completion.
+
+The narrow `creative_marketer_event_publisher` role can read Outbox rows across tenants and update
+only delivery columns. It cannot insert events, mutate event content, read Inbox, or read identity,
+approval, registry, and tenant business tables. It is non-owner, `NOSUPERUSER`, and `NOBYPASSRLS`.
+
+Consumers validate the envelope, local schema digest, and payload before opening tenant work.
+They reserve `(consumer_name, event_id)` with a unique insert in the same transaction as handler
+state. Same ID/same digest is `ALREADY_PROCESSED`; same ID/different digest is
+`EVENT_ID_CONFLICT`. Handler version is evidence, not part of the deduplication key. Platform
+consumer execution remains deferred to a separately authorized control-plane path.

@@ -34,6 +34,7 @@ from creative_marketer.approval_governance.domain import (
     approval_ttl,
     effective_approval_state,
 )
+from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.execution_control.application import (
     BeginExecutionAttempt,
     InspectIdempotencyState,
@@ -513,6 +514,14 @@ class MemoryAudit:
         self.records.append(record)
 
 
+class MemoryOutbox:
+    def __init__(self):
+        self.events = []
+
+    async def append(self, event):
+        self.events.append(event)
+
+
 class MemoryUow:
     def __init__(self, requests=None, decisions=None, revocations=None, records=None):
         self.requests = requests
@@ -520,6 +529,7 @@ class MemoryUow:
         self.revocations = revocations
         self.records = records
         self.audit = MemoryAudit()
+        self.outbox = MemoryOutbox()
         self.commits = 0
 
     async def __aenter__(self):
@@ -592,6 +602,18 @@ async def test_approval_application_authority_expiry_revocation_and_audit() -> N
     assert (
         await InspectApproval(factory, lambda: NOW)(ctx, pending.id)
     ).state is ApprovalState.REVOKED
+    denied_request = approval(binding(ctx=ctx))
+    requests.items[denied_request.id] = denied_request
+    await DecideApproval(factory, lambda: NOW)(ctx, denied_request.id, HumanDecision.DENY)
+    registry = EventContractRegistry()
+    for emitted in uow.outbox.events:
+        registry.validate_event(emitted)
+    assert {emitted.event_type for emitted in uow.outbox.events} >= {
+        "governance.approval.requested.v1",
+        "governance.approval.granted.v1",
+        "governance.approval.denied.v1",
+        "governance.approval.revoked.v1",
+    }
 
 
 @pytest.mark.asyncio

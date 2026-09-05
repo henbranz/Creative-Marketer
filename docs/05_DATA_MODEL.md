@@ -456,17 +456,44 @@ Customer PII should be isolated into dedicated tables/columns with stricter acce
 
 ### DomainEvent
 - event_id
+- event_type / schema_version
+- scope_kind (`tenant` or `platform`)
 - tenant_id
-- event_type
-- schema_version
 - aggregate_type
 - aggregate_id
 - occurred_at
-- actor_type
+- actor_kind
 - actor_id
+- agent_definition_id / agent_version_id / agent_run_id optional
 - correlation_id
 - causation_id
 - payload
+- payload_schema_digest
+- event_digest
+- canonicalization_version
+
+### OutboxEvent delivery metadata
+- publication_state (`PENDING`, `PUBLISHING`, `PUBLISHED`, `FAILED_TERMINAL`)
+- attempt_count / next_attempt_at
+- lease_owner / lease_expires_at
+- published_at
+- last_error_code / last_error_digest
+- created_at / updated_at
+
+The immutable DomainEvent columns and mutable delivery metadata share
+`event_delivery.outbox_events`. Database triggers prevent all envelope changes. Tenant runtime may
+insert only tenant-matching facts and cannot read, claim, update, or delete Outbox history. The
+dedicated publisher can read across tenants and update only delivery columns.
+
+### InboxReceipt
+- consumer_name / event_id (composite primary key)
+- event_digest / event_type
+- scope_kind / tenant_id
+- handler_version
+- processed_at
+
+Inbox receipts are immutable tenant safety state. Handler version is not part of deduplication.
+Retention must not remove receipts before the maximum supported replay window.
 
 ### AuditRecord
 - id

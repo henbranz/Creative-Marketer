@@ -44,13 +44,22 @@ def runtime_database_url() -> str:
     return value
 
 
+@pytest.fixture(scope="session")
+def publisher_database_url() -> str:
+    value = os.environ.get("TEST_DATABASE_PUBLISHER_URL")
+    if value is None:
+        pytest.skip("TEST_DATABASE_PUBLISHER_URL is required for publisher security tests")
+    return value
+
+
 @pytest_asyncio.fixture
 async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE approval_governance.approval_revocations, "
+                "TRUNCATE event_delivery.inbox_receipts, event_delivery.outbox_events, "
+                "approval_governance.approval_revocations, "
                 "approval_governance.approval_decisions, "
                 "approval_governance.approval_requests, "
                 "execution_control.idempotency_records, "
@@ -73,6 +82,13 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
 @pytest_asyncio.fixture
 async def runtime_engine(runtime_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(runtime_database_url, pool_size=1, max_overflow=0)
+    yield engine
+    await engine.dispose()
+
+
+@pytest_asyncio.fixture
+async def publisher_engine(publisher_database_url: str) -> AsyncIterator[AsyncEngine]:
+    engine = create_async_engine(publisher_database_url, pool_size=2, max_overflow=0)
     yield engine
     await engine.dispose()
 

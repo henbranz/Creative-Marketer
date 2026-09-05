@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, ge=1, le=65535)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: PostgresDsn
+    event_publisher_database_url: PostgresDsn | None = None
     dev_identity_enabled: bool = False
     audit_fingerprint_key: SecretStr = Field(min_length=32)
     cors_origins: list[AnyHttpUrl] = Field(default_factory=list)

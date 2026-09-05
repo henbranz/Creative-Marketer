@@ -10,6 +10,7 @@ from creative_marketer.approval_governance.application import (
     ApprovalUnitOfWork,
 )
 from creative_marketer.audit.application import AuditWriter
+from creative_marketer.events.application import OutboxWriter
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.infrastructure.database.approval_repositories import (
     SqlAlchemyApprovalDecisionRepository,
@@ -17,6 +18,7 @@ from creative_marketer.infrastructure.database.approval_repositories import (
     SqlAlchemyApprovalRevocationRepository,
 )
 from creative_marketer.infrastructure.database.audit import PostgresAuditWriter
+from creative_marketer.infrastructure.database.event_delivery import PostgresOutboxWriter
 
 
 class SqlAlchemyApprovalUnitOfWork:
@@ -24,6 +26,7 @@ class SqlAlchemyApprovalUnitOfWork:
     decisions: ApprovalDecisionRepository
     revocations: ApprovalRevocationRepository
     audit: AuditWriter
+    outbox: OutboxWriter
 
     def __init__(self, factory: async_sessionmaker[AsyncSession], context: TenantContext) -> None:
         self._factory, self._context = factory, context
@@ -41,6 +44,7 @@ class SqlAlchemyApprovalUnitOfWork:
         self.decisions = SqlAlchemyApprovalDecisionRepository(self._session)
         self.revocations = SqlAlchemyApprovalRevocationRepository(self._session)
         self.audit = PostgresAuditWriter(self._session)
+        self.outbox = PostgresOutboxWriter(self._session)
         return self
 
     async def __aexit__(

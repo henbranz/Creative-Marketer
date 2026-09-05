@@ -16,24 +16,28 @@ Events are not a replacement for ordinary application calls. Deterministic workf
 
 ## Event Envelope
 
-Every event should include:
+Every event uses the implemented immutable canonical envelope:
 
 ```json
 {
   "event_id": "uuid",
   "event_type": "marketing.post.published.v1",
   "schema_version": 1,
-  "tenant_id": "uuid",
+  "scope_kind": "tenant|platform",
+  "tenant_id": "uuid|null",
   "aggregate_type": "publication",
   "aggregate_id": "uuid",
   "occurred_at": "ISO-8601",
-  "actor": {
-    "type": "agent|user|system|integration",
-    "id": "..."
-  },
+  "actor_kind": "agent|user|system|workload",
+  "actor_id": "uuid",
+  "agent_definition_id": "uuid|null",
+  "agent_version_id": "uuid|null",
+  "agent_run_id": "uuid|null",
   "correlation_id": "uuid",
   "causation_id": "uuid|null",
-  "payload": {}
+  "payload": {},
+  "payload_schema_digest": "sha256:...",
+  "event_digest": "sha256:..."
 }
 ```
 
@@ -90,7 +94,11 @@ Every event should include:
 - `governance.approval.requested.v1`
 - `governance.approval.granted.v1`
 - `governance.approval.denied.v1`
+- `governance.approval.revoked.v1`
 - `governance.tool.denied.v1`
+
+Only the four Approval event schemas are registered as production contracts in TASK-009. The
+other families above are roadmap names, not currently accepted contracts.
 
 ## Rules
 
@@ -117,6 +125,27 @@ PostgreSQL is the initial durability mechanism:
 5. retries, poison messages, and terminal failures remain observable
 
 Exactly-once delivery is not assumed. Event payloads minimize PII and secrets and prefer stable references.
+
+Implemented invariant:
+
+```text
+Business State + Audit + Outbox → one atomic commit
+Transport                       → at least once
+Consumer State + Inbox          → one atomic commit
+```
+
+Payload contracts are self-contained JSON Schema 2020-12 with `additionalProperties: false`.
+Unknown types, remote/relative `$ref`, version-suffix mismatch, malformed payloads, and local
+schema-digest mismatch fail closed. Event Canonical JSON V1 is a documented strict portable JSON
+subset (null, booleans, safe integers, UTF-8 strings, arrays, and string-keyed objects), serialized
+with sorted keys and compact separators. Payloads are limited to 16 KiB canonical bytes and reject
+credential- and PII-shaped fields/values before persistence.
+
+The Outbox state machine is `PENDING → PUBLISHING → PUBLISHED`, with retryable failure returning
+to `PENDING` and exhausted/permanent failure entering `FAILED_TERMINAL`. Publisher leases permit
+recovery and intentional duplicate delivery. Inbox identity is `(consumer_name, event_id)`;
+handler version is stored only for traceability. Same ID with a changed event digest is corruption,
+not a duplicate.
 
 ## Example Flow
 

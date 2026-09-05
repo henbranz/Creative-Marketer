@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from types import TracebackType
 from typing import Protocol
@@ -24,10 +24,17 @@ from creative_marketer.approval_governance.domain import (
     effective_approval_state,
     utc_now,
 )
+from creative_marketer.approval_governance.events import (
+    approval_decided_event,
+    approval_requested_event,
+    approval_revoked_event,
+)
 from creative_marketer.audit.application import AuditWriter
 from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditOutcome, AuditRecord
 from creative_marketer.audit.safety import safe_metadata
+from creative_marketer.events.application import OutboxWriter
+from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.identity.application.authentication import ActorKind, ExecutionContext
 from creative_marketer.identity.application.context import TenantContext
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
@@ -57,6 +64,7 @@ class ApprovalUnitOfWork(Protocol):
     decisions: ApprovalDecisionRepository
     revocations: ApprovalRevocationRepository
     audit: AuditWriter
+    outbox: OutboxWriter
 
     async def __aenter__(self) -> "ApprovalUnitOfWork": ...
     async def __aexit__(
@@ -94,6 +102,7 @@ def _human_authorized(context: ExecutionContext, risk: RiskLevel) -> None:
 class CreateApprovalRequest:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
+    contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
 
     async def __call__(
         self,
@@ -132,6 +141,7 @@ class CreateApprovalRequest:
         async with self.uow_factory(context.tenant_context()) as uow:
             await uow.requests.add(request)
             await uow.audit.append(_request_audit(context, request))
+            await uow.outbox.append(approval_requested_event(context, request, self.contracts))
             await uow.commit()
         return request
 
@@ -140,6 +150,7 @@ class CreateApprovalRequest:
 class DecideApproval:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
+    contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
 
     async def __call__(
         self,
@@ -174,6 +185,9 @@ class DecideApproval:
             )
             await uow.decisions.add(decision)
             await uow.audit.append(_decision_audit(context, request, decision))
+            await uow.outbox.append(
+                approval_decided_event(context, request, decision, self.contracts)
+            )
             await uow.commit()
             return decision
 
@@ -182,6 +196,7 @@ class DecideApproval:
 class RevokeApproval:
     uow_factory: ApprovalUnitOfWorkFactory
     clock: Callable[[], datetime] = utc_now
+    contracts: EventContractRegistry = field(default_factory=EventContractRegistry)
 
     async def __call__(
         self,
@@ -202,6 +217,9 @@ class RevokeApproval:
             )
             await uow.revocations.add(revocation)
             await uow.audit.append(_revocation_audit(context, request, revocation))
+            await uow.outbox.append(
+                approval_revoked_event(context, request, revocation, self.contracts)
+            )
             await uow.commit()
             return revocation
 

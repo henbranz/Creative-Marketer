@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:creative-marketer:event:governance.approval.revoked.v1",
+  "x-event-type": "governance.approval.revoked.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approval_request_id", "action_digest", "revoked_by_user_id", "reason_code"],
+  "properties": {
+    "approval_request_id": {"type": "string", "format": "uuid"},
+    "action_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "revoked_by_user_id": {"type": "string", "format": "uuid"},
+    "reason_code": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,99}$"}
+  }
+}
