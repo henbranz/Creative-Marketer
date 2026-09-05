@@ -7,6 +7,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from creative_marketer.audit.identity import IdentityAuditService
+from creative_marketer.infrastructure.database.agent_governance_uow import (
+    SqlAlchemyAgentRegistryUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
 from creative_marketer.infrastructure.database.engine import create_session_factory
 from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
@@ -33,6 +36,12 @@ def runtime_database_url() -> str:
 async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
+        await connection.execute(
+            text(
+                "TRUNCATE agent_governance.agent_activations, "
+                "agent_governance.agent_versions, agent_governance.agent_definitions"
+            )
+        )
         await connection.execute(text("TRUNCATE audit.audit_records"))
         await connection.execute(
             text("TRUNCATE identity.memberships, identity.users, identity.tenants CASCADE")
@@ -55,3 +64,10 @@ def identity_stack(runtime_database_url: str) -> IdentityStack:
         SqlAlchemyUnitOfWorkFactory(sessions),
         IdentityAuditService(PostgresStandaloneAuditWriter(sessions), b"test-fingerprint-key" * 2),
     )
+
+
+@pytest.fixture
+def agent_registry_factory(
+    runtime_database_url: str,
+) -> SqlAlchemyAgentRegistryUnitOfWorkFactory:
+    return SqlAlchemyAgentRegistryUnitOfWorkFactory(create_session_factory(runtime_database_url))

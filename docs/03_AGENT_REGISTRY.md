@@ -219,6 +219,72 @@ Each agent version should preserve:
 
 Performance changes should be attributable to versions.
 
+## Phase 0 Registry Control Plane
+
+```text
+AgentDefinition
+      ↓
+AgentVersion[] (immutable)
+      ↓
+AgentActivation (one mutable pointer)
+      ↓
+ResolveActiveAgentVersion
+      ↓
+ResolvedAgentVersion (still inert)
+```
+
+`AgentDefinition` owns stable UUID identity, explicit platform/tenant scope, canonical `agent_key`
+and extensible `agent_type`, optional platform-template relationship, lifecycle, and creator
+provenance. Behavior does not live on the definition. Platform keys are globally unique; tenant
+keys are unique within a tenant. Archived definitions continue to reserve their key so historical
+identity cannot be confused with a replacement.
+
+Each immutable `AgentVersion` contains display name, mission, responsibilities, bounded system
+instructions, prompt revision, provider-neutral model intent, precise run/period budgets, declared
+read/write/memory scopes, declared allowed/denied tool keys, approval-policy reference, optional
+language-neutral output-contract reference, schema version, creator provenance, and a canonical
+configuration digest. Changes create the next integer version. Definition row locks serialize
+concurrent version allocation; `(definition_id, version_number)` remains database-unique.
+
+Model policy names a logical profile and required capabilities; it does not name an OpenAI,
+Anthropic, Google, or other provider model. Budgets store cost as canonical decimal strings with a
+three-letter currency, never floating-point numbers. They are declarations only and are not yet
+enforced.
+
+Scope/tool identifiers are canonical, unique, bounded keys with no global wildcard. A key appearing
+in both allow and deny declarations is rejected. These declarations are input to later governance:
+
+```text
+AgentVersion allowed tools/scopes ≠ authorization
+```
+
+Unknown tool declarations grant nothing. Future authorization combines registry intent with Tool
+Registry, tenant policy, Permission Engine, approvals, budgets, and trusted execution identity.
+
+Activation is a separate row keyed by definition, with a composite foreign key proving the active
+version belongs to that definition. Re-activating an older immutable version is rollback and emits
+a new audit decision. Concurrent activations serialize on the definition and can leave only one
+active pointer. Active definitions may become disabled or archived, and disabled definitions may
+be archived. Disabled definitions can receive staged versions but cannot activate or resolve them.
+Archived definitions are terminal; an explicit enable workflow is deferred.
+
+Tenant resolution first uses a tenant activation. Without one, it follows only the definition's
+explicit platform-template link and that template's explicit active version. Template activation
+upgrades are followed dynamically; resolved values preserve tenant request and platform-template
+provenance. Disabled/archived definitions, disabled templates, missing activations, and all fuzzy or
+implicit fallback fail with `AgentUnavailable`.
+
+Tenant mutations require a trusted human `ExecutionContext` and commit atomically with append-only
+audit. Audit stores agent/version IDs and digests, never prompt or full configuration payloads.
+Platform writes remain migration/internal-control-plane only, and no public mutation route exists.
+
+```text
+Agent Registry ≠ Agent Runtime
+```
+
+Resolved versions are inert configuration. TASK-005 does not execute prompts, choose providers,
+call models, grant tools, store memory, or create AgentRun records.
+
 ## Definition Ownership
 
 Agent ownership is explicit; nullable `tenant_id` alone must not distinguish platform and tenant definitions.

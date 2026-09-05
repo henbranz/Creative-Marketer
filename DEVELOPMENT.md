@@ -83,6 +83,12 @@ and pre-authentication records use the explicit standalone audit writer. `AUDIT_
 must be a deployment secret of at least 32 characters and is used only to create stable keyed
 external-principal fingerprints. The committed value is local/CI-only.
 
+Migration `20260905_0004` creates `agent_governance.agent_definitions`, `agent_versions`, and
+`agent_activations`. Runtime reads current-tenant registry state plus explicit platform templates,
+may insert tenant definitions/versions and change tenant lifecycle/activation only through the
+internal application boundary, and cannot mutate or delete historical versions. Platform writes
+require the migration/internal control-plane role. No public registry mutation endpoints exist.
+
 Run migrations directly only with the migration URL:
 
 ```bash

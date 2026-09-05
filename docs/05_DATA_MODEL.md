@@ -47,26 +47,53 @@ The identity records use the `identity` PostgreSQL schema. Tenant slugs and norm
 - scope_kind (`platform` or `tenant`)
 - tenant_id (null only when `scope_kind = platform`)
 - platform_template_id nullable
+- agent_key
 - agent_type
-- display_name
-- mission
 - status
+- created_by_actor_kind / created_by_actor_id
+- created_at / updated_at
 
 Ownership constraints:
 
 - `scope_kind = platform` requires `tenant_id IS NULL`
 - `scope_kind = tenant` requires `tenant_id IS NOT NULL`
 - tenant resolution references a platform template explicitly; nullable ownership never creates implicit fallback
+- platform definitions cannot reference templates
+- tenant templates reference only platform definitions, enforced by a database trigger
+- platform `agent_key` is globally unique; tenant `agent_key` is unique per tenant
+- archived definitions retain their stable key and cannot be resurrected
 
 ### AgentVersion
 - id
-- agent_definition_id
-- prompt_version
+- definition_id
+- scope_kind / tenant_id (denormalized and ownership-checked for RLS)
+- version_number
+- display_name / mission / responsibilities
+- bounded system_instructions
+- prompt_revision
 - model_policy
-- tool_policy_version
-- memory_policy_version
-- schema_version
-- rollout_status
+- run_budget_policy / period_budget_policy
+- read_scopes / write_scopes / memory_scopes
+- allowed_tool_keys / denied_tool_keys
+- approval_policy_key
+- output_contract_key / output_contract_version nullable
+- configuration_schema_version
+- configuration_digest
+- created_by_actor_kind / created_by_actor_id / created_at
+
+Versions are immutable. Runtime receives `SELECT` and `INSERT`, but no `UPDATE` or `DELETE`.
+`UNIQUE (definition_id, version_number)` and definition-row locking provide monotonic concurrent
+allocation. Nested provider-neutral policies are stored as JSONB behind typed contracts.
+
+### AgentActivation
+- definition_id (primary key)
+- active_version_id
+- scope_kind / tenant_id
+- activated_by_actor_kind / activated_by_actor_id
+- activated_at
+
+The composite `(definition_id, active_version_id)` foreign key ensures the version belongs to the
+definition. Activation changes never mutate a version and support audited rollback.
 
 ### AgentRun
 - id

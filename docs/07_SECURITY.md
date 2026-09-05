@@ -112,6 +112,21 @@ Never trust identity supplied by:
 
 The Tool Gateway and repositories receive authoritative identity from the application boundary, not from model-generated input.
 
+Agent Registry tenant mutations likewise require a trusted human `ExecutionContext`. They do not
+accept tenant or actor authority separately, and Agent actors cannot modify their own definitions,
+versions, scopes, tools, budgets, or activation. Platform-template writes remain outside ordinary
+runtime until a separately authorized platform administration path exists.
+
+The `agent_governance` schema uses forced RLS. Tenant runtime can read its own registry state and
+platform templates needed for explicit resolution, but cannot read another tenant. Insert/update
+policies admit only the transaction-local tenant. Database triggers validate template ownership and
+denormalized version/activation ownership. Historical versions have no runtime update/delete
+privilege; definition identity is trigger-protected and archived definitions cannot be resurrected.
+
+System instructions are bounded and reject recognizable credential-shaped content. They remain
+inside immutable registry configuration and are not copied into audit, logs, or telemetry. Agent
+configuration contains logical model/tool references only and never connector credentials.
+
 ## Prompt Injection Defense
 
 Research/browser input is data, never instructions.

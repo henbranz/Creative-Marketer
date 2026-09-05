@@ -18,6 +18,10 @@ def tenant_audit(
     reason_code: str | None = None,
     resource_type: str | None = None,
     resource_id: str | None = None,
+    agent_definition_id: UUID | None = None,
+    agent_version_id: UUID | None = None,
+    before_digest: str | None = None,
+    after_digest: str | None = None,
     metadata: SafeAuditMetadata | None = None,
 ) -> AuditRecord:
     return AuditRecord(
@@ -30,6 +34,10 @@ def tenant_audit(
         reason_code=reason_code,
         resource_type=resource_type,
         resource_id=resource_id,
+        agent_definition_id=agent_definition_id,
+        agent_version_id=agent_version_id,
+        before_digest=before_digest,
+        after_digest=after_digest,
         correlation_id=context.correlation_id,
         environment=context.environment,
         safe_metadata=metadata or SafeAuditMetadata(),

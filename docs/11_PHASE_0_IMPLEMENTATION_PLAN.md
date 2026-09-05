@@ -61,6 +61,8 @@ Acceptance:
 
 ## Workstream 4 — Agent Registry
 
+Status: completed by `TASK-005`; Agent Runtime and permission enforcement remain pending.
+
 Implement schemas/services for:
 - AgentDefinition
 - AgentVersion
@@ -179,7 +181,7 @@ Mandatory:
 3. Database + Multi-Tenancy
 4. Actor/Auth Identity Boundary
 5. Audit Foundation — completed by `TASK-004`
-6. Agent Registry
+6. Agent Registry — completed by `TASK-005`
 7. Tool Registry
 8. Permission Engine
 9. Approval + Idempotency
