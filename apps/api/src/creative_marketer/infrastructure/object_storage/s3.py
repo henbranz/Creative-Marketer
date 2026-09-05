@@ -135,28 +135,44 @@ class S3ObjectStore:
             code = getattr(error, "response", {}).get("Error", {}).get("Code")
             if code not in {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}:
                 raise ObjectStoreUnavailable("could not initialize object storage") from error
-        await asyncio.to_thread(
-            self._client.put_public_access_block,
-            Bucket=self._bucket,
-            PublicAccessBlockConfiguration={
-                "BlockPublicAcls": True,
-                "IgnorePublicAcls": True,
-                "BlockPublicPolicy": True,
-                "RestrictPublicBuckets": True,
-            },
-        )
-        await asyncio.to_thread(
-            self._client.put_bucket_cors,
-            Bucket=self._bucket,
-            CORSConfiguration={
-                "CORSRules": [
-                    {
-                        "AllowedOrigins": cors_origins,
-                        "AllowedMethods": ["GET", "POST"],
-                        "AllowedHeaders": ["*"],
-                        "ExposeHeaders": ["ETag"],
-                        "MaxAgeSeconds": 600,
-                    }
-                ]
-            },
-        )
+        try:
+            try:
+                await asyncio.to_thread(self._client.delete_bucket_policy, Bucket=self._bucket)
+            except Exception as error:
+                code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                if code not in {"NoSuchBucketPolicy", "NoSuchPolicy"}:
+                    raise
+            try:
+                await asyncio.to_thread(
+                    self._client.put_public_access_block,
+                    Bucket=self._bucket,
+                    PublicAccessBlockConfiguration={
+                        "BlockPublicAcls": True,
+                        "IgnorePublicAcls": True,
+                        "BlockPublicPolicy": True,
+                        "RestrictPublicBuckets": True,
+                    },
+                )
+            except Exception as error:
+                # MinIO is policy-private by default and does not implement this
+                # AWS-only defense-in-depth API. Its current response is MalformedXML.
+                code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                if code not in {"MalformedXML", "NotImplemented", "XNotImplemented"}:
+                    raise
+            await asyncio.to_thread(
+                self._client.put_bucket_cors,
+                Bucket=self._bucket,
+                CORSConfiguration={
+                    "CORSRules": [
+                        {
+                            "AllowedOrigins": cors_origins,
+                            "AllowedMethods": ["GET", "POST"],
+                            "AllowedHeaders": ["*"],
+                            "ExposeHeaders": ["ETag"],
+                            "MaxAgeSeconds": 600,
+                        }
+                    ]
+                },
+            )
+        except Exception as error:
+            raise ObjectStoreUnavailable("could not secure object storage") from error

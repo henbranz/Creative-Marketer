@@ -26,6 +26,10 @@ class AlreadyExists(Exception):
     response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "BucketAlreadyOwnedByYou"}}
 
 
+class UnsupportedPublicAccessBlock(Exception):
+    response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "MalformedXML"}}
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.body = Body()
@@ -52,6 +56,9 @@ class FakeClient:
 
     def create_bucket(self, **_kwargs: Any) -> None:
         raise AlreadyExists
+
+    def delete_bucket_policy(self, **_kwargs: Any) -> None:
+        self.calls.append("policy-removed")
 
     def put_public_access_block(self, **kwargs: Any) -> None:
         assert all(kwargs["PublicAccessBlockConfiguration"].values())
@@ -92,7 +99,21 @@ async def test_s3_adapter_grants_streams_promotes_and_configures_private_bucket(
     assert client.body.closed
     await store.promote(source_key="source", destination_key="destination-new")
     await store.ensure_private_bucket(["http://localhost:3000"])
-    assert {"copy", "private", "cors"} <= set(client.calls)
+    assert {"copy", "policy-removed", "private", "cors"} <= set(client.calls)
+
+
+@pytest.mark.asyncio
+async def test_s3_adapter_supports_policy_private_minio_without_aws_public_access_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MinioClient(FakeClient):
+        def put_public_access_block(self, **_kwargs: Any) -> None:
+            raise UnsupportedPublicAccessBlock
+
+    client = MinioClient()
+    store = adapter(monkeypatch, client)
+    await store.ensure_private_bucket(["http://localhost:3000"])
+    assert {"policy-removed", "cors"} <= set(client.calls)
 
 
 class Broken:
