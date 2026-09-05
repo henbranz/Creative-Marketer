@@ -51,7 +51,7 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen
       - name: Start private S3-compatible storage
-        run: docker run -d --name creative-marketer-minio -p 9000:9000 -e MINIO_ROOT_USER=creative-marketer-test -e MINIO_ROOT_PASSWORD=creative-marketer-test-secret minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+        run: docker run -d --name creative-marketer-minio -p 9000:9000 -e MINIO_ROOT_USER=creative-marketer-test -e MINIO_ROOT_PASSWORD=creative-marketer-test-secret -e MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000 minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
       - run: uv run python -m creative_marketer.infrastructure.object_storage.bootstrap
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f ../../infra/postgres/init/001-runtime-role.sql
       - run: uv run alembic upgrade 20260905_0001

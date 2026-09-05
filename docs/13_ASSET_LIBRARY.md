@@ -7,6 +7,11 @@ identity, tenant/Brand/Product association, lifecycle, rights, digest, and linea
 private object store owns binary bytes. The application layer defines the provider-neutral
 `ObjectStore` port; boto3 is confined to `infrastructure/object_storage`.
 
+The bootstrap applies bucket CORS where the provider supports the S3 API. Community MinIO exposes
+CORS only as a server-wide setting, so local/CI set `MINIO_API_CORS_ALLOW_ORIGIN` to the same
+explicit browser origin; deployments using MinIO must do likewise. The bootstrap accepts only the
+provider's specific not-implemented response and still removes public bucket policy.
+
 User uploads are authenticated first-party Catalog operations, not Agent Tool executions. Agents
 may later consume READY manifest references subject to deterministic allowed-use policy, but they
 cannot create grants, choose storage keys, weaken rights, or make Assets READY.

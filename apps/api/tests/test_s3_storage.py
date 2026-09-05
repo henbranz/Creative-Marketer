@@ -30,6 +30,10 @@ class UnsupportedPublicAccessBlock(Exception):
     response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "MalformedXML"}}
 
 
+class UnsupportedBucketCors(Exception):
+    response: ClassVar[dict[str, dict[str, str]]] = {"Error": {"Code": "NotImplemented"}}
+
+
 class FakeClient:
     def __init__(self) -> None:
         self.body = Body()
@@ -109,6 +113,10 @@ async def test_s3_adapter_supports_policy_private_minio_without_aws_public_acces
     class MinioClient(FakeClient):
         def put_public_access_block(self, **_kwargs: Any) -> None:
             raise UnsupportedPublicAccessBlock
+
+        def put_bucket_cors(self, **_kwargs: Any) -> None:
+            self.calls.append("cors")
+            raise UnsupportedBucketCors
 
     client = MinioClient()
     store = adapter(monkeypatch, client)

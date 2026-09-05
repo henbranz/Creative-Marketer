@@ -159,20 +159,27 @@ class S3ObjectStore:
                 code = getattr(error, "response", {}).get("Error", {}).get("Code")
                 if code not in {"MalformedXML", "NotImplemented", "XNotImplemented"}:
                     raise
-            await asyncio.to_thread(
-                self._client.put_bucket_cors,
-                Bucket=self._bucket,
-                CORSConfiguration={
-                    "CORSRules": [
-                        {
-                            "AllowedOrigins": cors_origins,
-                            "AllowedMethods": ["GET", "POST"],
-                            "AllowedHeaders": ["*"],
-                            "ExposeHeaders": ["ETag"],
-                            "MaxAgeSeconds": 600,
-                        }
-                    ]
-                },
-            )
+            try:
+                await asyncio.to_thread(
+                    self._client.put_bucket_cors,
+                    Bucket=self._bucket,
+                    CORSConfiguration={
+                        "CORSRules": [
+                            {
+                                "AllowedOrigins": cors_origins,
+                                "AllowedMethods": ["GET", "POST"],
+                                "AllowedHeaders": ["*"],
+                                "ExposeHeaders": ["ETag"],
+                                "MaxAgeSeconds": 600,
+                            }
+                        ]
+                    },
+                )
+            except Exception as error:
+                # Community MinIO configures CORS at server scope through
+                # MINIO_API_CORS_ALLOW_ORIGIN and rejects the bucket API.
+                code = getattr(error, "response", {}).get("Error", {}).get("Code")
+                if code not in {"NotImplemented", "XNotImplemented"}:
+                    raise
         except Exception as error:
             raise ObjectStoreUnavailable("could not secure object storage") from error
