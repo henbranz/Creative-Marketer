@@ -286,9 +286,9 @@ async def test_transaction_local_tenant_context_never_leaks_under_repeated_pool_
 @pytest.mark.postgres
 @pytest.mark.asyncio
 async def test_publisher_has_only_outbox_delivery_privileges(
-    publisher_engine: AsyncEngine,
+    admin_engine: AsyncEngine,
 ) -> None:
-    async with publisher_engine.connect() as connection:
+    async with admin_engine.connect() as connection:
         forbidden = (
             "identity.users",
             "agent_governance.agent_versions",
@@ -298,18 +298,16 @@ async def test_publisher_has_only_outbox_delivery_privileges(
         )
         for table in forbidden:
             assert not await connection.scalar(
-                text("SELECT has_table_privilege(current_user, :table, 'SELECT')"),
-                {"table": table},
+                text("SELECT has_table_privilege(:role, :table, 'SELECT')"),
+                {"role": PUBLISHER, "table": table},
             )
         assert await connection.scalar(
-            text(
-                "SELECT has_table_privilege(current_user, 'event_delivery.outbox_events', 'SELECT')"
-            )
+            text("SELECT has_table_privilege(:role, 'event_delivery.outbox_events', 'SELECT')"),
+            {"role": PUBLISHER},
         )
         assert not await connection.scalar(
-            text(
-                "SELECT has_table_privilege(current_user, 'event_delivery.outbox_events', 'INSERT')"
-            )
+            text("SELECT has_table_privilege(:role, 'event_delivery.outbox_events', 'INSERT')"),
+            {"role": PUBLISHER},
         )
         for column in (
             "publication_state",
@@ -324,18 +322,18 @@ async def test_publisher_has_only_outbox_delivery_privileges(
         ):
             assert await connection.scalar(
                 text(
-                    "SELECT has_column_privilege(current_user, "
+                    "SELECT has_column_privilege(:role, "
                     "'event_delivery.outbox_events', :column, 'UPDATE')"
                 ),
-                {"column": column},
+                {"role": PUBLISHER, "column": column},
             )
         for column in ("event_id", "tenant_id", "event_type", "payload", "event_digest"):
             assert not await connection.scalar(
                 text(
-                    "SELECT has_column_privilege(current_user, "
+                    "SELECT has_column_privilege(:role, "
                     "'event_delivery.outbox_events', :column, 'UPDATE')"
                 ),
-                {"column": column},
+                {"role": PUBLISHER, "column": column},
             )
 
 
@@ -443,7 +441,11 @@ async def test_every_tenant_to_tenant_foreign_key_carries_tenant_identity(
             .tuples()
             .all()
         )
-    trigger_enforced_exceptions = {
+    # These relationships deliberately use definition identity instead of tenant identity:
+    # Agent versions may be platform templates, while activation/version pairs and resolved
+    # approval versions are constrained to the exact definition. Focused ownership triggers
+    # enforce the denormalized tenant/scope fields on mutable Agent Registry relationships.
+    reviewed_relationship_exceptions = {
         (
             "agent_governance",
             "agent_versions",
@@ -455,6 +457,24 @@ async def test_every_tenant_to_tenant_foreign_key_carries_tenant_identity(
             "agent_activations",
             "agent_governance",
             "agent_definitions",
+        ),
+        (
+            "agent_governance",
+            "agent_activations",
+            "agent_governance",
+            "agent_versions",
+        ),
+        (
+            "agent_governance",
+            "agent_definitions",
+            "agent_governance",
+            "agent_definitions",
+        ),
+        (
+            "approval_governance",
+            "approval_requests",
+            "agent_governance",
+            "agent_versions",
         ),
     }
     checked = 0
@@ -475,7 +495,7 @@ async def test_every_tenant_to_tenant_foreign_key_carries_tenant_identity(
         source_values = list(source_columns)
         target_values = list(target_columns)
         relationship = (source_schema, source, target_schema, target)
-        if relationship in trigger_enforced_exceptions:
+        if relationship in reviewed_relationship_exceptions:
             continue
         if "tenant_id" not in source_values or "tenant_id" not in target_values:
             failures.append(f"{source_schema}.{source}->{target_schema}.{target}")
@@ -499,6 +519,7 @@ async def test_every_tenant_to_tenant_foreign_key_carries_tenant_identity(
             ).scalars()
         )
     assert {
+        "enforce_platform_template",
         "enforce_agent_version_owner",
         "enforce_agent_activation_owner",
     } <= owner_triggers

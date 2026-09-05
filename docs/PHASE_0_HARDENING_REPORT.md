@@ -67,10 +67,12 @@ unconditional `true` predicate. Missing context is checked across Identity, Agen
 Approval, Idempotency, Inbox, and ToolCall tables. Repeated `A → B → missing → A` transactions on a
 single-connection pool prove transaction-local tenant state is cleared.
 
-Tenant-to-tenant foreign keys are catalog inspected for paired tenant identity. AgentVersion and
-AgentActivation ownership are the two reviewed exceptions to a composite relationship: focused
-database triggers compare the denormalized scope/tenant to the definition, and their presence and
-behavior are tested. The publisher has cross-tenant Outbox read plus only the delivery columns it
+Tenant-to-tenant foreign keys are catalog inspected for paired tenant identity. The reviewed
+Agent Registry template/version relationships use exact definition/version composite keys and
+focused database triggers to compare denormalized scope/tenant ownership. Approval's resolved
+AgentVersion is likewise paired with its exact resolved definition because that definition may be
+either tenant-owned or an explicit platform template; the separately requested Agent relationship
+is tenant-composite. The publisher has cross-tenant Outbox read plus only the delivery columns it
 must update; it has no business read, event insert, Inbox read, or envelope update authority.
 
 ## Governance and identity findings
