@@ -163,17 +163,18 @@ Use durable workflow orchestration for processes that:
 - schedule future work
 - need reliable resumability
 
-Temporal is the current recommended candidate.
-
-ADR-004 remains proposed. Temporal is adopted only after a Phase 0 spike demonstrates:
-
-- pause and durable resume for human approval
-- long-running media-generation polling
-- durable scheduled publishing
-- crash/restart recovery
-- retry and non-retryable error behavior
+Temporal is the accepted durable orchestration engine after the TASK-012 spike demonstrated
+pause/resume, time-skipped polling and scheduling, worker recreation, bounded retry, Gateway
+idempotency after a lost Activity response, non-retryable failures, and history replay. PostgreSQL
+remains business/governance truth and Outbox/Inbox remains transactional fact delivery.
 
 Simple synchronous operations must not use Temporal merely because it is available.
+
+Temporal Workflows contain only deterministic coordination and safe identifiers/references.
+Activities resolve authoritative workload/tenant/request context and call application services;
+the Tool Gateway remains Temporal-unaware. Production activation requires workload authentication
+and a durable request resolver. Initial namespaces are environment-scoped and task queues are
+capability-scoped, never per tenant or Agent. See `docs/TEMPORAL_SPIKE_REPORT.md`.
 
 ## Agent Orchestration
 

@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -43,6 +43,15 @@ typecheck:
 test:
 	cd apps/api && uv run pytest
 	npm run test
+
+temporal-up:
+	docker compose --profile temporal up -d temporal
+
+temporal-down:
+	docker compose --profile temporal down
+
+temporal-test:
+	cd apps/api && uv run pytest -m temporal
 
 build:
 	npm run build

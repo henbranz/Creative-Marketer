@@ -184,3 +184,17 @@ Audit, and Outbox evidence. Resume reuses the same operation and approval; any c
 binding conflicts. `FAILED_PRE_EFFECT` can retry the same operation. `UNKNOWN_EXTERNAL_OUTCOME`
 cannot retry until deterministic reconciliation establishes whether an effect occurred. A confirmed
 success replays its stored result reference without another executor invocation.
+
+## Temporal orchestration boundary
+
+Temporal is used only for bounded durable coordination: approval waits, external-job polling,
+future execution, retry, cancellation, and crash recovery. Workflow code never imports database,
+provider, Gateway, authentication, or HTTP adapters. Safe Activity inputs contain platform IDs and
+opaque references; Activities re-resolve current trusted workload, tenant, Agent, Tool,
+Permission, Approval, and idempotency state.
+
+Approval events may wake a Workflow through an Inbox handler, but the signal carries no authority.
+The handler signals before Inbox commit so RPC failure rolls back the receipt and commit failure
+causes a safe duplicate. A bounded durable fallback recheck prevents permanent wait after an
+exceptional bridge failure. One-off publication scheduling uses a Workflow timer; recurring
+cadences may use Temporal Schedules after a use-case-specific overlap policy is selected.

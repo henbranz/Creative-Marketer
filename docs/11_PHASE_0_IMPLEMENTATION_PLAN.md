@@ -182,7 +182,10 @@ exists.
 
 ## Workstream 10.5 — Temporal Adoption Spike
 
-Keep ADR-004 proposed until a bounded spike demonstrates:
+Status: completed by `TASK-012`; ADR-004 accepts Temporal for bounded durable orchestration, with
+production activation gated on workload identity and authoritative durable request resolution.
+
+The spike demonstrated:
 
 - pause/resume for human approval
 - long-running media generation polling

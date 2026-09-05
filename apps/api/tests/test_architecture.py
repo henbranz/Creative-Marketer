@@ -210,3 +210,17 @@ def test_observability_has_no_provider_or_business_sdk_dependency() -> None:
     source = "\n".join(path.read_text().lower() for path in root.glob("*.py"))
     for forbidden in ("openai", "anthropic", "shopify", "temporalio", "stripe"):
         assert forbidden not in source
+
+
+def test_temporal_sdk_is_isolated_from_domain_and_application_contracts() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    protected: list[Path] = list(root.glob("**/domain.py"))
+    protected.extend(root.glob("**/application.py"))
+    protected.extend((root / "workflow_orchestration").glob("*.py"))
+    assert "temporalio" not in imported_roots(protected)
+
+    temporal_root = root / "infrastructure" / "temporal"
+    assert temporal_root.is_dir()
+    worker_source = (temporal_root / "worker.py").read_text().lower()
+    assert "fastapi" not in worker_source
+    assert "creative_marketer_api" not in worker_source

@@ -70,6 +70,12 @@ Application/domain boundaries own outbound ports. Infrastructure implements thos
 
 Workers import reusable application packages, never FastAPI route modules. Cross-context access uses public application interfaces or versioned contracts; one context must not write another context's tables directly.
 
+Temporal is the accepted engine for bounded durable orchestration only. Workflow code is
+deterministic and contains safe identifiers/references; all I/O occurs in Activities that call
+application services. PostgreSQL remains business/governance truth, Outbox/Inbox remains event
+delivery, and Tool Gateway remains the external-effect boundary. Workflow input never creates
+tenant, User, Agent, permission, approval, or idempotency authority.
+
 API contracts originate from backend OpenAPI and generate TypeScript clients/types. Event and tool contracts originate from versioned language-neutral canonical schemas. Parallel handwritten Python and TypeScript DTOs are not authoritative contracts.
 
 ## Required Agent Definition

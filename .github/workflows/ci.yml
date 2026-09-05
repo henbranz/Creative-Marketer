@@ -116,6 +116,20 @@ jobs:
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
 
+  temporal:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run pytest -m temporal --no-cov
+
   containers:
     runs-on: ubuntu-latest
     steps:

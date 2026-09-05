@@ -56,6 +56,32 @@ Future production alerting should watch unknown external outcomes, terminal Outb
 sustained backlog/age, elevated Tool failures, and database readiness. No dashboard or alert vendor
 is selected in Phase 0.
 
+## Optional Temporal development
+
+Temporal is not required for normal API or frontend development. To start the official lightweight
+CLI development server and UI under its optional Compose profile:
+
+```bash
+make temporal-up
+```
+
+The service listens on `localhost:7233`; its UI listens on <http://localhost:8233>. Stop it with
+`make temporal-down`. Run the adoption/replay suite with:
+
+```bash
+make temporal-test
+```
+
+The test suite uses the official SDK time-skipping server and may download its compatible test
+binary on first run. Set `TEMPORAL_TEST_SERVER_PATH` only to reuse an already downloaded official
+binary. No separately running Temporal service is required for tests.
+
+The independent worker factory is
+`creative_marketer.infrastructure.temporal.worker:create_worker`; it accepts composed application
+Activities and never imports FastAPI routes. The module CLI deliberately fails closed until a
+deployment-specific authenticated workload identity and authoritative request resolver are
+implemented. Do not work around this by reconstructing a User from workflow input.
+
 ## Quality commands
 
 ```bash
