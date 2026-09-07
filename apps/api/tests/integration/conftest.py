@@ -64,11 +64,9 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
         await connection.execute(
-            text("TRUNCATE research.evidence_snapshots, research.source_fetches, research.sources")
-        )
-        await connection.execute(
             text(
-                "TRUNCATE catalog.assets, catalog.product_knowledge_snapshots, "
+                "TRUNCATE research.evidence_snapshots, research.source_fetches, "
+                "research.sources, catalog.assets, catalog.product_knowledge_snapshots, "
                 "catalog.product_briefs, "
                 "catalog.product_profiles, catalog.products, catalog.brand_profiles, "
                 "catalog.brands"
