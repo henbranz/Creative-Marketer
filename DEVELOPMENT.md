@@ -37,6 +37,13 @@ make web-dev
 
 The API reads the repository-root `.env` file. Configuration is validated at startup; invalid URLs, environments, origins, or ports fail closed with a clear validation error.
 
+The Research tab accepts public HTTP/HTTPS pages only. Localhost, private/link-local/reserved
+addresses, non-standard ports, URL credentials, and secret-like query keys are intentionally
+rejected, so a local webpage cannot be used as an ingestion fixture. Tests inject a pinned transport
+behind the same production policy and prove that private targets are never connected. Research raw
+bytes share the private object-store bucket under a separate tenant-prefixed namespace and never
+receive browser download grants.
+
 ## Observability
 
 Operational telemetry is disabled by default and does not affect application correctness. Set

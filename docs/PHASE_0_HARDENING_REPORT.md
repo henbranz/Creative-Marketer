@@ -164,8 +164,9 @@ release policy.
 
 The following are intentionally not represented by fake implementations:
 
-- Research prompt-injection ingestion isolation: `NOT_APPLICABLE_YET`; mandatory at Phase 2
-  Research ingestion (`untrusted web → sanitizer/extractor → structured contract → Agent`).
+- Research ingestion isolation is now `TESTED` through the untrusted-web, SSRF/DNS/redirect,
+  private-raw-storage, deterministic-extraction, and immutable-evidence boundary. Agent-side
+  prompt/context isolation remains mandatory when AgentRuntime is introduced.
 - Webhook signature/timestamp/replay verification: `NOT_APPLICABLE_YET`; mandatory before the first
   provider webhook route.
 - Object-storage tenant isolation and rights metadata: `NOT_APPLICABLE_YET`; mandatory before an

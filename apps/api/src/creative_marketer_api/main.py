@@ -16,11 +16,13 @@ from creative_marketer.infrastructure.authentication import (
 )
 from creative_marketer.infrastructure.database import (
     SqlAlchemyCatalogUnitOfWorkFactory,
+    SqlAlchemyResearchUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
+from creative_marketer.infrastructure.research import SafeWebFetcher
 from creative_marketer.observability.configuration import (
     ObservabilityConfiguration,
     build_runtime,
@@ -28,9 +30,11 @@ from creative_marketer.observability.configuration import (
 from creative_marketer.observability.logging import configure_structured_logging, correlation_scope
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
+from creative_marketer.research.application import ResearchService
 from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
+from creative_marketer_api.research_routes import create_research_router
 
 
 def create_app(
@@ -38,6 +42,7 @@ def create_app(
     identity_audit: IdentityAuditService | None = None,
     observability: ObservabilityRuntime | None = None,
     readiness_probe: Callable[[], Awaitable[None]] | None = None,
+    research_service: ResearchService | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     runtime = observability or build_runtime(
@@ -136,6 +141,7 @@ def create_app(
     )
     identity_uow = SqlAlchemyUnitOfWorkFactory(session_factory)
     catalog_uow = SqlAlchemyCatalogUnitOfWorkFactory(session_factory)
+    research_uow = SqlAlchemyResearchUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -164,6 +170,16 @@ def create_app(
             identity_uow,
             CatalogService(catalog_uow),
             AssetService(catalog_uow, object_store),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_research_router(
+            authenticator,
+            identity_uow,
+            research_service
+            or ResearchService(research_uow, SafeWebFetcher(), object_store, telemetry=telemetry),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

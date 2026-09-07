@@ -22,6 +22,9 @@ from creative_marketer.infrastructure.database.execution_control_uow import (
 from creative_marketer.infrastructure.database.permission_governance_uow import (
     SqlAlchemyPermissionUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.research_uow import (
+    SqlAlchemyResearchUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.tool_execution_uow import (
     SqlAlchemyGatewayUnitOfWorkFactory,
 )
@@ -60,6 +63,9 @@ def publisher_database_url() -> str:
 async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(admin_database_url)
     async with engine.begin() as connection:
+        await connection.execute(
+            text("TRUNCATE research.evidence_snapshots, research.source_fetches, research.sources")
+        )
         await connection.execute(
             text(
                 "TRUNCATE catalog.assets, catalog.product_knowledge_snapshots, "
@@ -118,6 +124,11 @@ def identity_stack(runtime_database_url: str) -> IdentityStack:
 @pytest.fixture
 def catalog_factory(runtime_database_url: str) -> SqlAlchemyCatalogUnitOfWorkFactory:
     return SqlAlchemyCatalogUnitOfWorkFactory(create_session_factory(runtime_database_url))
+
+
+@pytest.fixture
+def research_factory(runtime_database_url: str) -> SqlAlchemyResearchUnitOfWorkFactory:
+    return SqlAlchemyResearchUnitOfWorkFactory(create_session_factory(runtime_database_url))
 
 
 @pytest.fixture

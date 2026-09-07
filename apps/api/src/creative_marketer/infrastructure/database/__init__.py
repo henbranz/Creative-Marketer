@@ -3,6 +3,9 @@ from creative_marketer.infrastructure.database.agent_governance_uow import (
 )
 from creative_marketer.infrastructure.database.catalog_uow import SqlAlchemyCatalogUnitOfWorkFactory
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.research_uow import (
+    SqlAlchemyResearchUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.tool_execution_uow import (
     SqlAlchemyGatewayUnitOfWorkFactory,
 )
@@ -12,6 +15,7 @@ __all__ = [
     "SqlAlchemyAgentRegistryUnitOfWorkFactory",
     "SqlAlchemyCatalogUnitOfWorkFactory",
     "SqlAlchemyGatewayUnitOfWorkFactory",
+    "SqlAlchemyResearchUnitOfWorkFactory",
     "SqlAlchemyUnitOfWorkFactory",
     "create_session_factory",
 ]

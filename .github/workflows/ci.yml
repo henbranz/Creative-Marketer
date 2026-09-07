@@ -57,6 +57,14 @@ jobs:
       - run: uv run alembic upgrade 20260905_0001
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.users (id, external_identity_issuer, external_identity_subject, email, normalized_email, status) VALUES ('00000000-0000-0000-0000-000000000003', 'https://legacy.example', 'LegacySubject', 'legacy@example.test', 'legacy@example.test', 'active')"
       - run: uv run alembic upgrade head
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_research_lossy_downgrade.sql
+      - name: Verify lossy Research evidence downgrade fails closed
+        run: |
+          if uv run alembic downgrade 20260906_0013; then
+            echo "lossy Research evidence downgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "DELETE FROM research.sources WHERE id='00000000-0000-0000-0000-000000000014'; DELETE FROM catalog.products WHERE id='00000000-0000-0000-0000-000000000014'; DELETE FROM catalog.brands WHERE id='00000000-0000-0000-0000-000000000014'; DELETE FROM identity.users WHERE id='00000000-0000-0000-0000-000000000014'; DELETE FROM identity.tenants WHERE id='00000000-0000-0000-0000-000000000014'"
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.tenants (id,name,slug,status) VALUES ('00000000-0000-0000-0000-000000000013','Asset downgrade','asset-downgrade','active'); INSERT INTO identity.users (id,email,normalized_email,status) VALUES ('00000000-0000-0000-0000-000000000013','asset-downgrade@example.test','asset-downgrade@example.test','active'); INSERT INTO catalog.brands (id,tenant_id,name,slug,status,created_by) VALUES ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','Asset downgrade','asset-downgrade','active','00000000-0000-0000-0000-000000000013'); INSERT INTO catalog.assets (id,tenant_id,brand_id,kind,role,origin,status,original_filename,declared_mime_type,rights_status,allowed_uses,upload_object_key,created_by) VALUES ('00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','00000000-0000-0000-0000-000000000013','image','other','user_upload','pending_upload','proof.png','image/png','unknown','[\"internal_analysis\"]','tenants/00000000-0000-0000-0000-000000000013/assets/00000000-0000-0000-0000-000000000013/uploads/proof','00000000-0000-0000-0000-000000000013')"
       - name: Verify lossy Asset Library downgrade fails closed
         run: |

@@ -169,6 +169,13 @@ Do not give arbitrary fetched web pages direct authority over tool-enabled agent
 
 Sanitization and classification reduce risk but are not complete security boundaries. Research ingestion/crawling and credentialed connector execution run as separate trust zones with different egress, credentials, and tool surfaces. Structured evidence retains provenance and untrusted-content labeling.
 
+Phase-1 Research ingestion now enforces public-only resolution for every robots/page/redirect hop,
+pins the socket to an approved IP with original TLS SNI, permits only GET without caller headers,
+and applies conservative robots, redirect, timeout, MIME, binary and decompressed-size limits. Raw
+bytes remain private; only bounded non-executable evidence is exposed. No AgentRuntime exists, so
+the tested ingestion boundary does not claim that sanitization alone defeats prompt injection. See
+`docs/14_RESEARCH_EVIDENCE.md` and ADR-025.
+
 ## PII
 
 Separate customer PII from general commerce state.

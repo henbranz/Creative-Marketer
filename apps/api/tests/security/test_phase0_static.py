@@ -219,7 +219,11 @@ def test_public_api_surface_contains_only_identity_and_catalog_mutation(
         for method, path in routes
         if method not in {"GET", "HEAD"}
         and (method, path) not in allowed_non_read
-        and not (path.startswith("/v1/brands") or path.startswith("/v1/products"))
+        and not (
+            path.startswith("/v1/brands")
+            or path.startswith("/v1/products")
+            or path.startswith("/v1/research-sources")
+        )
     }
     assert not unexpected
     forbidden_fragments = (
@@ -231,8 +235,11 @@ def test_public_api_surface_contains_only_identity_and_catalog_mutation(
         "/events",
         "/outbox",
         "/execute",
+        "/proxy",
+        "/raw-html",
     )
     assert not [path for _, path in routes if any(value in path for value in forbidden_fragments)]
+    assert not [path for _, path in routes if path.endswith("/fetch")]
 
 
 def test_repository_has_no_obvious_committed_credentials_or_unsafe_debug_calls() -> None:
@@ -359,6 +366,15 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "governance.tool.execution_succeeded.v1": (
             "sha256:8717b393ccdc75e59e4ab557d8ea6fdc55ece77d31911f4a935c6bf89bc41bd0"
         ),
+        "research.evidence.captured.v1": (
+            "sha256:cf112f0c6152b8b3ddd3c8519fe3b2d8a4c5bf88a5b33e4d37f23e52feb1bef5"
+        ),
+        "research.source.archived.v1": (
+            "sha256:c1f121b6dd2f58ffb85241d4554a1e57dada05bdc2645c74722fd1a12bdac644"
+        ),
+        "research.source.created.v1": (
+            "sha256:3125c8294d360b0c02f5689a656ac7929ec4c7a82ba3ab76bcabc76650bd57be"
+        ),
     }
     schema_root = PRODUCT_SOURCE / "events" / "schemas"
     actual = {
@@ -374,6 +390,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260906_0013"]
+    assert script.get_heads() == ["20260906_0014"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

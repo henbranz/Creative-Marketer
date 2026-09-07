@@ -58,6 +58,12 @@ class FakeClient:
     def copy_object(self, **_kwargs: Any) -> None:
         self.calls.append("copy")
 
+    def put_object(self, **kwargs: Any) -> None:
+        assert kwargs["Body"] == b"research"
+        assert kwargs["ContentType"] == "text/html"
+        assert kwargs["Metadata"]["visibility"] == "private"
+        self.calls.append("private-write")
+
     def create_bucket(self, **_kwargs: Any) -> None:
         raise AlreadyExists
 
@@ -102,8 +108,9 @@ async def test_s3_adapter_grants_streams_promotes_and_configures_private_bucket(
     assert [chunk async for chunk in store.stream(key="source")] == [b"one", b"two"]
     assert client.body.closed
     await store.promote(source_key="source", destination_key="destination-new")
+    await store.put_private(key="research/raw", content_type="text/html", body=b"research")
     await store.ensure_private_bucket(["http://localhost:3000"])
-    assert {"copy", "policy-removed", "private", "cors"} <= set(client.calls)
+    assert {"copy", "private-write", "policy-removed", "private", "cors"} <= set(client.calls)
 
 
 @pytest.mark.asyncio
@@ -145,6 +152,8 @@ async def test_s3_adapter_translates_provider_failures(monkeypatch: pytest.Monke
         [chunk async for chunk in store.stream(key="k")]
     with pytest.raises(ObjectStoreUnavailable):
         await store.promote(source_key="source", destination_key="destination")
+    with pytest.raises(ObjectStoreUnavailable):
+        await store.put_private(key="research/raw", content_type="text/html", body=b"research")
     with pytest.raises(ObjectStoreUnavailable):
         await store.ensure_private_bucket([])
 

@@ -81,6 +81,9 @@ class UnavailableObjectStore:
     async def promote(self, *, source_key: str, destination_key: str) -> None:
         raise ObjectStoreUnavailable("object storage is not configured")
 
+    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None:
+        raise ObjectStoreUnavailable("object storage is not configured")
+
 
 @dataclass(frozen=True, slots=True)
 class CreatedAsset:

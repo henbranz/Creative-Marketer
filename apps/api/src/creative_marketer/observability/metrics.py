@@ -10,6 +10,8 @@ ALLOWED_METRIC_DIMENSIONS = frozenset(
         "tool.key",
         "http.request.method",
         "url.route",
+        "source.category",
+        "content.type.class",
     }
 )
 
@@ -32,6 +34,10 @@ OPERATIONAL_METRICS = frozenset(
         "outbox.oldest_pending_age",
         "outbox.terminal_failures",
         "permission.decisions",
+        "research.extraction.results",
+        "research.fetch.attempts",
+        "research.fetch.duration",
+        "research.fetch.results",
         "tool_gateway.duration",
         "tool_gateway.invocations",
         "tool_gateway.replays",

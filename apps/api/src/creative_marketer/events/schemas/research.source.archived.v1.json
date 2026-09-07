@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","x-event-type":"research.source.archived.v1","type":"object","additionalProperties":false,"required":["source_id","product_id"],"properties":{"source_id":{"type":"string","format":"uuid"},"product_id":{"type":"string","format":"uuid"}}}

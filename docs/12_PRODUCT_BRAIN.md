@@ -33,8 +33,10 @@ creator, and timestamps. Equivalent semantic state therefore yields the same dig
 semantic state yields another digest. Database triggers reject snapshot update and deletion.
 
 Future Agent Runs receive a snapshot ID/digest rather than reading arbitrary ORM state. Research
-and AI-inferred candidate knowledge must be stored separately and may not silently overwrite
-user-provided facts.
+evidence is now stored in the separate Research bounded context described in
+`docs/14_RESEARCH_EVIDENCE.md`; it may not silently overwrite user-provided facts. Its independent
+`ResearchContextManifest` references immutable evidence and does not mutate or become part of a
+ProductKnowledgeSnapshot.
 
 ## Knowledge and provenance
 
@@ -121,7 +123,7 @@ snapshots use V2 and emit `catalog.product.snapshot_created.v2`; the digest cove
 
 ## Deferred
 
-- Product research and evidence
+- Agent-side selective research retrieval and validation/promotion
 - AI enrichment and agent execution
 - production identity provider and tenant discovery UI
 - full concurrent editing UX beyond Brief revision conflict

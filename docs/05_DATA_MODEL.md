@@ -313,6 +313,15 @@ JSONB, while money uses exact numeric types. See `docs/12_PRODUCT_BRAIN.md`.
 
 ## Research
 
+Implemented Phase-1 ownership is `research.sources`, `research.source_fetches`, and
+`research.evidence_snapshots`. Each row carries `tenant_id`, uses forced RLS, and relates across
+contexts with composite tenant foreign keys. Sources are mutable only through archive; Fetches are
+append-oriented with a protected terminal lifecycle; EvidenceSnapshots are insert/select-only for
+runtime. Evidence stores bounded JSONB blocks/links/metadata plus raw and semantic digests and
+version fields. Raw bytes live in private object storage. `ResearchContextManifest` is deterministic
+and built on demand, not persisted. The older conceptual `ResearchSnapshot`/`ResearchEvidence`
+shapes below describe possible future analytic aggregation, not the implemented acquisition model.
+
 ### ResearchSnapshot
 - id
 - tenant_id

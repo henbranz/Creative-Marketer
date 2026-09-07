@@ -10,6 +10,10 @@ import {
   catalogApi,
   listText,
   type Product,
+  type ResearchEvidence,
+  type ResearchFetch,
+  type ResearchSource,
+  type ResearchSourceCreate,
   type Session,
   slugify,
   type Workspace,
@@ -322,6 +326,377 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
             Add approved product media to create a reusable, traceable shared
             asset library.
           </p>
+        </section>
+      )}
+    </div>
+  );
+}
+
+type SourceWithFetch = {
+  source: ResearchSource;
+  latest: ResearchFetch | null;
+  history: ResearchFetch[];
+};
+type SourceCategory = ResearchSourceCreate["category"];
+
+function safeSourceLabel(value: string) {
+  const parsed = new URL(value);
+  return `${parsed.origin}${parsed.pathname}${parsed.search ? "?…" : ""}`;
+}
+
+function ResearchPanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [sources, setSources] = useState<SourceWithFetch[]>([]);
+  const [url, setUrl] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [category, setCategory] = useState<SourceCategory>("other");
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const [evidence, setEvidence] = useState<ResearchEvidence | null>(null);
+
+  const load = useCallback(async () => {
+    const values = await catalogApi.listResearchSources(
+      session,
+      workspace.product.id,
+    );
+    const enriched = await Promise.all(
+      values.map(async (source) => {
+        const history = await catalogApi.listResearchFetches(
+          session,
+          source.id,
+        );
+        return { source, latest: history[0] ?? null, history };
+      }),
+    );
+    setSources(enriched);
+  }, [session, workspace.product.id]);
+
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void load().catch(() =>
+          setError("Research sources could not be loaded."),
+        ),
+    );
+  }, [load]);
+
+  const validateUrl = () => {
+    try {
+      const parsed = new URL(url);
+      return ["http:", "https:"].includes(parsed.protocol) && !parsed.username;
+    } catch {
+      return false;
+    }
+  };
+
+  const add = async () => {
+    if (!validateUrl()) {
+      setError("Enter a valid HTTP or HTTPS URL without credentials.");
+      return;
+    }
+    setBusy("new");
+    setError("");
+    setNotice("");
+    try {
+      await catalogApi.createResearchSource(session, workspace.product.id, {
+        url,
+        display_name: displayName,
+        category,
+        refresh: true,
+      });
+      setUrl("");
+      setDisplayName("");
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Source ingestion failed.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const refresh = async (item: SourceWithFetch) => {
+    setBusy(item.source.id);
+    setError("");
+    setNotice("");
+    try {
+      const value = await catalogApi.refreshResearchSource(
+        session,
+        item.source.id,
+      );
+      if (value.status === "succeeded") {
+        setNotice(
+          value.evidence_snapshot_id === item.latest?.evidence_snapshot_id
+            ? "Content unchanged; existing evidence retained."
+            : "New evidence captured.",
+        );
+      }
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Refresh failed.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const viewEvidence = async (evidenceId: string) => {
+    setError("");
+    try {
+      setEvidence(await catalogApi.getResearchEvidence(session, evidenceId));
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Evidence could not be loaded.",
+      );
+    }
+  };
+
+  return (
+    <div className="research-workspace">
+      <section className="research-intake">
+        <div>
+          <p className="eyebrow">Governed web evidence</p>
+          <h2>Research sources</h2>
+          <p>
+            Pages are fetched server-side under strict network policy and stored
+            as immutable, untrusted evidence.
+          </p>
+        </div>
+        {workspace.product.can_edit ? (
+          <div className="research-form">
+            <label>
+              Source URL
+              <input
+                aria-label="Research source URL"
+                type="url"
+                value={url}
+                placeholder="https://example.com/product"
+                onChange={(event) => setUrl(event.target.value)}
+              />
+            </label>
+            <label>
+              Display name
+              <input
+                aria-label="Research source name"
+                value={displayName}
+                maxLength={200}
+                onChange={(event) => setDisplayName(event.target.value)}
+              />
+            </label>
+            <label>
+              Category
+              <select
+                aria-label="Research category"
+                value={category}
+                onChange={(event) =>
+                  setCategory(event.target.value as SourceCategory)
+                }
+              >
+                {[
+                  "competitor",
+                  "product_page",
+                  "landing_page",
+                  "pricing",
+                  "review",
+                  "market_reference",
+                  "creative_reference",
+                  "other",
+                ].map((value) => (
+                  <option key={value} value={value}>
+                    {value.replaceAll("_", " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primary"
+              disabled={!url || !displayName || !!busy}
+              onClick={() => void add()}
+            >
+              {busy === "new" ? "Fetching…" : "Add and fetch source"}
+            </button>
+          </div>
+        ) : (
+          <p className="readonly-note">
+            You have read-only access to research evidence.
+          </p>
+        )}
+      </section>
+      {error && (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      )}
+      {notice && (
+        <p className="success-banner" role="status">
+          {notice}
+        </p>
+      )}
+      {sources.length ? (
+        <div className="research-grid">
+          {sources.map((item) => (
+            <article className="research-card" key={item.source.id}>
+              <div className="research-card-heading">
+                <div>
+                  <span className="research-category">
+                    {item.source.category.replaceAll("_", " ")}
+                  </span>
+                  <h3>{item.source.display_name}</h3>
+                  <a
+                    href={item.source.canonical_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={item.source.canonical_url}
+                  >
+                    {safeSourceLabel(item.source.canonical_url)}
+                  </a>
+                </div>
+                <span
+                  className={`fetch-state ${item.latest?.status ?? "pending"}`}
+                >
+                  {busy === item.source.id
+                    ? "fetching"
+                    : (item.latest?.status ?? "not fetched")}
+                </span>
+              </div>
+              {item.latest?.failure_code && (
+                <p className="research-failure">
+                  Fetch rejected:{" "}
+                  {item.latest.failure_code.replaceAll("_", " ")}
+                </p>
+              )}
+              <small>
+                {item.latest?.completed_at
+                  ? `Last checked ${new Date(item.latest.completed_at).toLocaleString()}`
+                  : "No completed fetch"}
+              </small>
+              <div className="research-actions">
+                {item.latest?.evidence_snapshot_id && (
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void viewEvidence(item.latest!.evidence_snapshot_id!)
+                    }
+                  >
+                    View evidence
+                  </button>
+                )}
+                {item.source.can_edit && item.source.status === "active" && (
+                  <>
+                    <button
+                      className="secondary"
+                      disabled={!!busy}
+                      onClick={() => void refresh(item)}
+                    >
+                      Refresh
+                    </button>
+                    <button
+                      className="text-danger"
+                      disabled={!!busy}
+                      onClick={async () => {
+                        await catalogApi.archiveResearchSource(
+                          session,
+                          item.source.id,
+                        );
+                        await load();
+                      }}
+                    >
+                      Archive
+                    </button>
+                  </>
+                )}
+              </div>
+              {!!item.history.length && (
+                <details className="fetch-history">
+                  <summary>Fetch history ({item.history.length})</summary>
+                  <ol>
+                    {item.history.map((fetch, index) => (
+                      <li key={fetch.id}>
+                        <span>{fetch.status.replaceAll("_", " ")}</span>
+                        <small>
+                          {fetch.status !== "succeeded"
+                            ? (fetch.failure_code?.replaceAll("_", " ") ??
+                              "no evidence")
+                            : index === item.history.length - 1
+                              ? "first capture"
+                              : fetch.evidence_snapshot_id &&
+                                  fetch.evidence_snapshot_id ===
+                                    item.history[index + 1]
+                                      ?.evidence_snapshot_id
+                                ? "content unchanged"
+                                : "content changed"}
+                        </small>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <section className="empty-panel">
+          <span className="empty-glyph">R</span>
+          <h2>No research sources yet</h2>
+          <p>Add a public page to establish traceable product evidence.</p>
+        </section>
+      )}
+      {evidence && (
+        <section className="evidence-viewer" aria-label="Evidence viewer">
+          <div>
+            <p className="eyebrow">Untrusted external evidence</p>
+            <h3>{evidence.title || "Captured evidence"}</h3>
+            <p>
+              This content was retrieved from an external source and is not
+              treated as verified Product truth.
+            </p>
+            <div className="evidence-metadata">
+              <a
+                href={evidence.final_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={evidence.final_url}
+              >
+                {safeSourceLabel(evidence.final_url)}
+              </a>
+              <small>
+                Retrieved {new Date(evidence.captured_at).toLocaleString()}
+              </small>
+              <small title={evidence.semantic_digest}>
+                Digest {evidence.semantic_digest.slice(0, 19)}…
+              </small>
+              {Object.entries(evidence.structured_metadata).map(
+                ([key, value]) => (
+                  <small key={key}>
+                    {key.replaceAll("_", " ")}: {value}
+                  </small>
+                ),
+              )}
+            </div>
+          </div>
+          {evidence.instruction_like_content && (
+            <p className="warning-banner">
+              Instruction-like text detected. It remains data and is never
+              treated as an instruction.
+            </p>
+          )}
+          <div className="evidence-blocks">
+            {evidence.blocks.map((block) => (
+              <div
+                className={`evidence-block ${block.kind}`}
+                key={block.ordinal}
+              >
+                <small>{block.kind.replaceAll("_", " ")}</small>
+                <p>{block.text}</p>
+              </div>
+            ))}
+          </div>
+          <button className="secondary" onClick={() => setEvidence(null)}>
+            Close evidence
+          </button>
         </section>
       )}
     </div>
@@ -1004,6 +1379,8 @@ export function ProductWorkspaceApp() {
                     <BriefEditor workspace={workspace} onSaved={setWorkspace} />
                   ) : tab === "Assets" ? (
                     <AssetsPanel workspace={workspace} />
+                  ) : tab === "Research" ? (
+                    <ResearchPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

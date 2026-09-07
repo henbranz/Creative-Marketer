@@ -125,6 +125,20 @@ class S3ObjectStore:
         except Exception as error:
             raise ObjectStoreUnavailable("object promotion failed") from error
 
+    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None:
+        """Server-side write only; research raw captures never receive browser grants."""
+        try:
+            await asyncio.to_thread(
+                self._client.put_object,
+                Bucket=self._bucket,
+                Key=key,
+                Body=body,
+                ContentType=content_type,
+                Metadata={"visibility": "private", "purpose": "research-evidence"},
+            )
+        except Exception as error:
+            raise ObjectStoreUnavailable("private object write failed") from error
+
     async def ensure_private_bucket(self, cors_origins: list[str]) -> None:
         try:
             create: dict[str, object] = {"Bucket": self._bucket}

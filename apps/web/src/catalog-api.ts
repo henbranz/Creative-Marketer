@@ -13,6 +13,11 @@ export type Snapshot = components["schemas"]["SnapshotResponse"];
 export type Asset = components["schemas"]["AssetResponse"];
 export type AssetCreate = components["schemas"]["AssetCreate"];
 export type UploadGrant = components["schemas"]["UploadGrantResponse"];
+export type ResearchSource = components["schemas"]["SourceResponse"];
+export type ResearchSourceCreate = components["schemas"]["SourceCreate"];
+export type ResearchFetch = components["schemas"]["FetchResponse"];
+export type ResearchEvidence = components["schemas"]["EvidenceResponse"];
+export type ResearchManifest = components["schemas"]["ManifestResponse"];
 
 export interface Session {
   readonly tenantId: string;
@@ -99,6 +104,45 @@ export const catalogApi = {
       session,
       `/v1/assets/${assetId}/download`,
       { method: "POST" },
+    ),
+  listResearchSources: (session: Session, productId: string) =>
+    request<ResearchSource[]>(
+      session,
+      `/v1/products/${productId}/research-sources`,
+    ),
+  createResearchSource: (
+    session: Session,
+    productId: string,
+    value: ResearchSourceCreate,
+  ) =>
+    request<{ source: ResearchSource; fetch: ResearchFetch | null }>(
+      session,
+      `/v1/products/${productId}/research-sources`,
+      { method: "POST", body: JSON.stringify(value) },
+    ),
+  listResearchFetches: (session: Session, sourceId: string) =>
+    request<ResearchFetch[]>(
+      session,
+      `/v1/research-sources/${sourceId}/fetches`,
+    ),
+  refreshResearchSource: (session: Session, sourceId: string) =>
+    request<ResearchFetch>(
+      session,
+      `/v1/research-sources/${sourceId}/refresh`,
+      { method: "POST" },
+    ),
+  archiveResearchSource: (session: Session, sourceId: string) =>
+    request<ResearchSource>(
+      session,
+      `/v1/research-sources/${sourceId}/archive`,
+      { method: "POST" },
+    ),
+  getResearchEvidence: (session: Session, evidenceId: string) =>
+    request<ResearchEvidence>(session, `/v1/research-evidence/${evidenceId}`),
+  getResearchManifest: (session: Session, productId: string) =>
+    request<ResearchManifest>(
+      session,
+      `/v1/products/${productId}/research-context-manifest`,
     ),
 };
 

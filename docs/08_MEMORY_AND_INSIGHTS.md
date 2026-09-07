@@ -16,6 +16,12 @@ Agent Working Memory
 
 Agents receive the minimum relevant layer(s).
 
+Research evidence is durable provenance, not automatically trusted knowledge or Agent memory.
+`ResearchContextManifest` selects at most one latest evidence reference per active Source and never
+concatenates all page text. Future Researcher runs must further select only task-relevant blocks;
+promotion into Product/Brand knowledge requires an explicit validation workflow. Embeddings and
+vector/full-text indexing remain deferred until that retrieval contract exists.
+
 ## Working Memory
 
 Short-lived context for a run/workflow. It is not automatically promoted to durable knowledge.

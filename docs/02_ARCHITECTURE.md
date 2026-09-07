@@ -287,3 +287,11 @@ Catalog owns Brand, Product, their typed profiles and Brief, and immutable Produ
 Snapshots. Delivery calls Catalog application services; PostgreSQL adapters implement its inward
 ports. Ordinary user CRUD does not pass through Tool Gateway. Catalog state, compact Audit
 evidence, and reference-oriented Outbox facts commit atomically. See `docs/12_PRODUCT_BRAIN.md`.
+
+## Implemented Research evidence boundary (Phase 1)
+
+Research owns Product-scoped Sources, append-oriented Fetch attempts, immutable EvidenceSnapshots,
+and on-demand reference-only context manifests. Its inward fetch/storage/repository ports keep
+networking, object storage, and PostgreSQL in infrastructure. Internet acquisition is a distinct
+untrusted egress zone with IP-pinned public-only connections; it has no credentials, Tool Gateway,
+AgentRuntime, or Catalog write authority. See `docs/14_RESEARCH_EVIDENCE.md`.
