@@ -220,6 +220,13 @@ def test_public_addresses_are_deterministically_accepted() -> None:
     assert validate_public_addresses(("2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"))
 
 
+@pytest.mark.parametrize("addresses", [(), ("not-an-ip",)])
+def test_missing_or_invalid_dns_answers_fail_closed(addresses: tuple[str, ...]) -> None:
+    with pytest.raises(FetchPolicyError) as caught:
+        validate_public_addresses(addresses)
+    assert caught.value.code is FetchFailureCode.DNS_FAILED
+
+
 @pytest.mark.asyncio
 async def test_valid_https_and_server_owned_headers() -> None:
     url = "https://example.com/page"
@@ -300,6 +307,17 @@ async def test_redirect_limit_is_enforced() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("location", [None, "file:///etc/passwd"])
+async def test_missing_or_invalid_redirect_location_is_rejected(location: str | None) -> None:
+    url = "https://example.com/page"
+    headers = {"location": location} if location is not None else {}
+    fetcher, _ = ok_fetcher(url, HttpResponse(302, headers, b""))
+    with pytest.raises(FetchPolicyError) as caught:
+        await fetcher.fetch(url)
+    assert caught.value.code is FetchFailureCode.REDIRECT_INVALID
+
+
+@pytest.mark.asyncio
 async def test_robots_denial_and_unavailability_are_conservative() -> None:
     url = "https://example.com/private"
     denied = Transport(
@@ -315,6 +333,17 @@ async def test_robots_denial_and_unavailability_are_conservative() -> None:
     unavailable = Transport({"https://example.com/robots.txt": HttpResponse(500, {}, b"")})
     with pytest.raises(FetchPolicyError) as caught:
         await SafeWebFetcher(Resolver([("93.184.216.34",)]), unavailable).fetch(url)
+    assert caught.value.code is FetchFailureCode.ROBOTS_UNAVAILABLE
+
+    failed_request = Transport(
+        {
+            "https://example.com/robots.txt": FetchPolicyError(
+                FetchFailureCode.HTTP_ERROR, rejected=False
+            )
+        }
+    )
+    with pytest.raises(FetchPolicyError) as caught:
+        await SafeWebFetcher(Resolver([("93.184.216.34",)]), failed_request).fetch(url)
     assert caught.value.code is FetchFailureCode.ROBOTS_UNAVAILABLE
 
 
@@ -508,6 +537,36 @@ async def test_pinned_transport_rejects_bad_headers_and_chunks() -> None:
     reader.feed_eof()
     with pytest.raises(FetchPolicyError):
         await AsyncioPinnedTransport()._read_chunked(reader)
+
+
+@pytest.mark.asyncio
+async def test_pinned_transport_duplicate_headers_gzip_flush_and_chunk_bounds() -> None:
+    status, headers = AsyncioPinnedTransport._parse_headers(
+        b"HTTP/1.1 200 OK\r\nX-Test: one\r\nX-Test: two\r\n\r\n"
+    )
+    assert status == 200 and headers["x-test"] == "one,two"
+
+    compressed = gzip.compress(b"small")
+    reader = asyncio.StreamReader()
+    reader.feed_data(compressed)
+    reader.feed_eof()
+    assert (
+        await AsyncioPinnedTransport()._read_body(reader, {"content-encoding": "gzip"}) == b"small"
+    )
+
+    oversized_chunk = asyncio.StreamReader()
+    oversized_chunk.feed_data(f"{10 * 1024 * 1024 + 1:x}\r\n".encode())
+    oversized_chunk.feed_eof()
+    with pytest.raises(FetchPolicyError) as caught:
+        await AsyncioPinnedTransport()._read_chunked(oversized_chunk)
+    assert caught.value.code is FetchFailureCode.RESPONSE_TOO_LARGE
+
+    invalid_terminator = asyncio.StreamReader()
+    invalid_terminator.feed_data(b"1\r\nxNO")
+    invalid_terminator.feed_eof()
+    with pytest.raises(FetchPolicyError) as caught:
+        await AsyncioPinnedTransport()._read_chunked(invalid_terminator)
+    assert caught.value.code is FetchFailureCode.HTTP_ERROR
 
 
 @pytest.mark.asyncio
