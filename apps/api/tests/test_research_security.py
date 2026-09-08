@@ -1,5 +1,9 @@
 import asyncio
 import gzip
+from dataclasses import replace
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -12,9 +16,14 @@ from creative_marketer.infrastructure.research.safe_web import (
 )
 from creative_marketer.research.application import FetchPolicyError
 from creative_marketer.research.domain import (
+    EvidenceBlock,
     EvidenceBlockKind,
+    EvidenceSnapshot,
     FetchFailureCode,
+    ResearchCategory,
+    ResearchSource,
     ResearchValidationError,
+    SourceFetch,
     canonicalize_url,
 )
 from creative_marketer.research.extraction import DeterministicEvidenceExtractor
@@ -79,6 +88,97 @@ def ok_fetcher(url: str, response: HttpResponse) -> tuple[SafeWebFetcher, Transp
 )
 def test_url_canonicalization(value: str, expected: str) -> None:
     assert canonicalize_url(value) == expected
+
+
+def test_research_domain_rejects_invalid_lifecycle_and_evidence_shapes() -> None:
+    with pytest.raises(ResearchValidationError):
+        canonicalize_url("https://example.com:bad/")
+    with pytest.raises(ResearchValidationError):
+        canonicalize_url("https://\ud800/")
+    assert (
+        canonicalize_url("https://[2606:2800:220:1:248:1893:25c8:1946]:80/")
+        == "https://[2606:2800:220:1:248:1893:25c8:1946]:80/"
+    )
+
+    tenant_id, product_id, user_id = uuid4(), uuid4(), uuid4()
+    source_arguments: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "product_id": product_id,
+        "canonical_url": "https://example.com/",
+        "display_name": "Example",
+        "category": ResearchCategory.OTHER,
+        "created_by": user_id,
+    }
+    with pytest.raises(ResearchValidationError):
+        ResearchSource(**{**source_arguments, "canonical_url": "HTTPS://example.com/"})
+    with pytest.raises(ResearchValidationError):
+        ResearchSource(**{**source_arguments, "display_name": ""})
+    with pytest.raises(ResearchValidationError):
+        ResearchSource(
+            **source_arguments,
+            created_at=datetime.now(),
+            updated_at=datetime.now(UTC),
+        )
+    archived = ResearchSource(**source_arguments).archive()
+    assert archived.archive() is archived
+
+    fetch_id, source_id = uuid4(), uuid4()
+    fetch_arguments: dict[str, Any] = {
+        "id": fetch_id,
+        "tenant_id": tenant_id,
+        "source_id": source_id,
+        "requested_url": "https://example.com/",
+        "requested_by": user_id,
+        "raw_object_key": f"tenants/{tenant_id}/research/{source_id}/{fetch_id}/raw/source",
+    }
+    with pytest.raises(ResearchValidationError):
+        SourceFetch(**{**fetch_arguments, "raw_object_key": "other/raw"})
+    attempt = SourceFetch(**fetch_arguments)
+    with pytest.raises(ResearchValidationError):
+        attempt.succeed(
+            final_url="https://example.com/",
+            http_status=200,
+            content_type="text/html",
+            raw_digest="sha256:" + "0" * 64,
+            raw_byte_size=1,
+            evidence_snapshot_id=uuid4(),
+            now=datetime.now(UTC),
+        )
+    fetching = attempt.begin(datetime.now(UTC))
+    with pytest.raises(ResearchValidationError):
+        fetching.begin(datetime.now(UTC))
+    terminal = fetching.stop(
+        rejected=False, code=FetchFailureCode.HTTP_ERROR, now=datetime.now(UTC)
+    )
+    with pytest.raises(ResearchValidationError):
+        terminal.stop(rejected=False, code=FetchFailureCode.HTTP_ERROR, now=datetime.now(UTC))
+    with pytest.raises(ResearchValidationError):
+        EvidenceBlock(EvidenceBlockKind.PARAGRAPH, "", 0)
+
+    extracted = DeterministicEvidenceExtractor().extract(
+        b"<p>evidence</p>", "text/html", "https://example.com/"
+    )
+    evidence_arguments: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "product_id": product_id,
+        "source_id": source_id,
+        "source_fetch_id": fetch_id,
+        "final_url": "https://example.com/",
+        "title": extracted.title,
+        "blocks": extracted.blocks,
+        "outbound_links": extracted.outbound_links,
+        "structured_metadata": extracted.structured_metadata,
+        "raw_digest": "sha256:" + "0" * 64,
+        "semantic_digest": extracted.semantic_digest,
+        "captured_at": datetime.now(UTC),
+    }
+    snapshot = EvidenceSnapshot(**evidence_arguments)
+    with pytest.raises(ResearchValidationError):
+        replace(snapshot, blocks=())
+    with pytest.raises(ResearchValidationError):
+        replace(snapshot, outbound_links=("https://example.com/",) * 201)
+    with pytest.raises(ResearchValidationError):
+        replace(snapshot, semantic_digest="sha256:" + "1" * 64)
 
 
 @pytest.mark.parametrize(
@@ -487,6 +587,24 @@ def test_plain_text_and_semantic_digest_are_deterministic() -> None:
     second = extractor.extract(b"First paragraph\n\nSecond", "text/plain", "https://example.com/")
     assert first.semantic_digest == second.semantic_digest
     assert len(first.blocks) == 2
+
+
+def test_metadata_invalid_links_empty_and_oversized_extraction_are_bounded() -> None:
+    extractor = DeterministicEvidenceExtractor()
+    value = extractor.extract(
+        b"<meta name='description' content='Evidence'>"
+        b"<link rel='canonical' href='file:///etc/passwd'>"
+        b"<p>Visible</p><a href='javascript:alert(1)'>bad</a>",
+        "text/html",
+        "https://example.com/",
+    )
+    assert value.structured_metadata == {"description": "Evidence"}
+    assert not value.outbound_links
+    with pytest.raises(ResearchValidationError, match="extractable text"):
+        extractor.extract(b"<script>only active content</script>", "text/html", "https://x.test/")
+    oversized = ("<p>" + "x" * 8192 + "</p>") * 70
+    with pytest.raises(ResearchValidationError, match="500 KiB"):
+        extractor.extract(oversized.encode(), "text/html", "https://x.test/")
 
 
 @pytest.mark.asyncio

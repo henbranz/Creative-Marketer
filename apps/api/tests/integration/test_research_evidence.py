@@ -2,6 +2,7 @@ import os
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -291,16 +292,62 @@ async def test_authorized_research_api_has_no_raw_or_proxy_surface(
         assert "raw_object_key" not in repr(payload)
         source_id = payload["source"]["id"]
         evidence_id = payload["fetch"]["evidence_snapshot_id"]
+        duplicate = await client.post(
+            f"/v1/products/{product.id}/research-sources",
+            headers=auth,
+            json={
+                "url": "https://public.example/api",
+                "display_name": "Duplicate",
+                "category": "other",
+                "refresh": False,
+            },
+        )
+        assert duplicate.status_code == 409
+        listed = await client.get(f"/v1/products/{product.id}/research-sources", headers=auth)
+        assert listed.status_code == 200 and len(listed.json()) == 1
         source_response = await client.get(f"/v1/research-sources/{source_id}", headers=auth)
         assert source_response.status_code == 200
+        refreshed = await client.post(f"/v1/research-sources/{source_id}/refresh", headers=auth)
+        assert refreshed.status_code == 200
         fetches = await client.get(f"/v1/research-sources/{source_id}/fetches", headers=auth)
-        assert fetches.status_code == 200
+        assert fetches.status_code == 200 and len(fetches.json()) == 2
         evidence = await client.get(f"/v1/research-evidence/{evidence_id}", headers=auth)
         assert evidence.json()["blocks"][1]["text"] == "Structured fact"
         manifest = await client.get(
             f"/v1/products/{product.id}/research-context-manifest", headers=auth
         )
         assert manifest.status_code == 200
+        unknown = uuid4()
+        assert (
+            await client.get(f"/v1/research-sources/{unknown}", headers=auth)
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/research-sources/{unknown}/fetches", headers=auth)
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/research-evidence/{unknown}", headers=auth)
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/products/{unknown}/research-sources", headers=auth)
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/products/{unknown}/research-context-manifest", headers=auth)
+        ).status_code == 404
+        invalid = await client.post(
+            f"/v1/products/{product.id}/research-sources",
+            headers=auth,
+            json={
+                "url": "file:///etc/passwd",
+                "display_name": "Invalid",
+                "category": "other",
+            },
+        )
+        assert invalid.status_code == 422
+        archived = await client.post(f"/v1/research-sources/{source_id}/archive", headers=auth)
+        assert archived.status_code == 200 and archived.json()["status"] == "archived"
+        assert (
+            await client.post(f"/v1/research-sources/{source_id}/refresh", headers=auth)
+        ).status_code == 409
         assert (await client.get("/v1/research/raw", headers=auth)).status_code == 404
         proxy = await client.post("/v1/research/fetch-url", headers=auth, json={})
         assert proxy.status_code == 404
