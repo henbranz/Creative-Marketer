@@ -26,6 +26,7 @@ from creative_marketer.agent_runtime.application import (
 )
 from creative_marketer.agent_runtime.domain import (
     AgentRunDenied,
+    AgentRunNotFound,
     AgentRunNotReady,
     AgentRunStatus,
     BudgetExceeded,
@@ -625,3 +626,88 @@ async def test_researcher_forbids_fallback_and_noncanonical_capabilities() -> No
                 product_id=product_id,
                 idempotency_key=f"invalid-policy-{index}",
             )
+
+
+@pytest.mark.asyncio
+async def test_active_run_reuse_and_idempotency_binding_are_exact() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    runtime, repository, _, _ = service(
+        prepared,
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+    first = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="first"
+    )
+    active = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="second"
+    )
+    assert active.id == first.id
+    assert len(repository.reservations) == 1
+    with pytest.raises(AgentRunNotReady, match="another request"):
+        await runtime.request_researcher(
+            context(tenant_id), product_id=uuid4(), idempotency_key="first"
+        )
+
+
+@pytest.mark.asyncio
+async def test_empty_evidence_and_currency_mismatch_fail_before_reservation() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    provider = FakeModelProvider(
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+    )
+    empty = replace(prepared, evidence=())
+    runtime, _, _, _ = service(empty, provider)
+    with pytest.raises(AgentRunNotReady, match="evidence block"):
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="empty"
+        )
+
+    cfg = replace(
+        prepared.researcher.configuration,
+        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 10, Decimal("1.50"), "EUR"),
+    )
+    mismatched = replace(
+        prepared,
+        researcher=replace(
+            prepared.researcher,
+            configuration=cfg,
+            configuration_digest=cfg.configuration_digest,
+        ),
+    )
+    runtime, _, _, _ = service(mismatched, provider)
+    with pytest.raises(BudgetExceeded, match="currency"):
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="currency"
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_missing_running_and_succeeded_runs_is_idempotent() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "response-idempotent",
+            ModelUsage(10, 10, 20),
+            "openai",
+            "gpt-5.6-terra",
+        )
+
+    runtime, repository, _, _ = service(prepared, FakeModelProvider(model))
+    with pytest.raises(AgentRunNotFound, match="not found"):
+        await runtime.execute(tenant_id, uuid4())
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="execute-once"
+    )
+    completed = await runtime.execute(tenant_id, requested.id)
+    assert (await runtime.execute(tenant_id, requested.id)).id == completed.id
+
+    repository.runs[completed.id] = replace(completed, status=AgentRunStatus.RUNNING)
+    with pytest.raises(AgentRunNotReady, match="cannot be claimed"):
+        await runtime.execute(tenant_id, completed.id)

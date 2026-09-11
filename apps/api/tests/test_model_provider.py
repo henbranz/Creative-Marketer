@@ -15,6 +15,9 @@ from creative_marketer.agent_runtime.domain import (
     ModelRefusal,
     ModelTimeout,
 )
+from creative_marketer.infrastructure.model_providers.execution_process_only import (
+    ExecutionProcessOnlyModelProvider,
+)
 from creative_marketer.infrastructure.model_providers.openai_responses import (
     OpenAIResponsesModelProvider,
 )
@@ -115,3 +118,38 @@ async def test_openai_adapter_rejects_refusal_and_invalid_json() -> None:
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_rejects_incomplete_output_blocks_and_missing_text() -> None:
+    incomplete = SimpleNamespace(
+        status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens")
+    )
+    client, _ = client_with(incomplete)
+    with pytest.raises(ModelProviderError):
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+
+    refusal = SimpleNamespace(
+        status="completed",
+        output=(SimpleNamespace(content=(SimpleNamespace(type="refusal"),)),),
+    )
+    client, _ = client_with(refusal)
+    with pytest.raises(ModelRefusal):
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+
+    missing_text = SimpleNamespace(status="completed", output=(), output_text=None)
+    client, _ = client_with(missing_text)
+    with pytest.raises(InvalidModelOutput):
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+
+
+@pytest.mark.asyncio
+async def test_api_process_model_provider_cannot_invoke_models() -> None:
+    with pytest.raises(ModelProviderError, match="worker process"):
+        await ExecutionProcessOnlyModelProvider().generate_structured(invocation())
