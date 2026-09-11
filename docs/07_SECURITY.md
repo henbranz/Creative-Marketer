@@ -353,3 +353,16 @@ attempt, the gateway transactionally revalidates active Agent, Tool, and Permiss
 execution starts only after durable attempt ownership commits. Unexpected failures after that point
 are treated as an unknown external outcome and block retry pending reconciliation. Audit/events use
 references and digests, never raw inputs or credential material.
+
+## Model inference controls
+
+An AgentRun can be requested only by an active tenant OWNER/ADMIN and claimed only from immutable
+PENDING state while its Agent definitions remain active. The worker uses a separate configured
+workload identity. Product and evidence are re-resolved by frozen IDs under transaction-local RLS;
+workflow input is never authority. Provider keys and SDK types stay inside infrastructure and are
+absent from HTTP, persistence, Audit, events, telemetry, and history.
+
+Research evidence is carried only in a labeled untrusted-data message section. The model receives
+no Tools or hosted search, and output must pass local closed-schema validation plus exact citation
+binding before persistence. Thus prompt text cannot grant capabilities or turn unsupported prose
+into a ResearchSnapshot.

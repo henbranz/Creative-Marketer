@@ -57,6 +57,7 @@ services:
       OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
       OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
+      MODEL_PROVIDER_BACKEND: ${MODEL_PROVIDER_BACKEND:-disabled}
     depends_on:
       - object-storage
 
@@ -113,6 +114,26 @@ services:
       - "8233:8233"
     volumes:
       - temporal-data:/var/lib/temporal
+
+  researcher-worker:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "creative_marketer_api.researcher_worker"]
+    profiles: ["temporal"]
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+      TEMPORAL_ADDRESS: temporal:7233
+      MODEL_PROVIDER_BACKEND: openai
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-disabled-openai-key}
+      AGENT_WORKLOAD_ID: local-researcher-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
 
   web:
     build:

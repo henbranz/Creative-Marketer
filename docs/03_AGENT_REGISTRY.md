@@ -304,3 +304,8 @@ Resolution precedence is explicit:
 3. denial when neither is configured
 
 Tenant definitions never override a platform template merely by sharing an agent type or display name. Version selection and rollout remain historically traceable.
+
+Agent Registry remains provider-neutral in Phase 2. A version selects a logical model profile,
+required capabilities, budgets, scopes, and an output contract—not a provider, model name, API key,
+or SDK. AgentRuntime freezes the resolved version and configuration digest into AgentRun, then maps
+the logical profile through independently versioned operational routing.

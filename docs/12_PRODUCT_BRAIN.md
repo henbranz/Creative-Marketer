@@ -127,3 +127,8 @@ snapshots use V2 and emit `catalog.product.snapshot_created.v2`; the digest cove
 - AI enrichment and agent execution
 - production identity provider and tenant discovery UI
 - full concurrent editing UX beyond Brief revision conflict
+
+AgentRuntime consumes one immutable ProductKnowledgeSnapshot by ID and digest. It never reads a
+mutable Product row as an inference fallback and never writes Researcher output back into Product
+Brain. Snapshot changes make prior ResearchSnapshots `outdated` at read time without rewriting
+their provenance.

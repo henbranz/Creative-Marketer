@@ -202,3 +202,14 @@ The handler signals before Inbox commit so RPC failure rolls back the receipt an
 causes a safe duplicate. A bounded durable fallback recheck prevents permanent wait after an
 exceptional bridge failure. One-off publication scheduling uses a Workflow timer; recurring
 cadences may use Temporal Schedules after a use-case-specific overlap policy is selected.
+
+### Researcher workflow
+
+`agent.run.requested.v1` is committed after its AgentRun in the same transaction. An Inbox consumer
+starts a deterministic `tenant/<tenant>/agent-run/<run>` workflow; duplicate delivery is safe. The
+workflow contains only tenant/run/correlation UUIDs and invokes one Activity. The Activity resolves
+and claims authoritative PostgreSQL state under workload identity, then calls AgentRuntime. A model
+or output failure becomes a safe terminal AgentRun outcome. Researcher V1 does not automatically
+retry billed inference because its immutable budget permits one call. Worker crashes after a
+provider response but before outcome persistence require conservative recovery; exactly-once
+inference is explicitly not claimed.

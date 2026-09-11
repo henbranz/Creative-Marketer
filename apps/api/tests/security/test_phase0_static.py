@@ -324,6 +324,12 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "agent.run.completed.v1": (
+            "sha256:5906a1595455b3880a932a36609bd49df47c8c347917864fb245df76b00bcbc3"
+        ),
+        "agent.run.requested.v1": (
+            "sha256:b2b6c68b0b57d7d8874ca35c4666463eae5d52b029e2de8e430afd3acd1b920f"
+        ),
         "catalog.asset.archived.v1": (
             "sha256:bcbb774c81085112f4594e587be1b0bc23dbdfdebc3eac331ccac840499d6b4f"
         ),
@@ -369,6 +375,9 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "research.evidence.captured.v1": (
             "sha256:cf112f0c6152b8b3ddd3c8519fe3b2d8a4c5bf88a5b33e4d37f23e52feb1bef5"
         ),
+        "research.snapshot.created.v1": (
+            "sha256:fc75c5ec1745c3f81eab4d1083570031260a5a58ca2b6b63e91517491d742887"
+        ),
         "research.source.archived.v1": (
             "sha256:c1f121b6dd2f58ffb85241d4554a1e57dada05bdc2645c74722fd1a12bdac644"
         ),
@@ -390,6 +399,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260906_0014"]
+    assert script.get_heads() == ["20260911_0015"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

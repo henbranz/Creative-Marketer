@@ -1,9 +1,11 @@
 from dataclasses import dataclass, field
 from typing import Protocol, cast
+from uuid import UUID
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from creative_marketer.agent_runtime.application import AgentRunService
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.tool_execution.application import ToolGateway
 from creative_marketer.tool_execution.domain import (
@@ -16,6 +18,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    ResearcherActivityResult,
+    ResearcherWorkflowInput,
     ToolActivityResult,
     ToolWorkflowInput,
 )
@@ -83,6 +87,7 @@ class TemporalActivities:
     tool_service: WorkflowToolService
     generation_service: GenerationApplicationService
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
+    agent_runtime: AgentRunService | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -106,6 +111,35 @@ class TemporalActivities:
                 raise ApplicationError(
                     "tool activity transient failure", type="TRANSIENT"
                 ) from error
+
+    @activity.defn(name="workflow.execute_researcher")
+    async def execute_researcher(
+        self, request: ResearcherWorkflowInput
+    ) -> ResearcherActivityResult:
+        if self.agent_runtime is None:
+            raise ApplicationError(
+                "AgentRuntime is not composed", type="AGENT_RUNTIME_UNAVAILABLE", non_retryable=True
+            )
+        info = activity.info()
+        with self.telemetry.span(
+            "temporal.activity.researcher",
+            {
+                "temporal.workflow_id": info.workflow_id or "unknown",
+                "correlation_id": request.correlation_id,
+            },
+        ) as span:
+            try:
+                run = await self.agent_runtime.execute(
+                    UUID(request.tenant_id), UUID(request.agent_run_id)
+                )
+            except Exception as error:
+                span.record_error("RESEARCHER_ACTIVITY_FAILURE")
+                raise ApplicationError(
+                    "Researcher activity failed", type="RESEARCHER_ACTIVITY_FAILURE"
+                ) from error
+            return ResearcherActivityResult(
+                str(run.id), run.status.value, run.result_ref, run.failure_code
+            )
 
     @activity.defn(name="workflow.start_generation")
     async def start_generation(self, request: GenerationWorkflowInput) -> GenerationStartResult:

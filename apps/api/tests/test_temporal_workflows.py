@@ -5,6 +5,7 @@ import base64
 import os
 import re
 from datetime import timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -23,6 +24,7 @@ from creative_marketer.infrastructure.temporal.worker import create_worker
 from creative_marketer.infrastructure.temporal.workflows import (
     ApprovalBlockingWorkflow,
     MediaGenerationWorkflow,
+    ResearcherWorkflow,
     ScheduledPublicationWorkflow,
 )
 from creative_marketer.permission_governance.domain import Decision, Obligation
@@ -33,10 +35,12 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    ResearcherWorkflowInput,
     ToolActivityResult,
     ToolWorkflowInput,
     WorkflowState,
     generation_workflow_id,
+    researcher_workflow_id,
     tool_workflow_id,
 )
 from tests.test_tool_gateway import (
@@ -624,3 +628,50 @@ async def test_temporal_history_contains_only_safe_references(temporal_environme
     ):
         assert forbidden not in history_text
     assert request.operation_id in history_text
+
+
+@pytest.mark.asyncio
+async def test_researcher_pending_run_completes_once_after_worker_starts_and_history_is_private(
+    temporal_environment,
+):
+    class Runtime:
+        calls = 0
+
+        async def execute(self, tenant_id, run_id):
+            self.calls += 1
+            return SimpleNamespace(
+                id=run_id,
+                status=SimpleNamespace(value="SUCCEEDED"),
+                result_ref="research-snapshot://opaque",
+                failure_code=None,
+            )
+
+    runtime = Runtime()
+    request = ResearcherWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    handle = await temporal_environment.client.start_workflow(
+        ResearcherWorkflow.run,
+        request,
+        id=researcher_workflow_id(request),
+        task_queue=WORKFLOW_TASK_QUEUE,
+    )
+    await asyncio.sleep(0.05)
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), agent_runtime=runtime
+    )
+    async with create_worker(
+        temporal_environment.client,
+        activities,
+        graceful_shutdown_timeout=timedelta(0),
+    ):
+        result = await handle.result()
+        history_json = (await handle.fetch_history()).to_json()
+        decoded = "\n".join(
+            base64.b64decode(value).decode("utf-8", errors="replace")
+            for value in re.findall(r'"data": "([A-Za-z0-9+/=]+)"', history_json)
+        )
+        history_text = (history_json + decoded).lower()
+    assert result.status == "SUCCEEDED"
+    assert runtime.calls == 1
+    assert str(request.agent_run_id) in history_text
+    for forbidden in ("product description", "evidence block", "system prompt", "api key"):
+        assert forbidden not in history_text

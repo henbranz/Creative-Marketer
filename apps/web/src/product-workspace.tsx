@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   type Asset,
+  type AgentRun,
   type Brand,
   type BriefWrite,
   catalogApi,
@@ -14,6 +15,7 @@ import {
   type ResearchFetch,
   type ResearchSource,
   type ResearchSourceCreate,
+  type ResearchSnapshot,
   type Session,
   slugify,
   type Workspace,
@@ -354,12 +356,15 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [evidence, setEvidence] = useState<ResearchEvidence | null>(null);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [snapshots, setSnapshots] = useState<ResearchSnapshot[]>([]);
 
   const load = useCallback(async () => {
-    const values = await catalogApi.listResearchSources(
-      session,
-      workspace.product.id,
-    );
+    const [values, runValues, snapshotValues] = await Promise.all([
+      catalogApi.listResearchSources(session, workspace.product.id),
+      catalogApi.listResearcherRuns(session, workspace.product.id),
+      catalogApi.listResearchSnapshots(session, workspace.product.id),
+    ]);
     const enriched = await Promise.all(
       values.map(async (source) => {
         const history = await catalogApi.listResearchFetches(
@@ -370,6 +375,8 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
       }),
     );
     setSources(enriched);
+    setRuns(runValues);
+    setSnapshots(snapshotValues);
   }, [session, workspace.product.id]);
 
   useEffect(() => {
@@ -380,6 +387,13 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
         ),
     );
   }, [load]);
+
+  useEffect(() => {
+    if (!runs.some((run) => ["PENDING", "RUNNING"].includes(run.status)))
+      return;
+    const timer = window.setInterval(() => void load(), 2500);
+    return () => window.clearInterval(timer);
+  }, [load, runs]);
 
   const validateUrl = () => {
     try {
@@ -456,6 +470,136 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
 
   return (
     <div className="research-workspace">
+      <section className="ai-research-card">
+        <div>
+          <p className="eyebrow">Evidence-grounded AI research</p>
+          <h2>Researcher</h2>
+          <p>
+            Analyze the current Product snapshot and captured evidence. External
+            pages remain untrusted data, and every factual finding must cite an
+            exact evidence block.
+          </p>
+        </div>
+        {workspace.product.can_edit ? (
+          <button
+            className="primary"
+            disabled={
+              !!busy ||
+              runs.some((run) => ["PENDING", "RUNNING"].includes(run.status))
+            }
+            onClick={async () => {
+              setBusy("researcher");
+              setError("");
+              try {
+                await catalogApi.startResearcher(
+                  session,
+                  workspace.product.id,
+                  crypto.randomUUID(),
+                );
+                await load();
+              } catch (caught) {
+                setError(
+                  caught instanceof Error
+                    ? caught.message
+                    : "Researcher could not start.",
+                );
+              } finally {
+                setBusy("");
+              }
+            }}
+          >
+            {busy === "researcher" ? "Queueing…" : "Run Researcher"}
+          </button>
+        ) : (
+          <p className="readonly-note">
+            Owners and admins can start billed research runs.
+          </p>
+        )}
+        {runs[0] && (
+          <div className="research-run-summary">
+            <span className={`fetch-state ${runs[0].status.toLowerCase()}`}>
+              {runs[0].status === "PENDING"
+                ? "Queued"
+                : runs[0].status.toLowerCase()}
+            </span>
+            <span>Researcher v{runs[0].agent_version_number}</span>
+            <span>{runs[0].model_profile_key.replaceAll("_", " ")}</span>
+            {runs[0].total_tokens > 0 && (
+              <span>{runs[0].total_tokens} tokens</span>
+            )}
+            {runs[0].failure_code && (
+              <span>{runs[0].failure_code.replaceAll("_", " ")}</span>
+            )}
+          </div>
+        )}
+      </section>
+      {snapshots[0] && (
+        <section className="research-snapshot">
+          <div className="research-snapshot-heading">
+            <div>
+              <p className="eyebrow">Latest AI research</p>
+              <h2>{snapshots[0].findings.length} evidence-backed findings</h2>
+            </div>
+            <span className={`fetch-state ${snapshots[0].freshness}`}>
+              {snapshots[0].freshness}
+            </span>
+          </div>
+          <div className="finding-list">
+            {snapshots[0].findings.map((finding) => (
+              <article className="finding-card" key={finding.key}>
+                <div className="finding-meta">
+                  <span>{finding.category.replaceAll("_", " ")}</span>
+                  <span title="Model-assessed confidence based on supplied evidence">
+                    {finding.confidence.toLowerCase()} confidence
+                  </span>
+                </div>
+                <p>{finding.statement}</p>
+                {finding.implication && <small>{finding.implication}</small>}
+                <div className="citation-list">
+                  {finding.citations.map((citation) => (
+                    <button
+                      className="citation-chip"
+                      key={`${citation.evidence_snapshot_id}-${citation.block_index}`}
+                      onClick={() =>
+                        void viewEvidence(citation.evidence_snapshot_id)
+                      }
+                    >
+                      Evidence · block {citation.block_index}
+                    </button>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+          {!!snapshots[0].research_gaps.length && (
+            <div className="research-gaps">
+              <h3>Research gaps</h3>
+              <ul>
+                {snapshots[0].research_gaps.map((gap) => (
+                  <li key={gap}>{gap}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!!snapshots[0].recommended_next_sources.length && (
+            <div className="research-gaps">
+              <h3>Suggested next research</h3>
+              <ul>
+                {snapshots[0].recommended_next_sources.map((item) => (
+                  <li key={`${item.category}-${item.suggested_query}`}>
+                    <strong>{item.category.replaceAll("_", " ")}</strong>:{" "}
+                    {item.reason}
+                  </li>
+                ))}
+              </ul>
+              <small>
+                Suggestions are proposals only and are never fetched
+                automatically.
+              </small>
+            </div>
+          )}
+        </section>
+      )}
       <section className="research-intake">
         <div>
           <p className="eyebrow">Governed web evidence</p>

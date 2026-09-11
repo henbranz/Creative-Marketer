@@ -171,6 +171,66 @@ class PostgresPublisherStore:
                 for row in rows
             )
 
+    async def claim_ready_types(
+        self,
+        worker_id: UUID,
+        *,
+        event_types: tuple[str, ...],
+        batch_size: int,
+        now: datetime,
+        lease_duration: timedelta,
+    ) -> tuple[ClaimedEvent, ...]:
+        """Claim only events owned by a scoped in-process bridge."""
+        if not event_types or batch_size < 1 or batch_size > 1000:
+            raise ValueError("scoped publisher claim is invalid")
+        async with self._factory.begin() as session:
+            ready = or_(
+                and_(
+                    outbox_events.c.publication_state == "PENDING",
+                    outbox_events.c.next_attempt_at <= now,
+                ),
+                and_(
+                    outbox_events.c.publication_state == "PUBLISHING",
+                    outbox_events.c.lease_expires_at <= now,
+                ),
+            )
+            ids = (
+                await session.scalars(
+                    select(outbox_events.c.event_id)
+                    .where(ready, outbox_events.c.event_type.in_(event_types))
+                    .order_by(outbox_events.c.next_attempt_at, outbox_events.c.event_id)
+                    .limit(batch_size)
+                    .with_for_update(skip_locked=True)
+                )
+            ).all()
+            if not ids:
+                return ()
+            rows = (
+                await session.execute(
+                    update(outbox_events)
+                    .where(outbox_events.c.event_id.in_(ids))
+                    .values(
+                        publication_state="PUBLISHING",
+                        attempt_count=outbox_events.c.attempt_count + 1,
+                        lease_owner=worker_id,
+                        lease_expires_at=now + lease_duration,
+                        updated_at=now,
+                    )
+                    .returning(outbox_events)
+                )
+            ).all()
+            return tuple(
+                ClaimedEvent(
+                    _row_event(row),
+                    worker_id,
+                    row._mapping["attempt_count"],
+                    TraceContext(row._mapping["traceparent"], row._mapping["tracestate"])
+                    if row._mapping["traceparent"]
+                    else None,
+                )
+                for row in rows
+            )
+
     async def _finish(self, claimed: ClaimedEvent, values: dict[str, object]) -> bool:
         async with self._factory.begin() as session:
             result = await session.execute(

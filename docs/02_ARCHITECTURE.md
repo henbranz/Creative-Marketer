@@ -295,3 +295,12 @@ and on-demand reference-only context manifests. Its inward fetch/storage/reposit
 networking, object storage, and PostgreSQL in infrastructure. Internet acquisition is a distinct
 untrusted egress zone with IP-pinned public-only connections; it has no credentials, Tool Gateway,
 AgentRuntime, or Catalog write authority. See `docs/14_RESEARCH_EVIDENCE.md`.
+
+## Implemented AgentRuntime boundary (Phase 2)
+
+AgentRuntime is a provider-neutral application context between immutable Agent Registry configuration
+and infrastructure ModelProvider adapters. It owns durable AgentRun provenance, deterministic
+Researcher context building, exact model routing and pricing, run/period budgets, structured-output
+and citation validation, and ResearchSnapshot persistence. PostgreSQL Outbox/Inbox and a thin
+ID-only Temporal workflow provide asynchronous execution. Researcher V1 has no Tools, memory,
+handoffs, or Product mutation authority. See `docs/15_AGENT_RUNTIME_AND_RESEARCHER.md` and ADR-026.

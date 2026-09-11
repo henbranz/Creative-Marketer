@@ -55,6 +55,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/agent-runs/{run_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Agent Run */
+    get: operations["get_agent_run_v1_agent_runs__run_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/assets": {
     parameters: {
       query?: never;
@@ -333,6 +350,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/research/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Researcher Runs */
+    get: operations["list_researcher_runs_v1_products__product_id__research_runs_get"];
+    put?: never;
+    /** Start Researcher */
+    post: operations["start_researcher_v1_products__product_id__research_runs_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/research/snapshots": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Research Snapshots */
+    get: operations["list_research_snapshots_v1_products__product_id__research_snapshots_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/snapshots": {
     parameters: {
       query?: never;
@@ -452,6 +504,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/research/snapshots/{snapshot_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Research Snapshot */
+    get: operations["get_research_snapshot_v1_research_snapshots__snapshot_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/tenants/{tenant_id}/context": {
     parameters: {
       query?: never;
@@ -473,6 +542,91 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    /** AgentRunResponse */
+    AgentRunResponse: {
+      /** Agent Configuration Digest */
+      agent_configuration_digest: string;
+      /**
+       * Agent Version Id
+       * Format: uuid
+       */
+      agent_version_id: string;
+      /** Agent Version Number */
+      agent_version_number: number;
+      /** Completed At */
+      completed_at: string | null;
+      /** Context Digest */
+      context_digest: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Currency */
+      currency: string;
+      /** Estimated Cost */
+      estimated_cost: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Input Tokens */
+      input_tokens: number;
+      /** Model Profile Key */
+      model_profile_key: string;
+      /** Model Route Version */
+      model_route_version: string | null;
+      /** Output Tokens */
+      output_tokens: number;
+      /** Pricing Version */
+      pricing_version: string | null;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Product Snapshot Digest */
+      product_snapshot_digest: string;
+      /**
+       * Product Snapshot Id
+       * Format: uuid
+       */
+      product_snapshot_id: string;
+      /** Prompt Revision */
+      prompt_revision: string;
+      /**
+       * Requested Agent Definition Id
+       * Format: uuid
+       */
+      requested_agent_definition_id: string;
+      /** Research Context Digest */
+      research_context_digest: string;
+      /**
+       * Resolved Agent Definition Id
+       * Format: uuid
+       */
+      resolved_agent_definition_id: string;
+      /** Resolved Model */
+      resolved_model: string | null;
+      /** Resolved Provider */
+      resolved_provider: string | null;
+      /** Result Ref */
+      result_ref: string | null;
+      /** Started At */
+      started_at: string | null;
+      /** Status */
+      status: string;
+      /** Total Tokens */
+      total_tokens: number;
+    };
+    /** AgentRunStart */
+    AgentRunStart: {
+      /** Idempotency Key */
+      idempotency_key: string;
+    };
     /** AssetCreate */
     AssetCreate: {
       /** Allowed Uses */
@@ -1294,6 +1448,15 @@ export interface components {
        */
       status: "draft" | "active" | "archived";
     };
+    /** RecommendedSourceResponse */
+    RecommendedSourceResponse: {
+      /** Category */
+      category: string;
+      /** Reason */
+      reason: string;
+      /** Suggested Query */
+      suggested_query: string;
+    };
     /**
      * ResearchCategory
      * @enum {string}
@@ -1307,6 +1470,82 @@ export interface components {
       | "market_reference"
       | "creative_reference"
       | "other";
+    /** ResearchCitationResponse */
+    ResearchCitationResponse: {
+      /** Block Digest */
+      block_digest: string;
+      /** Block Index */
+      block_index: number;
+      /**
+       * Evidence Snapshot Id
+       * Format: uuid
+       */
+      evidence_snapshot_id: string;
+    };
+    /** ResearchFindingResponse */
+    ResearchFindingResponse: {
+      /** Category */
+      category: string;
+      /** Citations */
+      citations: components["schemas"]["ResearchCitationResponse"][];
+      /** Confidence */
+      confidence: string;
+      /** Implication */
+      implication: string | null;
+      /** Key */
+      key: string;
+      /** Scope */
+      scope: string;
+      /** Statement */
+      statement: string;
+    };
+    /** ResearchSnapshotResponse */
+    ResearchSnapshotResponse: {
+      /**
+       * Agent Run Id
+       * Format: uuid
+       */
+      agent_run_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Findings */
+      findings: components["schemas"]["ResearchFindingResponse"][];
+      /** Freshness */
+      freshness: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Product Snapshot Digest */
+      product_snapshot_digest: string;
+      /**
+       * Product Snapshot Id
+       * Format: uuid
+       */
+      product_snapshot_id: string;
+      /** Recommended Next Sources */
+      recommended_next_sources: components["schemas"]["RecommendedSourceResponse"][];
+      /** Research Context Digest */
+      research_context_digest: string;
+      /** Research Gaps */
+      research_gaps: string[];
+      /** Semantic Digest */
+      semantic_digest: string;
+      /**
+       * Valid Until
+       * Format: date-time
+       */
+      valid_until: string;
+    };
     /** SnapshotResponse */
     SnapshotResponse: {
       /**
@@ -1491,6 +1730,41 @@ export interface operations {
           "application/json": {
             [key: string]: string;
           };
+        };
+      };
+    };
+  };
+  get_agent_run_v1_agent_runs__run_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -2286,6 +2560,115 @@ export interface operations {
       };
     };
   };
+  list_researcher_runs_v1_products__product_id__research_runs_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  start_researcher_v1_products__product_id__research_runs_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AgentRunStart"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_research_snapshots_v1_products__product_id__research_snapshots_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResearchSnapshotResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   create_snapshot_v1_products__product_id__snapshots_post: {
     parameters: {
       query?: never;
@@ -2518,6 +2901,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["FetchResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_research_snapshot_v1_research_snapshots__snapshot_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        snapshot_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResearchSnapshotResponse"];
         };
       };
       /** @description Validation Error */

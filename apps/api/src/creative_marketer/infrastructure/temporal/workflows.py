@@ -9,6 +9,8 @@ with workflow.unsafe.imports_passed_through():
     from creative_marketer.infrastructure.temporal.configuration import (
         GENERATION_ACTIVITY_TIMEOUT,
         GENERATION_RETRY_POLICY,
+        RESEARCHER_ACTIVITY_TIMEOUT,
+        RESEARCHER_RETRY_POLICY,
         TOOL_ACTIVITY_TIMEOUT,
         TOOL_RETRY_POLICY,
     )
@@ -17,6 +19,8 @@ with workflow.unsafe.imports_passed_through():
         GenerationStartResult,
         GenerationState,
         GenerationWorkflowInput,
+        ResearcherActivityResult,
+        ResearcherWorkflowInput,
         ToolActivityResult,
         ToolWorkflowInput,
         WorkflowResult,
@@ -204,3 +208,32 @@ class ScheduledPublicationWorkflow:
         final = _tool_result(current)
         self._state = final.state
         return final
+
+
+@workflow.defn(name="ResearcherWorkflow")
+class ResearcherWorkflow:
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: ResearcherWorkflowInput) -> ResearcherActivityResult:
+        self._state = WorkflowState.EXECUTING
+        result = cast(
+            ResearcherActivityResult,
+            await workflow.execute_activity(
+                "workflow.execute_researcher",
+                request,
+                result_type=ResearcherActivityResult,
+                start_to_close_timeout=RESEARCHER_ACTIVITY_TIMEOUT,
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=RESEARCHER_RETRY_POLICY,
+            ),
+        )
+        self._state = (
+            WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
+        )
+        return result

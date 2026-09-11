@@ -1,0 +1,56 @@
+{
+  "title": "ResearchSnapshotV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "research_gaps", "recommended_next_sources"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "category", "statement", "confidence", "citations", "scope", "implication"],
+        "properties": {
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+          "category": {"enum": ["competitor", "positioning", "pricing", "messaging", "audience", "offer_promotion", "creative_pattern", "other"]},
+          "statement": {"type": "string", "minLength": 1, "maxLength": 1500},
+          "confidence": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+          "citations": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["evidence_snapshot_id", "block_index", "block_digest"],
+              "properties": {
+                "evidence_snapshot_id": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"},
+                "block_index": {"type": "integer", "minimum": 0, "maximum": 499},
+                "block_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+              }
+            }
+          },
+          "scope": {"type": "string", "minLength": 1, "maxLength": 500},
+          "implication": {"type": ["string", "null"], "maxLength": 1500}
+        }
+      }
+    },
+    "research_gaps": {"type": "array", "maxItems": 20, "items": {"type": "string", "minLength": 1, "maxLength": 1000}},
+    "recommended_next_sources": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category", "reason", "suggested_query"],
+        "properties": {
+          "category": {"type": "string", "minLength": 1, "maxLength": 64},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 1000},
+          "suggested_query": {"type": "string", "minLength": 1, "maxLength": 500}
+        }
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TAS
 from creative_marketer.infrastructure.temporal.workflows import (
     ApprovalBlockingWorkflow,
     MediaGenerationWorkflow,
+    ResearcherWorkflow,
     ScheduledPublicationWorkflow,
 )
 
@@ -30,11 +31,13 @@ def create_worker(
             ApprovalBlockingWorkflow,
             MediaGenerationWorkflow,
             ScheduledPublicationWorkflow,
+            ResearcherWorkflow,
         ],
         activities=[
             activities.invoke_tool,
             activities.start_generation,
             activities.poll_generation,
+            activities.execute_researcher,
         ],
         graceful_shutdown_timeout=graceful_shutdown_timeout,
         max_cached_workflows=max_cached_workflows,

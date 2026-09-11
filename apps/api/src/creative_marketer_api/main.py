@@ -7,6 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from starlette.responses import Response
 
+from creative_marketer.agent_runtime.application import (
+    AgentRunService,
+    ModelProviderRegistry,
+    ModelRouter,
+    initial_researcher_route,
+)
 from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.catalog.application import CatalogService
 from creative_marketer.catalog.asset_application import AssetService, UnavailableObjectStore
@@ -15,14 +21,17 @@ from creative_marketer.infrastructure.authentication import (
     UnavailableAuthenticationAdapter,
 )
 from creative_marketer.infrastructure.database import (
+    SqlAlchemyAgentRuntimeUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.model_providers import ExecutionProcessOnlyModelProvider
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.research import SafeWebFetcher
+from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
 from creative_marketer.observability.configuration import (
     ObservabilityConfiguration,
     build_runtime,
@@ -142,6 +151,7 @@ def create_app(
     identity_uow = SqlAlchemyUnitOfWorkFactory(session_factory)
     catalog_uow = SqlAlchemyCatalogUnitOfWorkFactory(session_factory)
     research_uow = SqlAlchemyResearchUnitOfWorkFactory(session_factory)
+    agent_runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -182,6 +192,19 @@ def create_app(
             or ResearchService(research_uow, SafeWebFetcher(), object_store, telemetry=telemetry),
             resolved_settings.app_env,
             resolved_identity_audit,
+            AgentRunService(
+                agent_runtime_uow,
+                ModelRouter((initial_researcher_route(),)),
+                ModelProviderRegistry(
+                    {"openai": ExecutionProcessOnlyModelProvider()}
+                    if resolved_settings.model_provider_backend == "openai"
+                    else {}
+                ),
+                ConfiguredWorkloadIdentityProvider(
+                    resolved_settings.agent_workload_id, resolved_settings.app_env
+                ),
+                telemetry,
+            ),
         )
     )
 

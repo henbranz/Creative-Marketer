@@ -16,6 +16,7 @@ dependencies = [
   "opentelemetry-api>=1.37.0,<2.0.0",
   "opentelemetry-sdk>=1.37.0,<2.0.0",
   "opentelemetry-exporter-otlp-proto-http>=1.37.0,<2.0.0",
+  "openai>=2.20.0,<3.0.0",
   "temporalio>=1.32.0,<1.33.0",
 ]
 

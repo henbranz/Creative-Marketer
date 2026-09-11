@@ -7,6 +7,7 @@ WORKFLOW_TASK_QUEUE = "creative-marketer-workflows"
 STATE_ACTIVITY_TIMEOUT = timedelta(seconds=15)
 TOOL_ACTIVITY_TIMEOUT = timedelta(seconds=60)
 GENERATION_ACTIVITY_TIMEOUT = timedelta(seconds=30)
+RESEARCHER_ACTIVITY_TIMEOUT = timedelta(minutes=10)
 
 STATE_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(milliseconds=250),
@@ -25,4 +26,10 @@ GENERATION_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=10),
     maximum_attempts=5,
+)
+RESEARCHER_RETRY_POLICY = RetryPolicy(
+    initial_interval=timedelta(seconds=2),
+    backoff_coefficient=2.0,
+    maximum_interval=timedelta(seconds=15),
+    maximum_attempts=2,
 )

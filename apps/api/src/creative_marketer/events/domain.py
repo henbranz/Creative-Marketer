@@ -28,6 +28,7 @@ SENSITIVE_KEY_FRAGMENTS = (
     "phone",
     "shipping_address",
 )
+SAFE_USAGE_COUNT_KEYS = frozenset({"input_tokens", "output_tokens", "total_tokens"})
 SENSITIVE_VALUE = re.compile(
     r"(?i)(?:bearer\s+\S+|\bsk-[a-z0-9_-]{8,}|\bshpat_[a-z0-9]{8,}|"
     r"\bgh[pousr]_[a-z0-9]{12,}|(?:api[_ -]?key|password|client[_ -]?secret)\s*[:=])"
@@ -68,7 +69,9 @@ def _normalize(value: object, *, path: str = "$") -> object:
             if not isinstance(key, str):
                 raise EventContractError(f"event object keys must be strings at {path}")
             normalized_key = key.lower()
-            if any(part in normalized_key for part in SENSITIVE_KEY_FRAGMENTS):
+            if normalized_key not in SAFE_USAGE_COUNT_KEYS and any(
+                part in normalized_key for part in SENSITIVE_KEY_FRAGMENTS
+            ):
                 raise EventContractError(f"sensitive field is forbidden at {path}.{key}")
             result[key] = _normalize(child, path=f"{path}.{key}")
         return {key: result[key] for key in sorted(result)}
@@ -180,6 +183,9 @@ def tenant_event(
     payload_schema_digest: str,
     occurred_at: datetime,
     causation_id: UUID | None = None,
+    agent_definition_id: UUID | None = None,
+    agent_version_id: UUID | None = None,
+    agent_run_id: UUID | None = None,
 ) -> DomainEvent:
     """Build a tenant event only from authoritative runtime context."""
     return DomainEvent(
@@ -194,6 +200,9 @@ def tenant_event(
         actor_id=context.actor.id,
         correlation_id=context.correlation_id,
         causation_id=causation_id,
+        agent_definition_id=agent_definition_id,
+        agent_version_id=agent_version_id,
+        agent_run_id=agent_run_id,
         payload=payload,
         payload_schema_digest=payload_schema_digest,
     )

@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     )
     asset_upload_ttl_seconds: int = Field(default=900, ge=600, le=900)
     asset_download_ttl_seconds: int = Field(default=600, ge=300, le=900)
+    model_provider_backend: Literal["disabled", "openai"] = "disabled"
+    openai_api_key: SecretStr | None = None
+    agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def reject_development_identity_in_deployed_environments(self) -> "Settings":
@@ -63,6 +66,16 @@ class Settings(BaseSettings):
                 raise ValueError("deployed S3 storage requires injected credentials")
         if self.object_storage_backend == "s3" and not self.cors_origins:
             raise ValueError("S3 storage requires at least one explicit CORS origin")
+        if self.model_provider_backend == "openai":
+            key = self.openai_api_key.get_secret_value() if self.openai_api_key else None
+            if key is not None and key.startswith(("disabled-", "test-", "fake-", "replace-")):
+                raise ValueError("OpenAI provider rejects placeholder credentials")
+        if (
+            self.model_provider_backend != "disabled"
+            and self.app_env in {"staging", "production"}
+            and self.agent_workload_id.startswith("local-")
+        ):
+            raise ValueError("deployed Agent workers require deployment-issued workload identity")
         return self
 
 

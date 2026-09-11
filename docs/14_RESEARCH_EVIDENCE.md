@@ -102,3 +102,9 @@ forbidden metric labels.
   egress firewall enforcement remain follow-up work.
 - Prompt-injection ingestion isolation is tested; Agent-side prompt/context isolation remains a
   mandatory AgentRuntime responsibility.
+
+Researcher V1 consumes only deterministic bounded references from latest active EvidenceSnapshots:
+20 sources, 10 blocks per source, 120 blocks, and 120,000 characters maximum. Each citation must
+match the frozen EvidenceSnapshot ID, block ordinal, and content digest. Evidence remains untrusted
+after extraction, cannot supply instructions or Tools, and is never silently substituted after a
+run is created.

@@ -180,3 +180,16 @@ depends on storage health; `/health/ready` deliberately continues to report data
 ## Environment and secrets
 
 `.env.example` contains safe local defaults only. `.env` and all `.env.*` variants are ignored except for the example file. Never commit production credentials, OAuth tokens, or provider secrets.
+
+## Researcher development
+
+After creating a development tenant, owner, Product snapshot, and Research evidence, explicitly
+bootstrap the tenant Researcher with `BOOTSTRAP_TENANT_ID`, `BOOTSTRAP_USER_ID`, and
+`make researcher-bootstrap`. The command is idempotent and refuses deployed environments. Enable
+real model execution with `MODEL_PROVIDER_BACKEND=openai`, an injected `OPENAI_API_KEY`, and the
+local Temporal services/worker bridge. Normal tests use a deterministic fake provider and never
+need a provider key.
+
+The optional `RUN_OPENAI_SMOKE_TEST=1 OPENAI_API_KEY=... make researcher-live-smoke` command makes
+one billed request using a tiny synthetic fixture and validates its citations locally. It is never
+part of CI. See `docs/15_AGENT_RUNTIME_AND_RESEARCHER.md` for lifecycle and known limitations.

@@ -122,3 +122,27 @@ def tool_workflow_id(value: ToolWorkflowInput) -> str:
 
 def generation_workflow_id(value: GenerationWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/generation/{value.operation_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class ResearcherWorkflowInput:
+    tenant_id: str
+    agent_run_id: str
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.agent_run_id, "agent_run_id")
+        _uuid(self.correlation_id, "correlation_id")
+
+
+@dataclass(frozen=True, slots=True)
+class ResearcherActivityResult:
+    agent_run_id: str
+    status: str
+    result_ref: str | None = None
+    failure_code: str | None = None
+
+
+def researcher_workflow_id(value: ResearcherWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/agent-run/{value.agent_run_id}"

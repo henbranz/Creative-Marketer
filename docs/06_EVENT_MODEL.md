@@ -193,3 +193,11 @@ Domain Event fields. They are validated independently, excluded from Event Canon
 the event digest, and confer no authority. Publisher and consumer spans may continue this context;
 business correlation remains the envelope's `correlation_id`, and Inbox—not tracing—deduplicates
 delivery.
+
+## AgentRuntime events
+
+`agent.run.requested.v1` starts durable coordination after AgentRun commit.
+`agent.run.completed.v1` reports terminal status, safe usage counts, Decimal cost, currency, and an
+opaque result reference. `research.snapshot.created.v1` reports only snapshot/run/Product IDs and
+provenance digests. Evidence text, Product text, findings, prompts, credentials, and raw provider
+responses are forbidden from all three contracts.

@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   catalogApi,
+  type AgentRun,
   type Asset,
   type ResearchEvidence,
   type ResearchFetch,
   type ResearchSource,
+  type ResearchSnapshot,
   type Workspace,
 } from "./catalog-api";
 import { ProductWorkspaceApp } from "./product-workspace";
@@ -200,6 +202,73 @@ const researchEvidence: ResearchEvidence = {
   instruction_like_content: false,
   captured_at: product.updated_at,
 };
+const agentRun: AgentRun = {
+  id: "90000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  status: "SUCCEEDED",
+  requested_agent_definition_id: "94000000-0000-0000-0000-000000000001",
+  resolved_agent_definition_id: "94000000-0000-0000-0000-000000000001",
+  agent_version_id: "91000000-0000-0000-0000-000000000001",
+  agent_version_number: 1,
+  agent_configuration_digest: `sha256:${"6".repeat(64)}`,
+  prompt_revision: "researcher.v1",
+  model_profile_key: "research_balanced",
+  resolved_provider: "openai",
+  resolved_model: "gpt-5.6-terra",
+  model_route_version: "openai-gpt-5.6-terra-2026-09",
+  pricing_version: "openai-2026-09-11",
+  product_snapshot_id: "92000000-0000-0000-0000-000000000001",
+  product_snapshot_digest: `sha256:${"1".repeat(64)}`,
+  research_context_digest: `sha256:${"2".repeat(64)}`,
+  context_digest: `sha256:${"3".repeat(64)}`,
+  created_at: product.created_at,
+  started_at: product.created_at,
+  completed_at: product.updated_at,
+  input_tokens: 100,
+  output_tokens: 50,
+  total_tokens: 150,
+  estimated_cost: "0.000800",
+  currency: "USD",
+  result_ref: "research-snapshot://result",
+  failure_code: null,
+};
+const researchSnapshot: ResearchSnapshot = {
+  id: "93000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  agent_run_id: agentRun.id,
+  product_snapshot_id: agentRun.product_snapshot_id,
+  product_snapshot_digest: agentRun.product_snapshot_digest,
+  research_context_digest: agentRun.research_context_digest,
+  findings: [
+    {
+      key: "competitor_price",
+      category: "pricing",
+      statement: "The competitor advertises a $20 price.",
+      confidence: "HIGH",
+      citations: [
+        {
+          evidence_snapshot_id: researchEvidence.id,
+          block_index: 0,
+          block_digest: `sha256:${"4".repeat(64)}`,
+        },
+      ],
+      scope: "Captured competitor page",
+      implication: "Compare offer framing.",
+    },
+  ],
+  research_gaps: ["Shipping terms are unknown."],
+  recommended_next_sources: [
+    {
+      category: "pricing",
+      reason: "Confirm shipping terms",
+      suggested_query: "competitor shipping terms",
+    },
+  ],
+  semantic_digest: `sha256:${"5".repeat(64)}`,
+  created_at: product.created_at,
+  valid_until: "2026-09-12T00:00:00Z",
+  freshness: "current",
+};
 
 function mocks() {
   vi.spyOn(catalogApi, "listBrands").mockResolvedValue([brand]);
@@ -233,6 +302,15 @@ function mocks() {
     schema_version: 1,
     digest: `sha256:${"d".repeat(64)}`,
     evidence: [],
+  });
+  vi.spyOn(catalogApi, "listResearcherRuns").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listResearchSnapshots").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "startResearcher").mockResolvedValue({
+    ...agentRun,
+    status: "PENDING",
+    started_at: null,
+    completed_at: null,
+    result_ref: null,
   });
 }
 
@@ -367,6 +445,45 @@ describe("Product Workspace", () => {
     expect(
       await screen.findByText("No research sources yet"),
     ).toBeInTheDocument();
+  });
+
+  it("renders a traceable Researcher result and opens cited evidence", async () => {
+    vi.mocked(catalogApi.listResearcherRuns).mockResolvedValue([agentRun]);
+    vi.mocked(catalogApi.listResearchSnapshots).mockResolvedValue([
+      researchSnapshot,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    expect(
+      await screen.findByText("The competitor advertises a $20 price."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("high confidence")).toBeInTheDocument();
+    expect(screen.getByText("Shipping terms are unknown.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Evidence · block 0" }));
+    expect(
+      await screen.findByText("A captured product fact."),
+    ).toBeInTheDocument();
+  });
+
+  it("does not expose billed Researcher start to a read-only member", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      product: { ...product, can_edit: false },
+    });
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    expect(
+      await screen.findByText(
+        /Owners and admins can start billed research runs/,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Run Researcher" }),
+    ).not.toBeInTheDocument();
   });
 
   it("validates a research URL before calling the API", async () => {

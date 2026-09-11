@@ -70,3 +70,31 @@ def test_s3_storage_requires_an_explicit_cors_origin() -> None:
             object_storage_backend="s3",
             cors_origins=[],
         )
+
+
+def test_openai_provider_requires_real_key_and_deployed_workload_identity() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    api_only = Settings(database_url=database_url, model_provider_backend="openai")
+    assert api_only.openai_api_key is None
+    with pytest.raises(ValidationError, match="placeholder"):
+        Settings(
+            database_url=database_url,
+            model_provider_backend="openai",
+            openai_api_key="test-placeholder",
+        )
+    with pytest.raises(ValidationError, match="workload identity"):
+        Settings(
+            app_env="production",
+            database_url=database_url,
+            model_provider_backend="openai",
+            openai_api_key="unit-live-shaped-credential",
+        )
+    configured = Settings(
+        app_env="production",
+        database_url=database_url,
+        model_provider_backend="openai",
+        openai_api_key="unit-live-shaped-credential",
+        agent_workload_id="kubernetes/service-account/researcher",
+    )
+    assert configured.openai_api_key is not None
+    assert "real-looking" not in repr(configured)

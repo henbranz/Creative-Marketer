@@ -143,3 +143,8 @@ Future aggregated learning may become a moat, but only when:
 - outputs pass k-anonymity/minimum cohort thresholds or equivalent privacy controls
 
 Do not implement cross-tenant learning implicitly.
+
+ResearchSnapshot is evidence-grounded Agent output, not memory, Product truth, or a validated
+Insight. Researcher V1 has empty memory scopes and performs no retrieval or write into vector
+memory. A later governed promotion workflow may convert reviewed findings into scoped, expiring
+Insights; this phase deliberately does not.

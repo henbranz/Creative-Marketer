@@ -103,3 +103,7 @@ See [`docs/11_PHASE_0_IMPLEMENTATION_PLAN.md`](docs/11_PHASE_0_IMPLEMENTATION_PL
 ## Development
 
 See [`DEVELOPMENT.md`](DEVELOPMENT.md) for prerequisites, local startup, repository layout, and the complete quality-check command set.
+
+Phase 2 introduces the first real, evidence-grounded AI vertical slice. See
+[`docs/15_AGENT_RUNTIME_AND_RESEARCHER.md`](docs/15_AGENT_RUNTIME_AND_RESEARCHER.md) for its
+provider-neutral AgentRuntime, OpenAI route, explicit bootstrap, and optional live smoke path.

@@ -18,6 +18,9 @@ export type ResearchSourceCreate = components["schemas"]["SourceCreate"];
 export type ResearchFetch = components["schemas"]["FetchResponse"];
 export type ResearchEvidence = components["schemas"]["EvidenceResponse"];
 export type ResearchManifest = components["schemas"]["ManifestResponse"];
+export type AgentRun = components["schemas"]["AgentRunResponse"];
+export type ResearchSnapshot =
+  components["schemas"]["ResearchSnapshotResponse"];
 
 export interface Session {
   readonly tenantId: string;
@@ -143,6 +146,24 @@ export const catalogApi = {
     request<ResearchManifest>(
       session,
       `/v1/products/${productId}/research-context-manifest`,
+    ),
+  startResearcher: (
+    session: Session,
+    productId: string,
+    idempotencyKey: string,
+  ) =>
+    request<AgentRun>(session, `/v1/products/${productId}/research/runs`, {
+      method: "POST",
+      body: JSON.stringify({ idempotency_key: idempotencyKey }),
+    }),
+  listResearcherRuns: (session: Session, productId: string) =>
+    request<AgentRun[]>(session, `/v1/products/${productId}/research/runs`),
+  getAgentRun: (session: Session, runId: string) =>
+    request<AgentRun>(session, `/v1/agent-runs/${runId}`),
+  listResearchSnapshots: (session: Session, productId: string) =>
+    request<ResearchSnapshot[]>(
+      session,
+      `/v1/products/${productId}/research/snapshots`,
     ),
 };
 

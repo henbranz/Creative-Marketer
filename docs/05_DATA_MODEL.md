@@ -552,6 +552,18 @@ Tenant-owned relationships must not reference a resource belonging to another te
 
 Database timestamps use timezone-aware UTC values. Transaction boundaries follow application use cases. State changes and their cross-context domain events are committed atomically through a transactional outbox.
 
+## AgentRun and ResearchSnapshot
+
+`agent_runtime.agent_runs` is the tenant-owned immutable execution envelope. It binds requested and
+resolved Agent definitions, exact version/configuration, Product snapshot, Research manifest,
+selected evidence identities, output contract, initiating User, model profile, period reservation,
+and idempotency key. Controlled lifecycle fields record claim workload, exact route/pricing,
+provider response identity, token usage, Decimal cost, result reference, and safe failure code.
+`agent_runtime.agent_budget_usage` serializes period reservations by tenant, definition, and period.
+`research.research_snapshots` stores bounded structured findings and has a unique tenant/run relation.
+All three use composite tenant relationships, forced RLS, restricted grants, and lifecycle or
+immutability triggers.
+
 ## Asset
 
 `catalog.assets` owns private binary metadata while the object store owns bytes. An Asset is
