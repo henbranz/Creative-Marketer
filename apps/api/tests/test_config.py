@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -100,3 +101,19 @@ def test_openai_provider_requires_real_key_and_deployed_workload_identity() -> N
     )
     assert configured.openai_api_key is not None
     assert "real-looking" not in repr(configured)
+
+
+def test_recovery_operator_configuration_is_paired_and_deployment_safe() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    with pytest.raises(ValidationError, match="configured together"):
+        Settings(database_url=database_url, agent_recovery_operator_id="operations/recovery")
+    with pytest.raises(ValidationError, match="configured together"):
+        Settings(database_url=database_url, agent_recovery_tenant_id=uuid4())
+    with pytest.raises(ValidationError, match="deployment-issued operator identity"):
+        Settings(
+            app_env="production",
+            database_url=database_url,
+            object_storage_backend="disabled",
+            agent_recovery_operator_id="local-recovery",
+            agent_recovery_tenant_id=uuid4(),
+        )

@@ -575,10 +575,14 @@ export interface components {
       id: string;
       /** Input Tokens */
       input_tokens: number;
+      /** Is Stranded */
+      is_stranded: boolean;
       /** Model Profile Key */
       model_profile_key: string;
       /** Model Route Version */
       model_route_version: string | null;
+      /** Operational Status */
+      operational_status: string;
       /** Output Tokens */
       output_tokens: number;
       /** Pricing Version */
@@ -597,6 +601,8 @@ export interface components {
       product_snapshot_id: string;
       /** Prompt Revision */
       prompt_revision: string;
+      /** Recovery Of Run Id */
+      recovery_of_run_id: string | null;
       /**
        * Requested Agent Definition Id
        * Format: uuid

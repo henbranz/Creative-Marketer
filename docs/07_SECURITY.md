@@ -366,3 +366,11 @@ Research evidence is carried only in a labeled untrusted-data message section. T
 no Tools or hosted search, and output must pass local closed-schema validation plus exact citation
 binding before persistence. Thus prompt text cannot grant capabilities or turn unsupported prose
 into a ResearchSnapshot.
+
+Lease expiry is not evidence that provider I/O did not occur. A stranded AgentRun is never reclaimed
+or reinferred automatically. Operator recovery uses deployment-configured tenant and workload
+identity, transaction-local RLS, exact attempt ownership, immutable Audit, and a CLI that has no HTTP
+route. A rerun closes the predecessor and creates a separately budgeted successor with frozen
+context/configuration lineage. Ambiguous provider cost remains charged as `unknown_cost` until a
+one-time append-only reconciliation records authoritative actual cost. Late workers cannot record a
+response or terminal result after recovery wins the row lock.

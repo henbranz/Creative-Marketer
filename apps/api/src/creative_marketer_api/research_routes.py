@@ -133,6 +133,9 @@ class AgentRunResponse(Contract):
     id: UUID
     product_id: UUID
     status: str
+    operational_status: str
+    is_stranded: bool
+    recovery_of_run_id: UUID | None
     requested_agent_definition_id: UUID
     resolved_agent_definition_id: UUID
     agent_version_id: UUID
@@ -283,6 +286,9 @@ def _agent_run(value: AgentRun) -> AgentRunResponse:
         id=value.id,
         product_id=value.product_id,
         status=value.status.value,
+        operational_status=value.operational_status,
+        is_stranded=value.is_stranded,
+        recovery_of_run_id=value.recovery_of_run_id,
         requested_agent_definition_id=value.requested_agent_definition_id,
         resolved_agent_definition_id=value.resolved_agent_definition_id,
         agent_version_id=value.agent_version_id,

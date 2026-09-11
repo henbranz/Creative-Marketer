@@ -66,6 +66,10 @@
             "title": "Input Tokens",
             "type": "integer"
           },
+          "is_stranded": {
+            "title": "Is Stranded",
+            "type": "boolean"
+          },
           "model_profile_key": {
             "title": "Model Profile Key",
             "type": "string"
@@ -80,6 +84,10 @@
               }
             ],
             "title": "Model Route Version"
+          },
+          "operational_status": {
+            "title": "Operational Status",
+            "type": "string"
           },
           "output_tokens": {
             "title": "Output Tokens",
@@ -113,6 +121,18 @@
           "prompt_revision": {
             "title": "Prompt Revision",
             "type": "string"
+          },
+          "recovery_of_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Of Run Id"
           },
           "requested_agent_definition_id": {
             "format": "uuid",
@@ -186,6 +206,9 @@
           "id",
           "product_id",
           "status",
+          "operational_status",
+          "is_stranded",
+          "recovery_of_run_id",
           "requested_agent_definition_id",
           "resolved_agent_definition_id",
           "agent_version_id",

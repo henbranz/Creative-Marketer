@@ -206,6 +206,9 @@ const agentRun: AgentRun = {
   id: "90000000-0000-0000-0000-000000000001",
   product_id: product.id,
   status: "SUCCEEDED",
+  operational_status: "completed",
+  is_stranded: false,
+  recovery_of_run_id: null,
   requested_agent_definition_id: "94000000-0000-0000-0000-000000000001",
   resolved_agent_definition_id: "94000000-0000-0000-0000-000000000001",
   agent_version_id: "91000000-0000-0000-0000-000000000001",
@@ -465,6 +468,32 @@ describe("Product Workspace", () => {
     expect(
       await screen.findByText("A captured product fact."),
     ).toBeInTheDocument();
+  });
+
+  it("shows stranded runs as operator-recovery work without an unsafe retry action", async () => {
+    vi.mocked(catalogApi.listResearcherRuns).mockResolvedValue([
+      {
+        ...agentRun,
+        status: "RUNNING",
+        operational_status: "recovery_required",
+        is_stranded: true,
+        completed_at: null,
+        result_ref: null,
+      },
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    expect(
+      await screen.findByText("Needs operational recovery"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/requires recovery before it can be rerun/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /retry|recover|rerun/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not expose billed Researcher start to a read-only member", async () => {

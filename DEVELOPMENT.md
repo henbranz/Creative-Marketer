@@ -193,3 +193,10 @@ need a provider key.
 The optional `RUN_OPENAI_SMOKE_TEST=1 OPENAI_API_KEY=... make researcher-live-smoke` command makes
 one billed request using a tiny synthetic fixture and validates its citations locally. It is never
 part of CI. See `docs/15_AGENT_RUNTIME_AND_RESEARCHER.md` for lifecycle and known limitations.
+
+Expired AgentRun leases are never retried automatically. To inspect or close a stranded run, set an
+explicit `AGENT_RECOVERY_TENANT_ID` and `AGENT_RECOVERY_OPERATOR_ID`, then use
+`make agent-runs-stranded`, `make agent-run-abandon RUN_ID=...`, or
+`make agent-run-rerun RUN_ID=...`. Reconcile an authoritative provider cost with
+`make agent-run-reconcile-cost RUN_ID=... ACTUAL_COST=... CURRENCY=USD`. These commands are trusted
+operator surfaces and have no HTTP equivalent. See `docs/16_AGENT_RUN_RECOVERY.md` before use.

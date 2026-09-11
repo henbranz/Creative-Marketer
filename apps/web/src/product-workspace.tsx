@@ -518,9 +518,11 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
         {runs[0] && (
           <div className="research-run-summary">
             <span className={`fetch-state ${runs[0].status.toLowerCase()}`}>
-              {runs[0].status === "PENDING"
-                ? "Queued"
-                : runs[0].status.toLowerCase()}
+              {runs[0].is_stranded
+                ? "Needs operational recovery"
+                : runs[0].status === "PENDING"
+                  ? "Queued"
+                  : runs[0].status.toLowerCase()}
             </span>
             <span>Researcher v{runs[0].agent_version_number}</span>
             <span>{runs[0].model_profile_key.replaceAll("_", " ")}</span>
@@ -529,6 +531,12 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             )}
             {runs[0].failure_code && (
               <span>{runs[0].failure_code.replaceAll("_", " ")}</span>
+            )}
+            {runs[0].is_stranded && (
+              <p>
+                This run was interrupted and requires recovery before it can be
+                rerun.
+              </p>
             )}
           </div>
         )}

@@ -47,8 +47,9 @@ IDs only.
 
 Provider replacement and route changes do not rewrite AgentVersion semantics. Citation fabrication,
 prompt-based tool escalation, cross-tenant access, and accidental duplicate active runs fail closed.
-The first version intentionally gives up autonomous loops and provider fallback. A crash after a
-provider response but before persistence can require conservative operator recovery and may cause a
-later billed re-run; exactly-once inference is not claimed. Production deployments must review the
+The first version intentionally gives up autonomous loops and provider fallback. Each logical model
+call has a durable attempt with a pre-I/O checkpoint and a response-metadata checkpoint. A crash can
+still require conservative operator recovery and may cause a later billed re-run; exactly-once
+inference is not claimed. Recovery and uncertain-cost policy are defined by ADR-027. Production deployments must review the
 provider's data handling and inject both provider and workload credentials through deployment
 secrets.

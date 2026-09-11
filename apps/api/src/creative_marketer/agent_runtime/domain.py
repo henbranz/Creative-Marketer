@@ -33,6 +33,21 @@ class AgentRunStatus(StrEnum):
     BLOCKED_BUDGET = "BLOCKED_BUDGET"
 
 
+class ModelAttemptStatus(StrEnum):
+    CLAIMED = "CLAIMED"
+    PROVIDER_STARTED = "PROVIDER_STARTED"
+    RESPONSE_RECORDED = "RESPONSE_RECORDED"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED_NO_RESPONSE = "FAILED_NO_RESPONSE"
+    UNKNOWN = "UNKNOWN"
+
+
+class RecoveryClassification(StrEnum):
+    SAFE_BEFORE_PROVIDER = "SAFE_BEFORE_PROVIDER"
+    PROVIDER_OUTCOME_UNKNOWN = "PROVIDER_OUTCOME_UNKNOWN"
+    RESPONSE_RECORDED = "RESPONSE_RECORDED"
+
+
 class FindingCategory(StrEnum):
     COMPETITOR = "competitor"
     POSITIONING = "positioning"
@@ -90,6 +105,22 @@ class AgentRunNotReady(AgentRuntimeError):
 
 class BudgetExceeded(AgentRuntimeError):
     code = "AGENT_BUDGET_EXCEEDED"
+
+
+class AgentRunRecoveryConflict(AgentRuntimeError):
+    code = "AGENT_RUN_RECOVERY_CONFLICT"
+
+
+class RecoveryAgentUnavailable(AgentRuntimeError):
+    code = "RECOVERY_AGENT_UNAVAILABLE"
+
+
+class RecoveryBlockedBudget(BudgetExceeded):
+    code = "RECOVERY_BLOCKED_BUDGET"
+
+
+class UnknownCostReconciliationConflict(AgentRuntimeError):
+    code = "UNKNOWN_COST_RECONCILIATION_CONFLICT"
 
 
 class ModelRouteUnavailable(AgentRuntimeError):
@@ -221,6 +252,111 @@ class ModelInvocationResult:
     provider: str
     model: str
     status: str = "completed"
+
+
+@dataclass(frozen=True, slots=True)
+class ModelAttempt:
+    tenant_id: UUID
+    agent_run_id: UUID
+    attempt_number: int
+    workload_id: str
+    model_route_version: str
+    pricing_version: str
+    provider: str
+    model: str
+    claimed_at: datetime
+    lease_expires_at: datetime
+    id: UUID = field(default_factory=uuid4)
+    status: ModelAttemptStatus = ModelAttemptStatus.CLAIMED
+    provider_started_at: datetime | None = None
+    response_recorded_at: datetime | None = None
+    finished_at: datetime | None = None
+    provider_response_id: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost: Decimal = Decimal("0")
+    unknown_cost: Decimal = Decimal("0")
+    failure_code: str | None = None
+
+    def __post_init__(self) -> None:
+        if (
+            self.attempt_number < 1
+            or not self.workload_id.strip()
+            or not self.model_route_version.strip()
+            or not self.pricing_version.strip()
+            or not self.provider.strip()
+            or not self.model.strip()
+            or self.lease_expires_at <= self.claimed_at
+        ):
+            raise ValueError("model attempt identity and lease must be explicit")
+        if min(self.input_tokens, self.output_tokens, self.total_tokens) < 0:
+            raise ValueError("model attempt usage cannot be negative")
+        if self.total_tokens < self.input_tokens + self.output_tokens:
+            raise ValueError("model attempt total usage is inconsistent")
+        if self.estimated_cost < 0 or self.unknown_cost < 0:
+            raise ValueError("model attempt cost cannot be negative")
+        pre_provider = self.status is ModelAttemptStatus.CLAIMED
+        provider_active = self.status is ModelAttemptStatus.PROVIDER_STARTED
+        response_recorded = self.status is ModelAttemptStatus.RESPONSE_RECORDED
+        succeeded = self.status is ModelAttemptStatus.SUCCEEDED
+        failed_no_response = self.status is ModelAttemptStatus.FAILED_NO_RESPONSE
+        unknown = self.status is ModelAttemptStatus.UNKNOWN
+        valid_lifecycle = (
+            (
+                pre_provider
+                and self.provider_started_at is None
+                and self.response_recorded_at is None
+                and self.finished_at is None
+            )
+            or (
+                provider_active
+                and self.provider_started_at is not None
+                and self.response_recorded_at is None
+                and self.finished_at is None
+            )
+            or (
+                response_recorded
+                and self.provider_started_at is not None
+                and self.response_recorded_at is not None
+                and self.finished_at is None
+            )
+            or (
+                succeeded
+                and self.provider_started_at is not None
+                and self.response_recorded_at is not None
+                and self.finished_at is not None
+            )
+            or (
+                failed_no_response
+                and self.provider_started_at is None
+                and self.response_recorded_at is None
+                and self.finished_at is not None
+            )
+            or (
+                unknown
+                and self.provider_started_at is not None
+                and self.response_recorded_at is None
+                and self.finished_at is not None
+            )
+        )
+        if not valid_lifecycle:
+            raise ValueError("model attempt lifecycle timestamps are inconsistent")
+
+
+@dataclass(frozen=True, slots=True)
+class StrandedAgentRun:
+    run: AgentRun
+    attempt: ModelAttempt
+    classification: RecoveryClassification
+
+
+def classify_stranded_attempt(attempt: ModelAttempt) -> RecoveryClassification:
+    if attempt.status is ModelAttemptStatus.CLAIMED:
+        return RecoveryClassification.SAFE_BEFORE_PROVIDER
+    if attempt.status is ModelAttemptStatus.RESPONSE_RECORDED:
+        return RecoveryClassification.RESPONSE_RECORDED
+    return RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +509,7 @@ class AgentRun:
     reserved_cost: Decimal
     currency: str
     idempotency_key: str
+    recovery_of_run_id: UUID | None = None
     id: UUID = field(default_factory=uuid4)
     status: AgentRunStatus = AgentRunStatus.PENDING
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -394,6 +531,8 @@ class AgentRun:
     provider_response_id: str | None = None
     result_ref: str | None = None
     failure_code: str | None = None
+    operational_status: str = "normal"
+    is_stranded: bool = False
 
     def __post_init__(self) -> None:
         for value in (
@@ -408,6 +547,12 @@ class AgentRun:
             raise ValueError("AgentRun requires frozen selected evidence references")
         if self.max_total_tokens < 0:
             raise ValueError("AgentRun token budget cannot be negative")
+        if self.recovery_of_run_id == self.id:
+            raise ValueError("AgentRun recovery lineage cannot point to itself")
+        if self.operational_status not in {"normal", "recovery_required"} or self.is_stranded != (
+            self.operational_status == "recovery_required"
+        ):
+            raise ValueError("AgentRun operational state is inconsistent")
 
 
 def parse_research_output(

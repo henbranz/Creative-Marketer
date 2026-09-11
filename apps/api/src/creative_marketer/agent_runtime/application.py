@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from time import monotonic
 from types import TracebackType
 from typing import Protocol
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from jsonschema import Draft202012Validator
 
@@ -38,10 +38,12 @@ from .domain import (
     AgentRunDenied,
     AgentRunNotFound,
     AgentRunNotReady,
+    AgentRunRecoveryConflict,
     AgentRunStatus,
     AgentRuntimeError,
     BudgetExceeded,
     EvidenceBlockRef,
+    ModelAttempt,
     ModelCapabilityUnavailable,
     ModelContext,
     ModelInvocation,
@@ -50,7 +52,12 @@ from .domain import (
     ModelProviderError,
     ModelRoute,
     ModelRouteUnavailable,
+    RecoveryAgentUnavailable,
+    RecoveryBlockedBudget,
+    RecoveryClassification,
     ResearchSnapshot,
+    StrandedAgentRun,
+    UnknownCostReconciliationConflict,
     canonical_digest,
     parse_research_output,
 )
@@ -60,6 +67,7 @@ MAX_BLOCKS_PER_SOURCE = 10
 MAX_EVIDENCE_BLOCKS = 120
 MAX_EVIDENCE_TEXT_CHARACTERS = 120_000
 MAX_PROVIDER_TRANSPORT_ATTEMPTS = 2
+MODEL_ATTEMPT_LEASE = timedelta(minutes=15)
 RESEARCH_CONTRACT_KEY = "research.research_snapshot"
 RESEARCH_CONTRACT_VERSION = 1
 _CATEGORY_PRIORITY = {
@@ -153,6 +161,17 @@ class WorkloadIdentityProvider(Protocol):
     async def current(self) -> WorkloadIdentity: ...
 
 
+@dataclass(frozen=True, slots=True)
+class RecoveryOperator:
+    tenant_id: UUID
+    workload: WorkloadIdentity
+    correlation_id: UUID
+
+
+class RecoveryOperatorProvider(Protocol):
+    async def current(self) -> RecoveryOperator: ...
+
+
 class AgentRunRepository(Protocol):
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None: ...
     async def prepare_researcher(self, product_id: UUID) -> ResearcherPreparation | None: ...
@@ -162,6 +181,9 @@ class AgentRunRepository(Protocol):
     async def add(self, run: AgentRun) -> bool: ...
     async def get(self, run_id: UUID, *, for_update: bool = False) -> AgentRun | None: ...
     async def list_for_product(self, product_id: UUID) -> tuple[AgentRun, ...]: ...
+    async def lock_period_budgets(
+        self, definition_id: UUID, period_starts: tuple[datetime, ...]
+    ) -> None: ...
     async def reserve_period_budget(
         self,
         *,
@@ -173,7 +195,27 @@ class AgentRunRepository(Protocol):
         reserve_cost: Decimal,
         currency: str,
     ) -> None: ...
-    async def claim(self, run_id: UUID, workload_id: str, route: ModelRoute) -> AgentRun | None: ...
+    async def claim(
+        self,
+        run_id: UUID,
+        workload_id: str,
+        route: ModelRoute,
+        lease_expires_at: datetime,
+    ) -> tuple[AgentRun, ModelAttempt] | None: ...
+    async def mark_provider_started(
+        self, run_id: UUID, attempt_id: UUID, workload_id: str
+    ) -> ModelAttempt: ...
+    async def record_provider_response(
+        self,
+        run_id: UUID,
+        attempt_id: UUID,
+        workload_id: str,
+        result: ModelInvocationResult,
+        cost: Decimal,
+    ) -> ModelAttempt: ...
+    async def mark_attempt_unknown(
+        self, run_id: UUID, attempt_id: UUID, workload_id: str, failure_code: str
+    ) -> ModelAttempt: ...
     async def resolve_context(self, run: AgentRun) -> ModelContext: ...
     async def finish_success(
         self,
@@ -181,6 +223,8 @@ class AgentRunRepository(Protocol):
         result: ModelInvocationResult,
         snapshot: ResearchSnapshot,
         cost: Decimal,
+        attempt_id: UUID,
+        workload_id: str,
     ) -> AgentRun: ...
     async def finish_failure(
         self,
@@ -189,7 +233,30 @@ class AgentRunRepository(Protocol):
         failure_code: str,
         result: ModelInvocationResult | None = None,
         cost: Decimal = Decimal("0"),
+        attempt_id: UUID,
+        workload_id: str,
     ) -> AgentRun: ...
+    async def operational_status(self, run: AgentRun, now: datetime) -> AgentRun: ...
+    async def find_stranded(self, now: datetime) -> tuple[StrandedAgentRun, ...]: ...
+    async def get_stranded(
+        self, run_id: UUID, now: datetime, *, for_update: bool = False
+    ) -> StrandedAgentRun | None: ...
+    async def recovery_configuration(self, run: AgentRun) -> AgentVersionConfiguration | None: ...
+    async def abandon_stranded(
+        self,
+        stranded: StrandedAgentRun,
+        *,
+        workload_id: str,
+        failure_code: str,
+    ) -> AgentRun: ...
+    async def add_recovery_run(self, run: AgentRun) -> bool: ...
+    async def reconcile_unknown_cost(
+        self,
+        stranded_run: AgentRun,
+        *,
+        actual_cost: Decimal,
+        workload_id: str,
+    ) -> None: ...
     async def get_snapshot(self, snapshot_id: UUID) -> ResearchSnapshot | None: ...
     async def list_snapshots(self, product_id: UUID) -> tuple[ResearchSnapshot, ...]: ...
     async def snapshot_freshness(self, snapshot: ResearchSnapshot) -> str: ...
@@ -510,11 +577,17 @@ class AgentRunService:
             run = await uow.runs.get(run_id)
             if run is None:
                 raise AgentRunNotFound("AgentRun not found")
-            return run
+            return await uow.runs.operational_status(run, datetime.now(UTC))
 
     async def list_runs(self, context: ExecutionContext, product_id: UUID) -> tuple[AgentRun, ...]:
         async with self.uow_factory(context.tenant_id) as uow:
-            return await uow.runs.list_for_product(product_id)
+            now = datetime.now(UTC)
+            return tuple(
+                [
+                    await uow.runs.operational_status(run, now)
+                    for run in await uow.runs.list_for_product(product_id)
+                ]
+            )
 
     async def get_snapshot(self, context: ExecutionContext, snapshot_id: UUID) -> ResearchSnapshot:
         async with self.uow_factory(context.tenant_id) as uow:
@@ -540,8 +613,10 @@ class AgentRunService:
         timer = monotonic()
         run: AgentRun | None = None
         result: ModelInvocationResult | None = None
+        attempt: ModelAttempt | None = None
         actual_cost = Decimal("0")
         claim_committed = False
+        provider_started_committed = False
         try:
             async with self.uow_factory(tenant_id) as uow:
                 pending = await uow.runs.get(run_id, for_update=True)
@@ -550,12 +625,18 @@ class AgentRunService:
                 route = self.router.resolve(
                     pending.model_profile_key, ("text", "reasoning", "structured_output")
                 )
-                run = await uow.runs.claim(run_id, workload.workload_id, route)
-                if run is None:
+                claim = await uow.runs.claim(
+                    run_id,
+                    workload.workload_id,
+                    route,
+                    datetime.now(UTC) + MODEL_ATTEMPT_LEASE,
+                )
+                if claim is None:
                     existing = await uow.runs.get(run_id)
                     if existing is not None and existing.status is AgentRunStatus.SUCCEEDED:
                         return existing
                     raise AgentRunNotReady("AgentRun cannot be claimed")
+                run, attempt = claim
                 context = await uow.runs.resolve_context(run)
                 await self._append_workload_started(uow, run, workload)
                 await uow.commit()
@@ -573,6 +654,12 @@ class AgentRunService:
                 max_output_tokens=route.max_output_tokens,
                 reasoning_effort=route.reasoning_effort,
             )
+            async with self.uow_factory(tenant_id) as uow:
+                attempt = await uow.runs.mark_provider_started(
+                    run.id, attempt.id, workload.workload_id
+                )
+                await uow.commit()
+                provider_started_committed = True
             with self.telemetry.span(
                 "model.invoke",
                 {
@@ -582,7 +669,7 @@ class AgentRunService:
                     "model": route.model,
                 },
             ) as span:
-                for attempt in range(1, MAX_PROVIDER_TRANSPORT_ATTEMPTS + 1):
+                for transport_attempt in range(1, MAX_PROVIDER_TRANSPORT_ATTEMPTS + 1):
                     try:
                         result = await provider.generate_structured(invocation)
                         break
@@ -595,17 +682,29 @@ class AgentRunService:
                                 "result": error.code.lower(),
                             },
                         )
-                        if not error.retryable or attempt == MAX_PROVIDER_TRANSPORT_ATTEMPTS:
+                        if (
+                            not error.retryable
+                            or transport_attempt == MAX_PROVIDER_TRANSPORT_ATTEMPTS
+                        ):
                             raise
                         # Only transport outcomes with no response usage are retried. These are
                         # attempts within one bounded logical model call, not an autonomous loop.
-                        await asyncio.sleep(0.25 * attempt)
+                        await asyncio.sleep(0.25 * transport_attempt)
                     except Exception as error:
                         span.record_error("MODEL_PROVIDER_UNAVAILABLE")
                         raise ModelProviderError("model provider failed") from error
                 else:  # pragma: no cover - the bounded loop either returns or raises
                     raise ModelProviderError("model provider exhausted attempts")
             actual_cost = route.pricing.cost(result.usage.input_tokens, result.usage.output_tokens)
+            async with self.uow_factory(tenant_id) as uow:
+                attempt = await uow.runs.record_provider_response(
+                    run.id,
+                    attempt.id,
+                    workload.workload_id,
+                    result,
+                    actual_cost,
+                )
+                await uow.commit()
             if result.provider != route.provider or result.model != route.model:
                 raise ModelRouteUnavailable(
                     "provider response did not match the frozen model route"
@@ -621,7 +720,14 @@ class AgentRunService:
                 result.output, run=run, selected_blocks=context.evidence_blocks
             )
             async with self.uow_factory(tenant_id) as uow:
-                completed = await uow.runs.finish_success(run, result, snapshot, actual_cost)
+                completed = await uow.runs.finish_success(
+                    run,
+                    result,
+                    snapshot,
+                    actual_cost,
+                    attempt.id,
+                    workload.workload_id,
+                )
                 await self._append_workload_completion(uow, completed, workload, snapshot)
                 await uow.commit()
             self.telemetry.count(
@@ -650,15 +756,29 @@ class AgentRunService:
             )
             return completed
         except Exception as error:
-            if run is not None and claim_committed:
+            if run is not None and attempt is not None and claim_committed:
                 code = (
                     error.code
                     if isinstance(error, (AgentRuntimeError, ModelProviderError))
                     else "MODEL_INVALID_OUTPUT"
                 )
+                if result is None and provider_started_committed:
+                    async with self.uow_factory(tenant_id) as uow:
+                        await uow.runs.mark_attempt_unknown(
+                            run.id, attempt.id, workload.workload_id, code
+                        )
+                        await uow.commit()
+                    raise AgentRunNotReady(
+                        "provider outcome is ambiguous and requires operator recovery"
+                    ) from error
                 async with self.uow_factory(tenant_id) as uow:
                     failed = await uow.runs.finish_failure(
-                        run, failure_code=code, result=result, cost=actual_cost
+                        run,
+                        failure_code=code,
+                        result=result,
+                        cost=actual_cost,
+                        attempt_id=attempt.id,
+                        workload_id=workload.workload_id,
                     )
                     await self._append_workload_completion(uow, failed, workload, None)
                     await uow.commit()
@@ -807,3 +927,277 @@ class AgentRunService:
                     payload_schema_digest=contracts.schema_digest("research.snapshot.created.v1"),
                 )
             )
+
+
+@dataclass(slots=True)
+class AgentRunRecoveryService:
+    """Trusted operator use cases for explicit, conservative model-run recovery."""
+
+    uow_factory: AgentRuntimeUnitOfWorkFactory
+    router: ModelRouter
+    operator_provider: RecoveryOperatorProvider
+    telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
+    clock: Callable[[], datetime] = field(default_factory=lambda: lambda: datetime.now(UTC))
+
+    async def find_stranded(self) -> tuple[StrandedAgentRun, ...]:
+        operator = await self.operator_provider.current()
+        with self.telemetry.span("agent_recovery.inspect", {}):
+            async with self.uow_factory(operator.tenant_id) as uow:
+                values = await uow.runs.find_stranded(self.clock())
+        for value in values:
+            self.telemetry.gauge(
+                "agent_runtime.stranded_runs",
+                1,
+                {
+                    "recovery.classification": value.classification.value.lower(),
+                    "provider": value.attempt.provider,
+                },
+            )
+        return values
+
+    async def abandon(self, run_id: UUID) -> AgentRun:
+        operator = await self.operator_provider.current()
+        with self.telemetry.span("agent_recovery.abandon", {}) as span:
+            async with self.uow_factory(operator.tenant_id) as uow:
+                stranded = await uow.runs.get_stranded(run_id, self.clock(), for_update=True)
+                if stranded is None:
+                    raise AgentRunRecoveryConflict("run is not currently stranded")
+                failure_code = _recovery_failure_code(stranded.classification)
+                closed = await uow.runs.abandon_stranded(
+                    stranded,
+                    workload_id=operator.workload.workload_id,
+                    failure_code=failure_code,
+                )
+                await uow.audit.append(
+                    _recovery_audit(
+                        operator,
+                        closed,
+                        action="agent.run.abandoned",
+                        reason_code=failure_code,
+                        metadata={
+                            "model_attempt_id": str(stranded.attempt.id),
+                            "classification": stranded.classification.value,
+                            "provider": stranded.attempt.provider,
+                            "model": stranded.attempt.model,
+                            "cost_category": _cost_category(stranded.classification),
+                        },
+                    )
+                )
+                await uow.commit()
+            span.set_attribute("result", "abandoned")
+        self.telemetry.count(
+            "agent_runtime.recovery_actions",
+            attributes={"action": "abandon", "result": "succeeded"},
+        )
+        return closed
+
+    async def rerun_as_new(self, run_id: UUID) -> AgentRun:
+        operator = await self.operator_provider.current()
+        with self.telemetry.span("agent_recovery.rerun", {}) as span:
+            async with self.uow_factory(operator.tenant_id) as uow:
+                stranded = await uow.runs.get_stranded(run_id, self.clock(), for_update=True)
+                if stranded is None:
+                    raise AgentRunRecoveryConflict("run is not currently stranded")
+                original = stranded.run
+                cfg = await uow.runs.recovery_configuration(original)
+                if cfg is None:
+                    raise RecoveryAgentUnavailable("bound Agent is no longer available")
+                route = self.router.resolve(
+                    original.model_profile_key, cfg.model_policy.required_capabilities
+                )
+                if (
+                    route.route_version != original.resolved_model_route_version
+                    or route.pricing.version != original.pricing_version
+                    or route.provider != original.resolved_provider
+                    or route.model != original.resolved_model
+                ):
+                    raise ModelRouteUnavailable("historical model route is unavailable")
+                failure_code = _recovery_failure_code(stranded.classification)
+                recovered_at = self.clock()
+                recovery_period_start = _period_start(recovered_at, cfg.period_budget_policy.period)
+                await uow.runs.lock_period_budgets(
+                    original.requested_agent_definition_id,
+                    (original.period_start, recovery_period_start),
+                )
+                await uow.runs.abandon_stranded(
+                    stranded,
+                    workload_id=operator.workload.workload_id,
+                    failure_code=failure_code,
+                )
+                successor = replace(
+                    original,
+                    id=uuid4(),
+                    recovery_of_run_id=original.id,
+                    idempotency_key=f"recovery:{original.id}",
+                    correlation_id=operator.correlation_id,
+                    initiated_by_actor_kind=ActorKind.WORKLOAD.value,
+                    initiated_by_actor_id=operator.workload.actor_id,
+                    period_start=recovery_period_start,
+                    status=AgentRunStatus.PENDING,
+                    created_at=recovered_at,
+                    started_at=None,
+                    completed_at=None,
+                    executed_by_workload_id=None,
+                    resolved_provider=None,
+                    resolved_model=None,
+                    resolved_model_route_version=None,
+                    pricing_version=None,
+                    reasoning_effort=None,
+                    max_output_tokens=None,
+                    model_call_count=0,
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    estimated_cost=Decimal("0"),
+                    provider_response_id=None,
+                    result_ref=None,
+                    failure_code=None,
+                    operational_status="normal",
+                    is_stranded=False,
+                )
+                try:
+                    await uow.runs.reserve_period_budget(
+                        run_id=successor.id,
+                        definition_id=successor.requested_agent_definition_id,
+                        period_start=successor.period_start,
+                        max_runs=cfg.period_budget_policy.max_runs,
+                        max_cost=cfg.period_budget_policy.max_cost,
+                        reserve_cost=successor.reserved_cost,
+                        currency=successor.currency,
+                    )
+                except BudgetExceeded as error:
+                    raise RecoveryBlockedBudget("recovery requires a fresh budget") from error
+                if not await uow.runs.add_recovery_run(successor):
+                    raise AgentRunRecoveryConflict("run already has a recovery successor")
+                await uow.audit.append(
+                    _recovery_audit(
+                        operator,
+                        original,
+                        action="agent.run.recovery_requested",
+                        reason_code=failure_code,
+                        metadata={
+                            "model_attempt_id": str(stranded.attempt.id),
+                            "recovery_run_id": str(successor.id),
+                            "classification": stranded.classification.value,
+                            "cost_category": _cost_category(stranded.classification),
+                        },
+                    )
+                )
+                contracts = EventContractRegistry()
+                payload: dict[str, object] = {
+                    "agent_run_id": str(successor.id),
+                    "product_id": str(successor.product_id),
+                    "requested_agent_definition_id": str(successor.requested_agent_definition_id),
+                    "agent_version_id": str(successor.agent_version_id),
+                    "product_snapshot_digest": successor.product_snapshot_digest,
+                    "research_context_digest": successor.research_context_digest,
+                    "context_digest": successor.context_digest,
+                }
+                await uow.outbox.append(
+                    DomainEvent(
+                        event_type="agent.run.requested.v1",
+                        schema_version=1,
+                        scope_kind=EventScopeKind.TENANT,
+                        tenant_id=successor.tenant_id,
+                        aggregate_type="agent_run",
+                        aggregate_id=successor.id,
+                        occurred_at=successor.created_at,
+                        actor_kind=ActorKind.WORKLOAD,
+                        actor_id=operator.workload.actor_id,
+                        agent_definition_id=successor.requested_agent_definition_id,
+                        agent_version_id=successor.agent_version_id,
+                        agent_run_id=successor.id,
+                        correlation_id=successor.correlation_id,
+                        causation_id=original.id,
+                        payload=payload,
+                        payload_schema_digest=contracts.schema_digest("agent.run.requested.v1"),
+                    )
+                )
+                await uow.commit()
+            span.set_attribute("result", "requested")
+        self.telemetry.count(
+            "agent_runtime.recovery_actions",
+            attributes={"action": "rerun", "result": "succeeded"},
+        )
+        return successor
+
+    async def reconcile_unknown_cost(
+        self, run_id: UUID, *, actual_cost: Decimal, currency: str
+    ) -> None:
+        operator = await self.operator_provider.current()
+        if actual_cost < 0 or currency != currency.upper() or len(currency) != 3:
+            raise ValueError("authoritative cost and currency must be valid")
+        with self.telemetry.span("agent_recovery.cost_reconcile", {}) as span:
+            async with self.uow_factory(operator.tenant_id) as uow:
+                run = await uow.runs.get(run_id, for_update=True)
+                if run is None:
+                    raise AgentRunNotFound("AgentRun not found")
+                if run.currency != currency:
+                    raise UnknownCostReconciliationConflict("currency does not match AgentRun")
+                await uow.runs.reconcile_unknown_cost(
+                    run,
+                    actual_cost=actual_cost,
+                    workload_id=operator.workload.workload_id,
+                )
+                await uow.audit.append(
+                    _recovery_audit(
+                        operator,
+                        run,
+                        action="agent.run.unknown_cost_reconciled",
+                        metadata={
+                            "actual_cost": str(actual_cost),
+                            "currency": currency,
+                            "cost_category": "reconciled",
+                        },
+                    )
+                )
+                await uow.commit()
+            span.set_attribute("result", "reconciled")
+        self.telemetry.gauge(
+            "agent_runtime.unknown_cost",
+            float(actual_cost),
+            {"result": "reconciled", "provider": run.resolved_provider or "unknown"},
+        )
+
+
+def _recovery_failure_code(classification: RecoveryClassification) -> str:
+    return {
+        RecoveryClassification.SAFE_BEFORE_PROVIDER: "STRANDED_BEFORE_PROVIDER",
+        RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN: "STRANDED_PROVIDER_OUTCOME_UNKNOWN",
+        RecoveryClassification.RESPONSE_RECORDED: "STRANDED_RESPONSE_RECORDED",
+    }[classification]
+
+
+def _cost_category(classification: RecoveryClassification) -> str:
+    return {
+        RecoveryClassification.SAFE_BEFORE_PROVIDER: "released",
+        RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN: "unknown",
+        RecoveryClassification.RESPONSE_RECORDED: "actual",
+    }[classification]
+
+
+def _recovery_audit(
+    operator: RecoveryOperator,
+    run: AgentRun,
+    *,
+    action: str,
+    metadata: Mapping[str, str],
+    reason_code: str | None = None,
+) -> AuditRecord:
+    return AuditRecord(
+        scope_kind=AuditScopeKind.TENANT,
+        tenant_id=run.tenant_id,
+        actor_kind=AuditActorKind.WORKLOAD,
+        actor_id=operator.workload.workload_id,
+        action=action,
+        outcome=AuditOutcome.SUCCESS,
+        reason_code=reason_code,
+        resource_type="agent_run",
+        resource_id=str(run.id),
+        agent_definition_id=run.requested_agent_definition_id,
+        agent_version_id=run.agent_version_id,
+        agent_run_id=run.id,
+        correlation_id=operator.correlation_id,
+        environment=operator.workload.environment,
+        safe_metadata=safe_metadata(metadata),
+    )

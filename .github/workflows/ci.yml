@@ -57,6 +57,14 @@ jobs:
       - run: uv run alembic upgrade 20260905_0001
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.users (id, external_identity_issuer, external_identity_subject, email, normalized_email, status) VALUES ('00000000-0000-0000-0000-000000000003', 'https://legacy.example', 'LegacySubject', 'legacy@example.test', 'legacy@example.test', 'active')"
       - run: uv run alembic upgrade head
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_agent_recovery_lossy_downgrade.sql
+      - name: Verify lossy AgentRun recovery downgrade fails closed
+        run: |
+          if uv run alembic downgrade 20260911_0015; then
+            echo "lossy AgentRun recovery downgrade unexpectedly succeeded" >&2
+            exit 1
+          fi
+      - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "DELETE FROM agent_runtime.agent_budget_usage WHERE tenant_id='00000000-0000-0000-0000-000000000016'; DELETE FROM agent_governance.agent_definitions WHERE id='00000000-0000-0000-0000-000000000016'; DELETE FROM identity.tenants WHERE id='00000000-0000-0000-0000-000000000016'"
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_research_lossy_downgrade.sql
       - name: Verify lossy Research evidence downgrade fails closed
         run: |

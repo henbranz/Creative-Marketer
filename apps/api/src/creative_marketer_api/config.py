@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     model_provider_backend: Literal["disabled", "openai"] = "disabled"
     openai_api_key: SecretStr | None = None
     agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
+    agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
+    agent_recovery_tenant_id: UUID | None = None
 
     @model_validator(mode="after")
     def reject_development_identity_in_deployed_environments(self) -> "Settings":
@@ -76,6 +78,14 @@ class Settings(BaseSettings):
             and self.agent_workload_id.startswith("local-")
         ):
             raise ValueError("deployed Agent workers require deployment-issued workload identity")
+        if (self.agent_recovery_operator_id is None) != (self.agent_recovery_tenant_id is None):
+            raise ValueError("recovery operator identity and tenant must be configured together")
+        if (
+            self.app_env in {"staging", "production"}
+            and self.agent_recovery_operator_id is not None
+            and self.agent_recovery_operator_id.startswith("local-")
+        ):
+            raise ValueError("deployed recovery requires deployment-issued operator identity")
         return self
 
 

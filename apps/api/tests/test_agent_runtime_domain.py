@@ -17,6 +17,7 @@ from creative_marketer.agent_runtime.domain import (
     FindingCategory,
     InvalidModelOutput,
     InvalidResearchCitation,
+    ModelAttempt,
     ModelCapabilityUnavailable,
     ModelContext,
     ModelPricing,
@@ -247,6 +248,31 @@ def test_runtime_entities_reject_tampering() -> None:
         replace(run(), selected_evidence=())
     with pytest.raises(ValueError):
         replace(run(), max_total_tokens=-1)
+    now = datetime.now(UTC)
+    attempt = ModelAttempt(
+        tenant_id=uuid4(),
+        agent_run_id=uuid4(),
+        attempt_number=1,
+        workload_id="worker",
+        model_route_version="route-v1",
+        pricing_version="pricing-v1",
+        provider="provider",
+        model="model",
+        claimed_at=now,
+        lease_expires_at=now + timedelta(minutes=15),
+    )
+    with pytest.raises(ValueError):
+        replace(attempt, lease_expires_at=now)
+    with pytest.raises(ValueError):
+        replace(attempt, input_tokens=-1)
+    with pytest.raises(ValueError):
+        replace(attempt, input_tokens=1, total_tokens=0)
+    with pytest.raises(ValueError):
+        replace(attempt, unknown_cost=Decimal("-0.01"))
+    with pytest.raises(ValueError):
+        replace(attempt, status="PROVIDER_STARTED")
+    with pytest.raises(ValueError):
+        replace(run(), is_stranded=True)
 
 
 def test_research_snapshot_rejects_duplicate_unbounded_and_tampered_content() -> None:

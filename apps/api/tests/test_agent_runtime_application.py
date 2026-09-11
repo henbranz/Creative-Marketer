@@ -1,7 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,assignment,index"
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -15,9 +15,11 @@ from creative_marketer.agent_governance.domain import (
     RunBudgetPolicy,
 )
 from creative_marketer.agent_runtime.application import (
+    AgentRunRecoveryService,
     AgentRunService,
     ModelProviderRegistry,
     ModelRouter,
+    RecoveryOperator,
     ResearcherPreparation,
     ResolvedResearcher,
     WorkloadIdentity,
@@ -28,14 +30,22 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunDenied,
     AgentRunNotFound,
     AgentRunNotReady,
+    AgentRunRecoveryConflict,
     AgentRunStatus,
     BudgetExceeded,
+    ModelAttempt,
+    ModelAttemptStatus,
     ModelInvocationResult,
     ModelRateLimited,
     ModelRefusal,
     ModelRouteUnavailable,
     ModelTimeout,
     ModelUsage,
+    RecoveryAgentUnavailable,
+    RecoveryBlockedBudget,
+    StrandedAgentRun,
+    UnknownCostReconciliationConflict,
+    classify_stranded_attempt,
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
 from creative_marketer.events.domain import event_sha256_v1
@@ -147,7 +157,11 @@ class MemoryRepository:
         self.prepared = prepared
         self.runs = {}
         self.snapshots = {}
+        self.attempts = {}
         self.reservations = []
+        self.reconciliations = []
+        self.agent_available = True
+        self.budget_available = True
 
     async def get_by_idempotency(self, key):
         return next((run for run in self.runs.values() if run.idempotency_key == key), None)
@@ -177,10 +191,15 @@ class MemoryRepository:
     async def list_for_product(self, product_id):
         return tuple(value for value in self.runs.values() if value.product_id == product_id)
 
+    async def lock_period_budgets(self, definition_id, period_starts):
+        return None
+
     async def reserve_period_budget(self, **values):
+        if not self.budget_available:
+            raise BudgetExceeded("period budget exhausted")
         self.reservations.append(values)
 
-    async def claim(self, run_id, workload_id, model_route):
+    async def claim(self, run_id, workload_id, model_route, lease_expires_at):
         value = self.runs[run_id]
         if value.status is not AgentRunStatus.PENDING:
             return None
@@ -198,13 +217,71 @@ class MemoryRepository:
             model_call_count=1,
         )
         self.runs[run_id] = claimed
-        return claimed
+        attempt = ModelAttempt(
+            tenant_id=claimed.tenant_id,
+            agent_run_id=claimed.id,
+            attempt_number=1,
+            workload_id=workload_id,
+            model_route_version=model_route.route_version,
+            pricing_version=model_route.pricing.version,
+            provider=model_route.provider,
+            model=model_route.model,
+            claimed_at=claimed.started_at,
+            lease_expires_at=lease_expires_at,
+        )
+        self.attempts[attempt.id] = attempt
+        return claimed, attempt
+
+    async def mark_provider_started(self, run_id, attempt_id, workload_id):
+        attempt = self.attempts[attempt_id]
+        assert attempt.agent_run_id == run_id and attempt.workload_id == workload_id
+        value = replace(
+            attempt,
+            status=ModelAttemptStatus.PROVIDER_STARTED,
+            provider_started_at=datetime.now(UTC),
+        )
+        self.attempts[attempt_id] = value
+        return value
+
+    async def record_provider_response(self, run_id, attempt_id, workload_id, result, cost):
+        attempt = self.attempts[attempt_id]
+        assert attempt.agent_run_id == run_id and attempt.workload_id == workload_id
+        value = replace(
+            attempt,
+            status=ModelAttemptStatus.RESPONSE_RECORDED,
+            response_recorded_at=datetime.now(UTC),
+            provider_response_id=result.provider_response_id,
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            total_tokens=result.usage.total_tokens,
+            estimated_cost=cost,
+        )
+        self.attempts[attempt_id] = value
+        return value
+
+    async def mark_attempt_unknown(self, run_id, attempt_id, workload_id, failure_code):
+        attempt = self.attempts[attempt_id]
+        assert attempt.agent_run_id == run_id and attempt.workload_id == workload_id
+        value = replace(
+            attempt,
+            status=ModelAttemptStatus.UNKNOWN,
+            finished_at=datetime.now(UTC),
+            unknown_cost=self.runs[run_id].reserved_cost,
+            failure_code=failure_code,
+        )
+        self.attempts[attempt_id] = value
+        return value
 
     async def resolve_context(self, run):
         blocks = select_evidence_blocks(self.prepared.evidence)
         return build_context(self.prepared, blocks)
 
-    async def finish_success(self, run, result, snapshot, cost):
+    async def finish_success(self, run, result, snapshot, cost, attempt_id, workload_id):
+        attempt = self.attempts[attempt_id]
+        assert attempt.workload_id == workload_id
+        self.attempts[attempt_id] = replace(
+            attempt, status=ModelAttemptStatus.SUCCEEDED, finished_at=datetime.now(UTC)
+        )
         value = replace(
             run,
             status=AgentRunStatus.SUCCEEDED,
@@ -220,7 +297,28 @@ class MemoryRepository:
         self.snapshots[snapshot.id] = snapshot
         return value
 
-    async def finish_failure(self, run, *, failure_code, result=None, cost=Decimal("0")):
+    async def finish_failure(
+        self,
+        run,
+        *,
+        failure_code,
+        result=None,
+        cost=Decimal("0"),
+        attempt_id,
+        workload_id,
+    ):
+        attempt = self.attempts[attempt_id]
+        assert attempt.workload_id == workload_id
+        self.attempts[attempt_id] = replace(
+            attempt,
+            status=(
+                ModelAttemptStatus.SUCCEEDED
+                if result is not None
+                else ModelAttemptStatus.FAILED_NO_RESPONSE
+            ),
+            finished_at=datetime.now(UTC),
+            failure_code=failure_code,
+        )
         usage = result.usage if result else ModelUsage(0, 0, 0)
         value = replace(
             run,
@@ -243,6 +341,90 @@ class MemoryRepository:
 
     async def snapshot_freshness(self, snapshot):
         return "current"
+
+    async def operational_status(self, run, now):
+        attempt = next(
+            (item for item in self.attempts.values() if item.agent_run_id == run.id), None
+        )
+        return (
+            replace(run, operational_status="recovery_required", is_stranded=True)
+            if attempt is not None
+            and run.status is AgentRunStatus.RUNNING
+            and attempt.lease_expires_at <= now
+            else run
+        )
+
+    async def get_stranded(self, run_id, now, *, for_update=False):
+        run = self.runs.get(run_id)
+        attempt = next(
+            (item for item in self.attempts.values() if item.agent_run_id == run_id), None
+        )
+        if (
+            run is None
+            or attempt is None
+            or run.status is not AgentRunStatus.RUNNING
+            or attempt.lease_expires_at > now
+        ):
+            return None
+        return StrandedAgentRun(run, attempt, classify_stranded_attempt(attempt))
+
+    async def find_stranded(self, now):
+        values = []
+        for run_id in self.runs:
+            stranded = await self.get_stranded(run_id, now)
+            if stranded is not None:
+                values.append(stranded)
+        return tuple(values)
+
+    async def recovery_configuration(self, run):
+        return self.prepared.researcher.configuration if self.agent_available else None
+
+    async def abandon_stranded(self, stranded, *, workload_id, failure_code):
+        attempt = stranded.attempt
+        unknown = (
+            stranded.run.reserved_cost
+            if stranded.classification.value == "PROVIDER_OUTCOME_UNKNOWN"
+            else Decimal("0")
+        )
+        self.attempts[attempt.id] = replace(
+            attempt,
+            status=(
+                ModelAttemptStatus.FAILED_NO_RESPONSE
+                if stranded.classification.value == "SAFE_BEFORE_PROVIDER"
+                else ModelAttemptStatus.SUCCEEDED
+                if stranded.classification.value == "RESPONSE_RECORDED"
+                else ModelAttemptStatus.UNKNOWN
+            ),
+            finished_at=datetime.now(UTC),
+            unknown_cost=unknown,
+            failure_code=failure_code,
+        )
+        value = replace(
+            stranded.run,
+            status=AgentRunStatus.FAILED,
+            completed_at=datetime.now(UTC),
+            failure_code=failure_code,
+            estimated_cost=(
+                attempt.estimated_cost
+                if stranded.classification.value == "RESPONSE_RECORDED"
+                else Decimal("0")
+            ),
+        )
+        self.runs[value.id] = value
+        return value
+
+    async def add_recovery_run(self, run):
+        if any(value.recovery_of_run_id == run.recovery_of_run_id for value in self.runs.values()):
+            return False
+        return await self.add(run)
+
+    async def reconcile_unknown_cost(self, run, *, actual_cost, workload_id):
+        if self.reconciliations:
+            raise UnknownCostReconciliationConflict("already reconciled")
+        attempt = next(item for item in self.attempts.values() if item.agent_run_id == run.id)
+        if attempt.status is not ModelAttemptStatus.UNKNOWN or attempt.unknown_cost <= 0:
+            raise UnknownCostReconciliationConflict("no unknown cost")
+        self.reconciliations.append((run.id, actual_cost, workload_id))
 
 
 class RecordingWriter:
@@ -271,6 +453,16 @@ class MemoryUow:
 class IdentityProvider:
     async def current(self):
         return WorkloadIdentity("test-researcher-worker", "test")
+
+
+class OperatorProvider:
+    def __init__(self, tenant_id):
+        self.value = RecoveryOperator(
+            tenant_id, WorkloadIdentity("test-recovery-operator", "test"), uuid4()
+        )
+
+    async def current(self):
+        return self.value
 
 
 def context(tenant_id, *, role=MembershipRole.OWNER):
@@ -443,7 +635,7 @@ async def test_transient_provider_timeout_is_retried_once_then_succeeds(monkeypa
         (ModelRefusal("refused"), "MODEL_REFUSAL", 1),
     ],
 )
-async def test_provider_failures_are_bounded_and_record_safe_terminal_codes(
+async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
     monkeypatch, error, failure_code, expected_calls
 ) -> None:
     tenant_id, product_id = uuid4(), uuid4()
@@ -460,14 +652,234 @@ async def test_provider_failures_are_bounded_and_record_safe_terminal_codes(
 
     monkeypatch.setattr("creative_marketer.agent_runtime.application.asyncio.sleep", no_delay)
     provider = FailingProvider()
-    runtime, _, _, _ = service(preparation(tenant_id, product_id), provider)
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
     requested = await runtime.request_researcher(
         context(tenant_id), product_id=product_id, idempotency_key=failure_code
     )
-    failed = await runtime.execute(tenant_id, requested.id)
-    assert failed.status is AgentRunStatus.FAILED
-    assert failed.failure_code == failure_code
+    with pytest.raises(AgentRunNotReady):
+        await runtime.execute(tenant_id, requested.id)
+    persisted = repository.runs[requested.id]
+    attempt = next(iter(repository.attempts.values()))
+    assert persisted.status is AgentRunStatus.RUNNING
+    assert attempt.status is ModelAttemptStatus.UNKNOWN
+    assert attempt.failure_code == failure_code
+    assert attempt.unknown_cost == persisted.reserved_cost
     assert provider.calls == expected_calls
+    with pytest.raises(AgentRunNotReady):
+        await runtime.execute(tenant_id, requested.id)
+    assert provider.calls == expected_calls
+
+
+async def _stranded(
+    repository: MemoryRepository,
+    run_id,
+    *,
+    status: ModelAttemptStatus,
+) -> StrandedAgentRun:
+    claimed = await repository.claim(
+        run_id,
+        "dead-worker",
+        route(),
+        datetime.now(UTC) + timedelta(minutes=15),
+    )
+    assert claimed is not None
+    run, attempt = claimed
+    attempt = replace(
+        attempt,
+        claimed_at=datetime.now(UTC) - timedelta(hours=2),
+        lease_expires_at=datetime.now(UTC) - timedelta(hours=1),
+        status=status,
+        provider_started_at=(
+            datetime.now(UTC) - timedelta(minutes=90)
+            if status is not ModelAttemptStatus.CLAIMED
+            else None
+        ),
+        response_recorded_at=(
+            datetime.now(UTC) - timedelta(minutes=80)
+            if status is ModelAttemptStatus.RESPONSE_RECORDED
+            else None
+        ),
+        provider_response_id=(
+            "response-recorded" if status is ModelAttemptStatus.RESPONSE_RECORDED else None
+        ),
+        input_tokens=100 if status is ModelAttemptStatus.RESPONSE_RECORDED else 0,
+        output_tokens=50 if status is ModelAttemptStatus.RESPONSE_RECORDED else 0,
+        total_tokens=150 if status is ModelAttemptStatus.RESPONSE_RECORDED else 0,
+        estimated_cost=(
+            Decimal("0.000800") if status is ModelAttemptStatus.RESPONSE_RECORDED else Decimal("0")
+        ),
+    )
+    repository.attempts[attempt.id] = attempt
+    return StrandedAgentRun(run, attempt, classify_stranded_attempt(attempt))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "classification"),
+    [
+        (ModelAttemptStatus.CLAIMED, "SAFE_BEFORE_PROVIDER"),
+        (ModelAttemptStatus.PROVIDER_STARTED, "PROVIDER_OUTCOME_UNKNOWN"),
+        (ModelAttemptStatus.RESPONSE_RECORDED, "RESPONSE_RECORDED"),
+    ],
+)
+async def test_stranded_attempt_classification_is_conservative(status, classification) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, audit, outbox = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+    pending = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key=f"stranded-{status.value}"
+    )
+    await _stranded(repository, pending.id, status=status)
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+    )
+    values = await recovery.find_stranded()
+    assert len(values) == 1
+    assert values[0].classification.value == classification
+    read = await runtime.get_run(context(tenant_id), pending.id)
+    assert read.is_stranded and read.operational_status == "recovery_required"
+    listed = await runtime.list_runs(context(tenant_id), product_id)
+    assert listed[0].is_stranded
+
+
+@pytest.mark.asyncio
+async def test_operator_abandons_safe_before_provider_without_model_call() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    provider = FakeModelProvider(
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+    )
+    runtime, repository, audit, outbox = service(preparation(tenant_id, product_id), provider)
+    pending = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="safe-abandon"
+    )
+    await _stranded(repository, pending.id, status=ModelAttemptStatus.CLAIMED)
+    with pytest.raises(AgentRunNotReady):
+        await runtime.execute(tenant_id, pending.id)
+    assert not provider.calls
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+    )
+    abandoned = await recovery.abandon(pending.id)
+    assert abandoned.status is AgentRunStatus.FAILED
+    assert abandoned.failure_code == "STRANDED_BEFORE_PROVIDER"
+    assert not provider.calls and not repository.snapshots
+    assert audit.values[-1].action == "agent.run.abandoned"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_recovery_creates_new_run_and_reconciles_unknown_cost_once() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "recovery-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-terra",
+        )
+
+    runtime, repository, audit, outbox = service(prepared, FakeModelProvider(model))
+    original = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="ambiguous"
+    )
+    await _stranded(repository, original.id, status=ModelAttemptStatus.PROVIDER_STARTED)
+    recovery_time = datetime(2030, 2, 3, 12, tzinfo=UTC)
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+        clock=lambda: recovery_time,
+    )
+    successor = await recovery.rerun_as_new(original.id)
+    assert successor.recovery_of_run_id == original.id
+    assert successor.status is AgentRunStatus.PENDING
+    assert repository.runs[original.id].failure_code == "STRANDED_PROVIDER_OUTCOME_UNKNOWN"
+    assert successor.context_digest == original.context_digest
+    assert successor.agent_version_id == original.agent_version_id
+    assert successor.period_start == datetime(2030, 2, 3, tzinfo=UTC)
+    assert len(repository.reservations) == 2
+    assert outbox.values[-1].event_type == "agent.run.requested.v1"
+    assert outbox.values[-1].causation_id == original.id
+    assert set(outbox.values[-1].payload) == {
+        "agent_run_id",
+        "product_id",
+        "requested_agent_definition_id",
+        "agent_version_id",
+        "product_snapshot_digest",
+        "research_context_digest",
+        "context_digest",
+    }
+    completed = await runtime.execute(tenant_id, successor.id)
+    assert completed.status is AgentRunStatus.SUCCEEDED
+    assert all(snapshot.agent_run_id == successor.id for snapshot in repository.snapshots.values())
+    await recovery.reconcile_unknown_cost(
+        original.id, actual_cost=Decimal("0.010000"), currency="USD"
+    )
+    with pytest.raises(UnknownCostReconciliationConflict):
+        await recovery.reconcile_unknown_cost(
+            original.id, actual_cost=Decimal("0.010000"), currency="USD"
+        )
+    with pytest.raises(AgentRunRecoveryConflict):
+        await recovery.rerun_as_new(original.id)
+    assert audit.values[-1].action == "agent.run.unknown_cost_reconciled"
+
+
+@pytest.mark.asyncio
+async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_errors() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, audit, outbox = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+    )
+    with pytest.raises(AgentRunRecoveryConflict):
+        await recovery.abandon(uuid4())
+    with pytest.raises(AgentRunNotFound):
+        await recovery.reconcile_unknown_cost(uuid4(), actual_cost=Decimal("0"), currency="USD")
+    with pytest.raises(ValueError):
+        await recovery.reconcile_unknown_cost(uuid4(), actual_cost=Decimal("-1"), currency="USD")
+    with pytest.raises(ValueError):
+        await recovery.reconcile_unknown_cost(uuid4(), actual_cost=Decimal("0"), currency="usd")
+
+    pending = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="unavailable-agent"
+    )
+    await _stranded(repository, pending.id, status=ModelAttemptStatus.PROVIDER_STARTED)
+    with pytest.raises(UnknownCostReconciliationConflict):
+        await recovery.reconcile_unknown_cost(pending.id, actual_cost=Decimal("0"), currency="EUR")
+    repository.agent_available = False
+    with pytest.raises(RecoveryAgentUnavailable):
+        await recovery.rerun_as_new(pending.id)
+    repository.agent_available = True
+
+    wrong_route = replace(route(), route_version="changed-route")
+    mismatched = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((wrong_route,)),
+        OperatorProvider(tenant_id),
+    )
+    with pytest.raises(ModelRouteUnavailable):
+        await mismatched.rerun_as_new(pending.id)
+
+    repository.budget_available = False
+    with pytest.raises(RecoveryBlockedBudget):
+        await recovery.rerun_as_new(pending.id)
 
 
 @pytest.mark.asyncio

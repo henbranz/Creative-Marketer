@@ -211,5 +211,8 @@ workflow contains only tenant/run/correlation UUIDs and invokes one Activity. Th
 and claims authoritative PostgreSQL state under workload identity, then calls AgentRuntime. A model
 or output failure becomes a safe terminal AgentRun outcome. Researcher V1 does not automatically
 retry billed inference because its immutable budget permits one call. Worker crashes after a
-provider response but before outcome persistence require conservative recovery; exactly-once
-inference is explicitly not claimed.
+provider response or after the durable response checkpoint never cause the workflow to start a
+second inference automatically. An expired attempt is classified for explicit operator action.
+`rerun-as-new` closes the original and emits the ordinary `agent.run.requested.v1` fact for a new
+lineage-linked AgentRun, so the existing Inbox/Temporal bridge handles it as a normal new workflow.
+Exactly-once inference is explicitly not claimed.

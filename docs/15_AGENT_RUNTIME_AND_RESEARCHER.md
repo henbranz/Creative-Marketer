@@ -44,7 +44,8 @@ tenant/Product/requested definition.
 
 The event consumer starts `tenant/<tenant>/agent-run/<run>` in Temporal. Duplicate event delivery
 uses the same workflow ID. The Activity claims `PENDING → RUNNING` transactionally, records the
-configured workload identity (not the initiating User), reconstructs exact frozen inputs from
+configured workload identity (not the initiating User), creates a leased `ModelAttempt`, and
+reconstructs exact frozen inputs from
 PostgreSQL, calls the provider, validates output, then commits `SUCCEEDED` plus exactly one
 ResearchSnapshot or `FAILED` with a safe code. Terminal rows and snapshots are database-immutable.
 The requested and resolved definitions must still be active at claim time, but an AgentVersion
@@ -89,8 +90,9 @@ The initial exact route is `research_balanced` → `openai` → `gpt-5.6-terra`,
 `openai-gpt-5.6-terra-2026-09`, medium reasoning, 6,000 output tokens. Pricing snapshot
 `openai-2026-09-11` is USD 2.00 per million input tokens and USD 12.00 per million output tokens.
 Route capability/currency and worst-case cost are checked before reservation. Provider-reported
-usage is checked after the call; Decimal cost and the provider response ID are persisted even when
-post-call output validation fails.
+usage is checked after the call. Response identity, usage, and Decimal cost are durably recorded on
+the attempt before local output validation, so a crash can be classified without storing content.
+The same fields are persisted on terminal AgentRuns even when post-call output validation fails.
 
 Enable real inference only with deployment-injected `MODEL_PROVIDER_BACKEND=openai`,
 `OPENAI_API_KEY`, and a non-placeholder `AGENT_WORKLOAD_ID` in deployed environments. CI uses fake
@@ -103,5 +105,6 @@ RUN_OPENAI_SMOKE_TEST=1 OPENAI_API_KEY=<secret> make researcher-live-smoke
 
 Safe OTel lifecycle spans and bounded metrics expose route, provider/model, status, counts, duration,
 tokens, cost, and invalid-citation totals. They never contain tenant/product/source/run IDs or
-content. Production worker process supervision and stale RUNNING operator recovery remain deployment
-work; exactly-once provider billing is not promised.
+content. Expired leases derive a read-only `recovery_required` operational state while preserving
+the authoritative `RUNNING` row. Recovery is an explicit, trusted CLI-only operation; see
+`16_AGENT_RUN_RECOVERY.md`. Exactly-once provider billing is not promised.

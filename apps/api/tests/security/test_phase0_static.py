@@ -203,6 +203,16 @@ def test_tool_executors_are_invoked_only_inside_the_gateway() -> None:
     assert calls == ["src/creative_marketer/tool_execution/application.py:573"]
 
 
+def test_expired_agent_run_lease_has_no_automatic_reinference_path() -> None:
+    application = (PRODUCT_SOURCE / "agent_runtime" / "application.py").read_text(encoding="utf-8")
+    repository = (
+        PRODUCT_SOURCE / "infrastructure" / "database" / "agent_runtime_repositories.py"
+    ).read_text(encoding="utf-8")
+    assert "lease_expires_at <= now" not in application
+    assert "status == AgentRunStatus.PENDING.value" in repository
+    assert "status == AgentRunStatus.RUNNING.value" in repository
+
+
 def test_public_api_surface_contains_only_identity_and_catalog_mutation(
     settings: Settings,
 ) -> None:
@@ -237,6 +247,7 @@ def test_public_api_surface_contains_only_identity_and_catalog_mutation(
         "/execute",
         "/proxy",
         "/raw-html",
+        "/recovery",
     )
     assert not [path for _, path in routes if any(value in path for value in forbidden_fragments)]
     assert not [path for _, path in routes if path.endswith("/fetch")]
@@ -399,6 +410,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260911_0015"]
+    assert script.get_heads() == ["20260912_0016"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

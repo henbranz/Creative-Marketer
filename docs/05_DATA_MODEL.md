@@ -560,6 +560,12 @@ selected evidence identities, output contract, initiating User, model profile, p
 and idempotency key. Controlled lifecycle fields record claim workload, exact route/pricing,
 provider response identity, token usage, Decimal cost, result reference, and safe failure code.
 `agent_runtime.agent_budget_usage` serializes period reservations by tenant, definition, and period.
+Its cost envelope includes reserved, actual, and conservative unknown cost. Each claimed run has an
+immutable-lineage `model_attempts` record that distinguishes provider-not-started, provider-started,
+response-recorded, and terminal outcomes. `model_cost_reconciliations` is append-only evidence that
+moves a previously unknown amount to authoritative actual cost exactly once. A recovery successor
+references exactly one predecessor through `recovery_of_run_id`; a predecessor has at most one such
+successor.
 `research.research_snapshots` stores bounded structured findings and has a unique tenant/run relation.
 All three use composite tenant relationships, forced RLS, restricted grants, and lifecycle or
 immutability triggers.
