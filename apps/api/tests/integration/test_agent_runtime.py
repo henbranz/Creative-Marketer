@@ -41,6 +41,7 @@ from creative_marketer.agent_runtime.domain import (
     UnknownCostReconciliationConflict,
 )
 from creative_marketer.catalog.application import CatalogService
+from creative_marketer.catalog.domain import Audience, ProductBrief, ProductProfile
 from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import (
     ChannelIntent,
@@ -235,7 +236,37 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     agent_registry_factory,
 ) -> None:
     context, _, product = await product_setup(admin_engine, catalog_factory)
-    await CatalogService(catalog_factory).create_snapshot(context, product.id)
+    catalog = CatalogService(catalog_factory)
+    audience = Audience("Commuters", pain_points=("Disposable bottle waste",))
+    await catalog.update_product(
+        context,
+        product,
+        ProductProfile(
+            context.tenant_id,
+            product.id,
+            description="A repairable daily bottle.",
+            features=("Double wall",),
+            benefits=("Cold all day",),
+            target_audiences=(audience,),
+            differentiators=("Repairable",),
+            allowed_claims=("Made from recycled steel",),
+            prohibited_claims=("Magic cure",),
+        ),
+    )
+    await catalog.save_brief(
+        context,
+        ProductBrief(
+            context.tenant_id,
+            product.id,
+            product_why="Reduce disposable bottle waste.",
+            primary_audience=audience,
+            positioning_statement="A repairable bottle for daily routines.",
+            desired_creative_style="Editorial utility",
+            prohibited_messaging=("Magic cure",),
+            required_disclaimers=("Results vary",),
+        ),
+    )
+    await catalog.create_snapshot(context, product.id)
     research = ResearchService(
         research_factory,
         StaticFetcher(b"<p>Commuters want a lower-waste daily routine.</p>"),
@@ -497,7 +528,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
                 text(
                     "SELECT reserved_cost,actual_cost,unknown_cost FROM "
                     "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
-                    "AND agent_definition_id=:definition"
+                    "AND agent_definition_id=:definition ORDER BY period_start DESC LIMIT 1"
                 ),
                 {"tenant": context.tenant_id, "definition": definition.id},
             )
@@ -524,7 +555,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
                 text(
                     "SELECT reserved_cost,actual_cost,unknown_cost FROM "
                     "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
-                    "AND agent_definition_id=:definition"
+                    "AND agent_definition_id=:definition ORDER BY period_start DESC LIMIT 1"
                 ),
                 {"tenant": context.tenant_id, "definition": definition.id},
             )
