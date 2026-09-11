@@ -48,6 +48,9 @@ markers = [
   "object_storage: requires a real S3-compatible object store",
 ]
 
+[tool.coverage.report]
+precision = 2
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"

@@ -10,16 +10,20 @@ import pytest
 from creative_marketer.agent_runtime.application import ModelRouter, select_evidence_blocks
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
+    Citation,
     Confidence,
     EvidenceBlockRef,
+    Finding,
     FindingCategory,
     InvalidModelOutput,
     InvalidResearchCitation,
     ModelCapabilityUnavailable,
+    ModelContext,
     ModelPricing,
     ModelRoute,
     ModelRouteUnavailable,
     ModelUsage,
+    RecommendedSource,
     canonical_digest,
     parse_research_output,
 )
@@ -216,7 +220,52 @@ def test_research_output_requires_exact_frozen_citations_and_is_immutable() -> N
 
 
 def test_runtime_entities_reject_tampering() -> None:
+    digest = canonical_digest({"valid": True})
+    assert block().identity()["block_index"] == 0
     with pytest.raises(ValueError):
         block(digest="not-a-digest")
     with pytest.raises(ValueError):
+        ModelContext("system", {}, (), digest)
+    with pytest.raises(ValueError):
+        ModelUsage(-1, 0, 0)
+    with pytest.raises(InvalidModelOutput):
+        Citation(uuid4(), -1, digest)
+    with pytest.raises(InvalidModelOutput):
+        Finding(
+            "invalid key",
+            FindingCategory.PRICING,
+            "Statement",
+            Confidence.HIGH,
+            (Citation(uuid4(), 0, digest),),
+            "scope",
+        )
+    with pytest.raises(InvalidModelOutput):
+        RecommendedSource("", "reason", "query")
+    with pytest.raises(ValueError):
         replace(run(), context_digest="bad")
+    with pytest.raises(ValueError):
+        replace(run(), selected_evidence=())
+    with pytest.raises(ValueError):
+        replace(run(), max_total_tokens=-1)
+
+
+def test_research_snapshot_rejects_duplicate_unbounded_and_tampered_content() -> None:
+    reference = block()
+    snapshot = parse_research_output(output(reference), run=run(), selected_blocks=(reference,))
+
+    with pytest.raises(InvalidModelOutput):
+        replace(snapshot, findings=(snapshot.findings[0], snapshot.findings[0]))
+    with pytest.raises(InvalidModelOutput):
+        replace(snapshot, research_gaps=("",))
+    with pytest.raises(InvalidModelOutput):
+        replace(snapshot, semantic_digest=canonical_digest({"tampered": True}))
+
+
+def test_research_output_rejects_non_collection_fields() -> None:
+    reference = block()
+    with pytest.raises(InvalidModelOutput):
+        parse_research_output(
+            {"findings": {}, "research_gaps": [], "recommended_next_sources": []},
+            run=run(),
+            selected_blocks=(reference,),
+        )
