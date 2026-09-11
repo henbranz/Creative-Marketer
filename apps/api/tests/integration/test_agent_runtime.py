@@ -23,6 +23,8 @@ from creative_marketer.agent_runtime.application import (
     ModelRouter,
     RecoveryOperator,
     WorkloadIdentity,
+    build_creative_model_context,
+    initial_creative_strategist_route,
     initial_researcher_route,
 )
 from creative_marketer.agent_runtime.domain import (
@@ -39,8 +41,17 @@ from creative_marketer.agent_runtime.domain import (
     UnknownCostReconciliationConflict,
 )
 from creative_marketer.catalog.application import CatalogService
+from creative_marketer.creative.application import CreativeService
+from creative_marketer.creative.domain import (
+    ChannelIntent,
+    CreativeDecisionState,
+    CreativeStrategyRequest,
+)
 from creative_marketer.infrastructure.database.agent_runtime_uow import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
+)
+from creative_marketer.infrastructure.database.creative_uow import (
+    SqlAlchemyCreativeUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.engine import create_session_factory
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
@@ -49,8 +60,9 @@ from creative_marketer.research.domain import ResearchCategory
 from tests.integration.test_asset_library import product_setup
 from tests.integration.test_catalog import owner_context, seed_catalog_identity
 from tests.integration.test_research_evidence import MemoryStore, StaticFetcher
-from tests.test_agent_runtime_application import configuration
+from tests.test_agent_runtime_application import configuration, creative_configuration
 from tests.test_agent_runtime_domain import output
+from tests.test_creative_strategy import output as creative_output
 
 
 class IdentityProvider:
@@ -209,6 +221,145 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
                         "id": completed.id if "agent_runs" in statement else snapshots[0].id,
                         "digest": "sha256:" + "0" * 64,
                     },
+                )
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_creative_runtime_persistence_decisions_rls_and_privacy(
+    admin_engine: AsyncEngine,
+    runtime_engine: AsyncEngine,
+    runtime_database_url: str,
+    catalog_factory,
+    research_factory,
+    agent_registry_factory,
+) -> None:
+    context, _, product = await product_setup(admin_engine, catalog_factory)
+    await CatalogService(catalog_factory).create_snapshot(context, product.id)
+    research = ResearchService(
+        research_factory,
+        StaticFetcher(b"<p>Commuters want a lower-waste daily routine.</p>"),
+        MemoryStore(),
+    )
+    await research.create_source(
+        context,
+        product_id=product.id,
+        url="https://public.example/audience",
+        display_name="Audience evidence",
+        category=ResearchCategory.COMPETITOR,
+    )
+    researcher = await CreateTenantAgentDefinition(agent_registry_factory)(
+        context, agent_key="researcher", agent_type="researcher"
+    )
+    researcher_version = await CreateAgentVersion(agent_registry_factory)(
+        context, researcher.id, configuration()
+    )
+    await ActivateAgentVersion(agent_registry_factory)(
+        context, researcher.id, researcher_version.id
+    )
+    strategist = await CreateTenantAgentDefinition(agent_registry_factory)(
+        context, agent_key="creative_strategist", agent_type="creative_strategist"
+    )
+    strategist_version = await CreateAgentVersion(agent_registry_factory)(
+        context, strategist.id, creative_configuration()
+    )
+    await ActivateAgentVersion(agent_registry_factory)(
+        context, strategist.id, strategist_version.id
+    )
+    sessions = create_session_factory(runtime_database_url)
+    uows = SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions)
+    creative_context = None
+
+    def model(invocation):
+        if invocation.output_contract_key == "research.research_snapshot":
+            return ModelInvocationResult(
+                output(invocation.untrusted_evidence[0]),
+                "research-before-creative",
+                ModelUsage(100, 50, 150),
+                "openai",
+                "gpt-5.6-terra",
+            )
+        assert creative_context is not None
+        raw = creative_output(creative_context)
+        finding_key = creative_context.research_findings[0]["key"]
+        for concept in raw["concepts"]:
+            concept["supporting_research_refs"][0]["finding_key"] = finding_key
+        return ModelInvocationResult(
+            raw,
+            "creative-persisted",
+            ModelUsage(500, 1000, 1500),
+            "openai",
+            "gpt-5.6-terra",
+        )
+
+    provider = FakeModelProvider(model)
+    runtime = AgentRunService(
+        uows,
+        ModelRouter((initial_researcher_route(), initial_creative_strategist_route())),
+        ModelProviderRegistry({"openai": provider}),
+        IdentityProvider(),
+    )
+    research_run = await runtime.request_researcher(
+        context, product_id=product.id, idempotency_key="creative-research"
+    )
+    await runtime.execute(context.tenant_id, research_run.id)
+    async with uows(context.tenant_id) as uow:
+        prepared = await uow.runs.prepare_creative(product.id)
+        assert prepared is not None
+        creative_context = build_creative_model_context(
+            prepared, CreativeStrategyRequest(3, ChannelIntent.TIKTOK)
+        )[0]
+
+    creative_run = await runtime.request_creative_strategist(
+        context,
+        product_id=product.id,
+        request=CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
+        idempotency_key="creative-run",
+    )
+    completed = await runtime.execute(context.tenant_id, creative_run.id)
+    assert completed.status is AgentRunStatus.SUCCEEDED
+    creative = CreativeService(SqlAlchemyCreativeUnitOfWorkFactory(sessions))
+    sets = await creative.list_sets(context, product.id)
+    assert len(sets) == 1 and len(sets[0].concepts) == 3
+    concept = sets[0].concepts[0]
+    decision = await creative.decide(
+        context, concept.id, CreativeDecisionState.APPROVED_FOR_PRODUCTION
+    )
+    loaded, current = await creative.get_concept(context, concept.id)
+    assert loaded.semantic_digest == concept.semantic_digest
+    assert current == decision
+    assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
+
+    other_tenant, other_user = await seed_catalog_identity(admin_engine)
+    other = owner_context(other_tenant, other_user)
+    assert await creative.list_sets(other, product.id) == ()
+
+    async with admin_engine.connect() as connection:
+        safe_values = " ".join(
+            list(
+                await connection.scalars(
+                    text(
+                        "SELECT payload::text FROM event_delivery.outbox_events "
+                        "WHERE tenant_id=:tenant"
+                    ),
+                    {"tenant": context.tenant_id},
+                )
+            )
+        )
+    assert "Break the bottle cycle" not in safe_values
+    for statement, identifier in (
+        ("UPDATE creative.concepts SET semantic_digest=:digest WHERE id=:id", concept.id),
+        ("DELETE FROM creative.concept_sets WHERE id=:id", sets[0].id),
+    ):
+        with pytest.raises(DBAPIError):
+            async with runtime_engine.begin() as connection:
+                await connection.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(context.tenant_id)},
+                )
+                await connection.execute(
+                    text(statement),
+                    {"id": identifier, "digest": "sha256:" + "0" * 64},
                 )
 
 

@@ -613,19 +613,20 @@ def load_output_schema() -> Mapping[str, object]:
     return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
+def _plain_json(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_json(child) for key, child in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_plain_json(child) for child in value]
+    return value
+
+
 def conservative_input_token_bound(context: ModelContext) -> int:
     """UTF-8 bytes upper-bound tokenizer input without provider-specific dependencies."""
 
-    def plain(value: object) -> object:
-        if isinstance(value, Mapping):
-            return {str(key): plain(child) for key, child in value.items()}
-        if isinstance(value, (tuple, list)):
-            return [plain(child) for child in value]
-        return value
-
     document = {
         "system_instructions": context.system_instructions,
-        "trusted_product_context": plain(context.product_context),
+        "trusted_product_context": _plain_json(context.product_context),
         "untrusted_external_evidence": [
             {"reference": item.identity(), "source_label": item.source_label, "text": item.text}
             for item in context.evidence_blocks
@@ -671,7 +672,7 @@ def build_creative_model_context(
 def conservative_creative_input_token_bound(context: ModelContext) -> int:
     document = {
         "system_instructions": context.system_instructions,
-        "context_sections": dict(context.capability_context or {}),
+        "context_sections": _plain_json(context.capability_context or {}),
         "output_task": context.output_task,
         "output_schema": load_creative_output_schema(),
     }
