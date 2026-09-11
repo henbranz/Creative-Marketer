@@ -374,3 +374,10 @@ route. A rerun closes the predecessor and creates a separately budgeted successo
 context/configuration lineage. Ambiguous provider cost remains charged as `unknown_cost` until a
 one-time append-only reconciliation records authoritative actual cost. Late workers cannot record a
 response or terminal result after recovery wins the row lock.
+## Creative context and privilege
+
+Creative Strategist has one model call, zero Tools, no memory, and no browser-controlled prompt or
+route. It receives frozen Product/Asset metadata and structured Research findings in data sections,
+never system instructions or raw web content. Cross-tenant references fail through application
+lookup, forced RLS, and composite foreign keys. Creative text is prohibited from Audit, event,
+telemetry, and Temporal payloads.

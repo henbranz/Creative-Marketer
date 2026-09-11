@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from temporalio.worker import Worker
 
@@ -11,6 +11,7 @@ from creative_marketer.agent_runtime.application import (
     AgentRunService,
     ModelProviderRegistry,
     ModelRouter,
+    initial_creative_strategist_route,
     initial_researcher_route,
 )
 from creative_marketer.events.application import (
@@ -29,19 +30,46 @@ from creative_marketer.infrastructure.database.event_consumer_uow import (
 from creative_marketer.infrastructure.database.event_delivery import PostgresPublisherStore
 from creative_marketer.infrastructure.model_providers import OpenAIResponsesModelProvider
 from creative_marketer.infrastructure.temporal.activities import TemporalActivities
-from creative_marketer.infrastructure.temporal.client import TemporalResearcherWorkflowStarter
+from creative_marketer.infrastructure.temporal.client import (
+    TemporalAgentExecutionWorkflowStarter,
+    TemporalResearcherWorkflowStarter,
+)
 from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.worker import connect_client
-from creative_marketer.infrastructure.temporal.workflows import ResearcherWorkflow
+from creative_marketer.infrastructure.temporal.workflows import (
+    AgentExecutionWorkflow,
+    ResearcherWorkflow,
+)
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
 from creative_marketer.observability.ports import NullTelemetry
+from creative_marketer.workflow_orchestration.agent_bridge import RouteAgentWorkflow
 from creative_marketer.workflow_orchestration.researcher_bridge import StartResearcherWorkflow
 from creative_marketer_api.config import Settings
 
 
-async def _bridge_loop(settings: Settings, starter: TemporalResearcherWorkflowStarter) -> None:
+class DatabaseAgentTypeResolver:
+    def __init__(self, factory: SqlAlchemyAgentRuntimeUnitOfWorkFactory) -> None:
+        self._factory = factory
+
+    async def agent_type(self, tenant_id: UUID, run_id: UUID) -> str | None:
+        async with self._factory(tenant_id) as uow:
+            run = await uow.runs.get(run_id)
+            return run.agent_type if run else None
+
+
+async def _bridge_loop(
+    settings: Settings,
+    researcher: TemporalResearcherWorkflowStarter,
+    agent: TemporalAgentExecutionWorkflowStarter | None = None,
+    resolver: DatabaseAgentTypeResolver | None = None,
+) -> None:
     if settings.event_publisher_database_url is None:
         raise RuntimeError("EVENT_PUBLISHER_DATABASE_URL is required by the Researcher bridge")
+    handler = (
+        RouteAgentWorkflow(researcher, agent, resolver)
+        if agent is not None and resolver is not None
+        else StartResearcherWorkflow(researcher)
+    )
     publisher = PostgresPublisherStore(
         create_session_factory(str(settings.event_publisher_database_url))
     )
@@ -53,7 +81,7 @@ async def _bridge_loop(settings: Settings, starter: TemporalResearcherWorkflowSt
                     "researcher-temporal-starter",
                     frozenset({"agent.run.requested.v1"}),
                     "v1",
-                    StartResearcherWorkflow(starter),
+                    handler,
                 ),
             )
         ),
@@ -91,10 +119,13 @@ async def run() -> None:
     if settings.model_provider_backend != "openai" or settings.openai_api_key is None:
         raise RuntimeError("Researcher worker requires MODEL_PROVIDER_BACKEND=openai")
     telemetry = NullTelemetry()
-    route = initial_researcher_route()
+    routes = (initial_researcher_route(), initial_creative_strategist_route())
+    runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(
+        create_session_factory(str(settings.database_url))
+    )
     runtime = AgentRunService(
-        SqlAlchemyAgentRuntimeUnitOfWorkFactory(create_session_factory(str(settings.database_url))),
-        ModelRouter((route,)),
+        runtime_uow,
+        ModelRouter(routes),
         ModelProviderRegistry(
             {"openai": OpenAIResponsesModelProvider(settings.openai_api_key.get_secret_value())}
         ),
@@ -109,10 +140,15 @@ async def run() -> None:
     async with Worker(
         client,
         task_queue=WORKFLOW_TASK_QUEUE,
-        workflows=[ResearcherWorkflow],
-        activities=[activities.execute_researcher],
+        workflows=[ResearcherWorkflow, AgentExecutionWorkflow],
+        activities=[activities.execute_researcher, activities.execute_agent],
     ):
-        await _bridge_loop(settings, TemporalResearcherWorkflowStarter(client))
+        await _bridge_loop(
+            settings,
+            TemporalResearcherWorkflowStarter(client),
+            TemporalAgentExecutionWorkflowStarter(client),
+            DatabaseAgentTypeResolver(runtime_uow),
+        )
 
 
 def main() -> None:

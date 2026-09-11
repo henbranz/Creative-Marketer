@@ -11,11 +11,13 @@ from creative_marketer.agent_runtime.application import (
     AgentRunService,
     ModelProviderRegistry,
     ModelRouter,
+    initial_creative_strategist_route,
     initial_researcher_route,
 )
 from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.catalog.application import CatalogService
 from creative_marketer.catalog.asset_application import AssetService, UnavailableObjectStore
+from creative_marketer.creative.application import CreativeService
 from creative_marketer.infrastructure.authentication import (
     DevelopmentAuthenticationAdapter,
     UnavailableAuthenticationAdapter,
@@ -23,6 +25,7 @@ from creative_marketer.infrastructure.authentication import (
 from creative_marketer.infrastructure.database import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
+    SqlAlchemyCreativeUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
@@ -43,6 +46,7 @@ from creative_marketer.research.application import ResearchService
 from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
+from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.research_routes import create_research_router
 
 
@@ -152,6 +156,7 @@ def create_app(
     catalog_uow = SqlAlchemyCatalogUnitOfWorkFactory(session_factory)
     research_uow = SqlAlchemyResearchUnitOfWorkFactory(session_factory)
     agent_runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
+    creative_uow = SqlAlchemyCreativeUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -184,6 +189,19 @@ def create_app(
             resolved_identity_audit,
         )
     )
+    agent_service = AgentRunService(
+        agent_runtime_uow,
+        ModelRouter((initial_researcher_route(), initial_creative_strategist_route())),
+        ModelProviderRegistry(
+            {"openai": ExecutionProcessOnlyModelProvider()}
+            if resolved_settings.model_provider_backend == "openai"
+            else {}
+        ),
+        ConfiguredWorkloadIdentityProvider(
+            resolved_settings.agent_workload_id, resolved_settings.app_env
+        ),
+        telemetry,
+    )
     application.include_router(
         create_research_router(
             authenticator,
@@ -192,19 +210,17 @@ def create_app(
             or ResearchService(research_uow, SafeWebFetcher(), object_store, telemetry=telemetry),
             resolved_settings.app_env,
             resolved_identity_audit,
-            AgentRunService(
-                agent_runtime_uow,
-                ModelRouter((initial_researcher_route(),)),
-                ModelProviderRegistry(
-                    {"openai": ExecutionProcessOnlyModelProvider()}
-                    if resolved_settings.model_provider_backend == "openai"
-                    else {}
-                ),
-                ConfiguredWorkloadIdentityProvider(
-                    resolved_settings.agent_workload_id, resolved_settings.app_env
-                ),
-                telemetry,
-            ),
+            agent_service,
+        )
+    )
+    application.include_router(
+        create_creative_router(
+            authenticator,
+            identity_uow,
+            agent_service,
+            CreativeService(creative_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
         )
     )
 

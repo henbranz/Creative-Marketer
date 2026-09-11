@@ -36,8 +36,9 @@ Inspect first. Use `abandon` when no replacement should be created. Use `rerun` 
 that it is a fresh billable operation. The transaction closes the predecessor, reserves a new budget
 in the current policy period,
 creates a successor linked by `recovery_of_run_id`, appends Audit, and publishes the normal request
-event. Only one successor can win. The exact historical AgentVersion, digests, selected evidence,
-contract, route, pricing version, and limits remain frozen; disabled definitions or an unavailable
+event. Only one successor can win. The exact historical AgentVersion, generic context
+kind/digest/references, contract, route, pricing version, and limits remain frozen; disabled
+definitions or an unavailable
 historical route fail closed.
 
 When provider evidence later establishes actual cost for an ambiguous run, `reconcile-cost` creates

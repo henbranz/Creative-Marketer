@@ -5,6 +5,7 @@ import {
   catalogApi,
   type AgentRun,
   type Asset,
+  type CreativeConceptSet,
   type ResearchEvidence,
   type ResearchFetch,
   type ResearchSource,
@@ -215,6 +216,10 @@ const agentRun: AgentRun = {
   agent_version_number: 1,
   agent_configuration_digest: `sha256:${"6".repeat(64)}`,
   prompt_revision: "researcher.v1",
+  agent_type: "researcher",
+  input_context_kind: "researcher.v1",
+  input_context_schema_version: 1,
+  input_context_digest: `sha256:${"3".repeat(64)}`,
   model_profile_key: "research_balanced",
   resolved_provider: "openai",
   resolved_model: "gpt-5.6-terra",
@@ -273,6 +278,78 @@ const researchSnapshot: ResearchSnapshot = {
   freshness: "current",
 };
 
+const creativeSet: CreativeConceptSet = {
+  id: "98000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  agent_run_id: agentRun.id,
+  product_snapshot_id: researchSnapshot.product_snapshot_id,
+  product_snapshot_digest: researchSnapshot.product_snapshot_digest,
+  research_snapshot_id: researchSnapshot.id,
+  research_snapshot_digest: researchSnapshot.semantic_digest,
+  input_context_digest: `sha256:${"7".repeat(64)}`,
+  semantic_digest: `sha256:${"8".repeat(64)}`,
+  created_at: product.created_at,
+  freshness: "CURRENT",
+  concepts: [
+    {
+      id: "96000000-0000-0000-0000-000000000001",
+      concept_set_id: "98000000-0000-0000-0000-000000000001",
+      product_id: product.id,
+      concept_key: "problem_first",
+      ordinal: 1,
+      semantic_digest: `sha256:${"9".repeat(64)}`,
+      created_at: product.created_at,
+      decision_state: null,
+      payload: {
+        title: "Waste, interrupted",
+        channel_intent: "TIKTOK",
+        estimated_duration_seconds: 15,
+        creative_angle: "Lead with the disposable-bottle problem.",
+        strategic_rationale:
+          "Audience language supports a problem-first opening.",
+        target_audience: "Waste-conscious commuters",
+        hook: {
+          spoken_or_voiceover: "Still buying throwaway bottles?",
+          on_screen_text: "Break the bottle cycle",
+          visual_open: "A bin fills with disposable bottles.",
+        },
+        scenes: [
+          {
+            purpose: "Establish the problem",
+            visual_direction: "Fast cuts of disposable bottles",
+            voiceover: "There is a better daily routine.",
+          },
+        ],
+        cta: { text: "Discover Atlas", intent: "DISCOVER" },
+        hypothesis: "A problem-first opening will improve hook retention.",
+        primary_success_metric: "HOOK_HOLD_RATE",
+        supporting_research_refs: [
+          {
+            research_snapshot_id: researchSnapshot.id,
+            finding_key: "competitor_price",
+          },
+        ],
+        message_points: [
+          {
+            kind: "PRODUCT_FACT",
+            text: "Reusable",
+            product_claim_ref: "claim",
+          },
+        ],
+        required_assets: [
+          {
+            kind: "MISSING_ASSET",
+            description: "Close-up hand interaction",
+            shot_requirement: "Vertical close-up",
+          },
+        ],
+        required_disclaimers: ["Results vary"],
+        production_notes: "Shoot in natural light.",
+      },
+    },
+  ],
+};
+
 function mocks() {
   vi.spyOn(catalogApi, "listBrands").mockResolvedValue([brand]);
   vi.spyOn(catalogApi, "listProducts").mockResolvedValue([product]);
@@ -314,6 +391,26 @@ function mocks() {
     started_at: null,
     completed_at: null,
     result_ref: null,
+  });
+  vi.spyOn(catalogApi, "listCreativeRuns").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listCreativeConceptSets").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "startCreativeStrategist").mockResolvedValue({
+    ...agentRun,
+    agent_type: "creative_strategist",
+    input_context_kind: "creative_strategy.v1",
+    status: "PENDING",
+    started_at: null,
+    completed_at: null,
+    result_ref: null,
+  });
+  vi.spyOn(catalogApi, "decideCreativeConcept").mockResolvedValue({
+    id: "95000000-0000-0000-0000-000000000001",
+    concept_id: "96000000-0000-0000-0000-000000000001",
+    state: "SHORTLISTED",
+    decided_by: "97000000-0000-0000-0000-000000000001",
+    reason_code: null,
+    note: null,
+    created_at: product.created_at,
   });
 }
 
@@ -447,6 +544,93 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
     expect(
       await screen.findByText("No research sources yet"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders Creative readiness and an honest empty state", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      latest_snapshot: {
+        id: researchSnapshot.product_snapshot_id,
+        product_id: product.id,
+        schema_version: 2,
+        source_revision: brief.revision,
+        digest: researchSnapshot.product_snapshot_digest,
+        created_at: product.updated_at,
+      },
+    });
+    vi.mocked(catalogApi.listResearchSnapshots).mockResolvedValue([
+      researchSnapshot,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Creatives" }));
+    expect(await screen.findByText("No concepts yet")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Generate 5 concepts" }),
+    ).toBeEnabled();
+    expect(screen.getByText(/No media is generated yet/)).toBeInTheDocument();
+  });
+
+  it("keeps Creative decisions read-only for members", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      product: { ...product, can_edit: false },
+    });
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Creatives" }));
+    expect(
+      await screen.findByRole("button", { name: "Generate 5 concepts" }),
+    ).toBeDisabled();
+  });
+
+  it("renders a traceable concept detail and persists production review", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      latest_snapshot: {
+        id: researchSnapshot.product_snapshot_id,
+        product_id: product.id,
+        schema_version: 2,
+        source_revision: brief.revision,
+        digest: researchSnapshot.product_snapshot_digest,
+        created_at: product.updated_at,
+      },
+    });
+    vi.mocked(catalogApi.listResearchSnapshots).mockResolvedValue([
+      researchSnapshot,
+    ]);
+    vi.mocked(catalogApi.listCreativeConceptSets).mockResolvedValue([
+      creativeSet,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Creatives" }));
+    expect(await screen.findByText("Waste, interrupted")).toBeInTheDocument();
+    expect(screen.getByText("0 ready · 1 missing")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect concept" }));
+    expect(screen.getByText("Establish the problem")).toBeInTheDocument();
+    expect(screen.getByText(/Grounded in Product Brain/)).toBeInTheDocument();
+    expect(
+      screen.getByText("The competitor advertises a $20 price."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Close-up hand interaction")).toBeInTheDocument();
+    expect(screen.getByText("Results vary")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve for production" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.decideCreativeConcept).toHaveBeenCalledWith(
+        expect.anything(),
+        "96000000-0000-0000-0000-000000000001",
+        "APPROVED_FOR_PRODUCTION",
+      ),
+    );
+    expect(
+      screen.getByText(/does not authorize media spend or publishing/),
     ).toBeInTheDocument();
   });
 

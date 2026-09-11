@@ -132,3 +132,8 @@ AgentRuntime consumes one immutable ProductKnowledgeSnapshot by ID and digest. I
 mutable Product row as an inference fallback and never writes Researcher output back into Product
 Brain. Snapshot changes make prior ResearchSnapshots `outdated` at read time without rewriting
 their provenance.
+## Creative claim authority
+
+Creative Strategist binds ProductKnowledgeSnapshot V2. Deterministic ProductClaimRefs are derived
+from snapshot digest, claim source, ordinal, and text. A `PRODUCT_FACT` without one of those exact
+references fails validation; Research findings never grant Product-claim authority.

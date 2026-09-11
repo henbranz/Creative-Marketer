@@ -21,6 +21,11 @@ export type ResearchManifest = components["schemas"]["ManifestResponse"];
 export type AgentRun = components["schemas"]["AgentRunResponse"];
 export type ResearchSnapshot =
   components["schemas"]["ResearchSnapshotResponse"];
+export type CreativeConceptSet =
+  components["schemas"]["CreativeConceptSetResponse"];
+export type CreativeConcept = components["schemas"]["CreativeConceptResponse"];
+export type CreativeDecision =
+  components["schemas"]["CreativeDecisionResponse"];
 
 export interface Session {
   readonly tenantId: string;
@@ -164,6 +169,38 @@ export const catalogApi = {
     request<ResearchSnapshot[]>(
       session,
       `/v1/products/${productId}/research/snapshots`,
+    ),
+  startCreativeStrategist: (
+    session: Session,
+    productId: string,
+    idempotencyKey: string,
+    conceptCount = 5,
+    channelIntent = "ORGANIC_SHORT_FORM",
+  ) =>
+    request<AgentRun>(session, `/v1/products/${productId}/creative/runs`, {
+      method: "POST",
+      body: JSON.stringify({
+        idempotency_key: idempotencyKey,
+        concept_count: conceptCount,
+        channel_intent: channelIntent,
+      }),
+    }),
+  listCreativeRuns: (session: Session, productId: string) =>
+    request<AgentRun[]>(session, `/v1/products/${productId}/creative/runs`),
+  listCreativeConceptSets: (session: Session, productId: string) =>
+    request<CreativeConceptSet[]>(
+      session,
+      `/v1/products/${productId}/creative/concept-sets`,
+    ),
+  decideCreativeConcept: (
+    session: Session,
+    conceptId: string,
+    state: "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED",
+  ) =>
+    request<CreativeDecision>(
+      session,
+      `/v1/creative/concepts/${conceptId}/decision`,
+      { method: "POST", body: JSON.stringify({ state }) },
     ),
 };
 

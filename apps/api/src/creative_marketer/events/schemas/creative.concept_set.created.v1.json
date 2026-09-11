@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "creative.concept_set.created.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["concept_set_id", "agent_run_id", "product_id", "requested_agent_definition_id", "agent_version_id", "concept_count", "semantic_digest"],
+  "properties": {
+    "concept_set_id": {"type": "string", "format": "uuid"},
+    "agent_run_id": {"type": "string", "format": "uuid"},
+    "product_id": {"type": "string", "format": "uuid"},
+    "requested_agent_definition_id": {"type": "string", "format": "uuid"},
+    "agent_version_id": {"type": "string", "format": "uuid"},
+    "concept_count": {"type": "integer", "minimum": 3, "maximum": 5},
+    "semantic_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

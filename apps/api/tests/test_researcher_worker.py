@@ -84,14 +84,14 @@ async def test_worker_composes_credential_only_in_worker_process(monkeypatch) ->
         observed["temporal"] = (address, namespace)
         return client
 
-    async def bridge(received_settings, starter):
-        observed["bridge"] = (received_settings, starter)
+    async def bridge(received_settings, researcher, agent, resolver):
+        observed["bridge"] = (received_settings, researcher, agent, resolver)
 
     class Worker:
         def __init__(self, received_client, **kwargs):
             assert received_client is client
             assert kwargs["task_queue"]
-            assert len(kwargs["workflows"]) == len(kwargs["activities"]) == 1
+            assert len(kwargs["workflows"]) == len(kwargs["activities"]) == 2
 
         async def __aenter__(self):
             observed["entered"] = True

@@ -8,6 +8,10 @@
             "title": "Agent Configuration Digest",
             "type": "string"
           },
+          "agent_type": {
+            "title": "Agent Type",
+            "type": "string"
+          },
           "agent_version_id": {
             "format": "uuid",
             "title": "Agent Version Id",
@@ -61,6 +65,18 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "input_context_digest": {
+            "title": "Input Context Digest",
+            "type": "string"
+          },
+          "input_context_kind": {
+            "title": "Input Context Kind",
+            "type": "string"
+          },
+          "input_context_schema_version": {
+            "title": "Input Context Schema Version",
+            "type": "integer"
           },
           "input_tokens": {
             "title": "Input Tokens",
@@ -215,6 +231,10 @@
           "agent_version_number",
           "agent_configuration_digest",
           "prompt_revision",
+          "agent_type",
+          "input_context_kind",
+          "input_context_schema_version",
+          "input_context_digest",
           "model_profile_key",
           "resolved_provider",
           "resolved_model",
@@ -1315,6 +1335,16 @@
         "title": "BriefResponse",
         "type": "object"
       },
+      "ChannelIntent": {
+        "enum": [
+          "ORGANIC_SHORT_FORM",
+          "TIKTOK",
+          "INSTAGRAM_REELS",
+          "PAID_SOCIAL"
+        ],
+        "title": "ChannelIntent",
+        "type": "string"
+      },
       "CompletenessResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1341,6 +1371,274 @@
         },
         "required": ["score", "missing_sections", "missing_fields"],
         "title": "CompletenessResponse",
+        "type": "object"
+      },
+      "CreativeConceptResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_key": {
+            "title": "Concept Key",
+            "type": "string"
+          },
+          "concept_set_id": {
+            "format": "uuid",
+            "title": "Concept Set Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decision_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CreativeDecisionState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "concept_set_id",
+          "product_id",
+          "concept_key",
+          "ordinal",
+          "payload",
+          "semantic_digest",
+          "created_at"
+        ],
+        "title": "CreativeConceptResponse",
+        "type": "object"
+      },
+      "CreativeConceptSetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_run_id": {
+            "format": "uuid",
+            "title": "Agent Run Id",
+            "type": "string"
+          },
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/CreativeConceptResponse"
+            },
+            "title": "Concepts",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "freshness": {
+            "title": "Freshness",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "input_context_digest": {
+            "title": "Input Context Digest",
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "product_snapshot_digest": {
+            "title": "Product Snapshot Digest",
+            "type": "string"
+          },
+          "product_snapshot_id": {
+            "format": "uuid",
+            "title": "Product Snapshot Id",
+            "type": "string"
+          },
+          "research_snapshot_digest": {
+            "title": "Research Snapshot Digest",
+            "type": "string"
+          },
+          "research_snapshot_id": {
+            "format": "uuid",
+            "title": "Research Snapshot Id",
+            "type": "string"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "agent_run_id",
+          "product_snapshot_id",
+          "product_snapshot_digest",
+          "research_snapshot_id",
+          "research_snapshot_digest",
+          "input_context_digest",
+          "semantic_digest",
+          "created_at",
+          "freshness",
+          "concepts"
+        ],
+        "title": "CreativeConceptSetResponse",
+        "type": "object"
+      },
+      "CreativeDecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Z][A-Z0-9_]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CreativeDecisionState"
+          }
+        },
+        "required": ["state"],
+        "title": "CreativeDecisionRequest",
+        "type": "object"
+      },
+      "CreativeDecisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_id": {
+            "format": "uuid",
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_by": {
+            "format": "uuid",
+            "title": "Decided By",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CreativeDecisionState"
+          }
+        },
+        "required": [
+          "id",
+          "concept_id",
+          "state",
+          "decided_by",
+          "reason_code",
+          "note",
+          "created_at"
+        ],
+        "title": "CreativeDecisionResponse",
+        "type": "object"
+      },
+      "CreativeDecisionState": {
+        "enum": ["SHORTLISTED", "APPROVED_FOR_PRODUCTION", "REJECTED"],
+        "title": "CreativeDecisionState",
+        "type": "string"
+      },
+      "CreativeRunStart": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_intent": {
+            "$ref": "#/components/schemas/ChannelIntent",
+            "default": "ORGANIC_SHORT_FORM"
+          },
+          "concept_count": {
+            "default": 5,
+            "maximum": 5.0,
+            "minimum": 3.0,
+            "title": "Concept Count",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": ["idempotency_key"],
+        "title": "CreativeRunStart",
         "type": "object"
       },
       "CurrentActorResponse": {
@@ -4072,6 +4370,289 @@
         "tags": ["catalog"]
       }
     },
+    "/v1/creative/concept-sets/{set_id}": {
+      "get": {
+        "operationId": "get_set_v1_creative_concept_sets__set_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "set_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Set Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeConceptSetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Set",
+        "tags": ["creative"]
+      }
+    },
+    "/v1/creative/concepts/{concept_id}": {
+      "get": {
+        "operationId": "get_concept_v1_creative_concepts__concept_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Concept Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeConceptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Concept",
+        "tags": ["creative"]
+      }
+    },
+    "/v1/creative/concepts/{concept_id}/decision": {
+      "post": {
+        "operationId": "decide_v1_creative_concepts__concept_id__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Concept Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreativeDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeDecisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide",
+        "tags": ["creative"]
+      }
+    },
     "/v1/me": {
       "get": {
         "operationId": "get_current_actor_v1_me_get",
@@ -4715,6 +5296,295 @@
         },
         "summary": "Get Completeness",
         "tags": ["catalog"]
+      }
+    },
+    "/v1/products/{product_id}/creative/concept-sets": {
+      "get": {
+        "operationId": "list_sets_v1_products__product_id__creative_concept_sets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CreativeConceptSetResponse"
+                  },
+                  "title": "Response List Sets V1 Products  Product Id  Creative Concept Sets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Sets",
+        "tags": ["creative"]
+      }
+    },
+    "/v1/products/{product_id}/creative/runs": {
+      "get": {
+        "operationId": "list_runs_v1_products__product_id__creative_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRunResponse"
+                  },
+                  "title": "Response List Runs V1 Products  Product Id  Creative Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Runs",
+        "tags": ["creative"]
+      },
+      "post": {
+        "operationId": "start_run_v1_products__product_id__creative_runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreativeRunStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Run",
+        "tags": ["creative"]
       }
     },
     "/v1/products/{product_id}/research-context-manifest": {

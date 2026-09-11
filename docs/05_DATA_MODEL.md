@@ -591,3 +591,9 @@ resource, environment, normalized-input digest, operation ID, and action digest)
 lifecycle fields. The operation is unique per tenant, Tool definition, and operation ID. Runtime
 access is tenant-scoped with forced RLS; binding mutation and invalid lifecycle transitions are
 rejected by a database trigger. Audit records have a nullable indexed `tool_call_id` linkage.
+## Creative strategy state
+
+`creative.concept_sets` binds one successful Creative AgentRun to exact Product and Research
+snapshots. `creative.concepts` gives each immutable generated concept a stable identity and bounded
+validated payload. `creative.concept_decisions` stores append-only human workflow decisions. All use
+forced RLS, composite tenant relationships, and mutation guards.

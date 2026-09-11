@@ -228,6 +228,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/creative/concept-sets/{set_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Set */
+    get: operations["get_set_v1_creative_concept_sets__set_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative/concepts/{concept_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Concept */
+    get: operations["get_concept_v1_creative_concepts__concept_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative/concepts/{concept_id}/decision": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Decide */
+    post: operations["decide_v1_creative_concepts__concept_id__decision_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/me": {
     parameters: {
       query?: never;
@@ -309,6 +360,41 @@ export interface paths {
     get: operations["get_completeness_v1_products__product_id__brief_completeness_get"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/creative/concept-sets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Sets */
+    get: operations["list_sets_v1_products__product_id__creative_concept_sets_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/creative/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Runs */
+    get: operations["list_runs_v1_products__product_id__creative_runs_get"];
+    put?: never;
+    /** Start Run */
+    post: operations["start_run_v1_products__product_id__creative_runs_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -546,6 +632,8 @@ export interface components {
     AgentRunResponse: {
       /** Agent Configuration Digest */
       agent_configuration_digest: string;
+      /** Agent Type */
+      agent_type: string;
       /**
        * Agent Version Id
        * Format: uuid
@@ -573,6 +661,12 @@ export interface components {
        * Format: uuid
        */
       id: string;
+      /** Input Context Digest */
+      input_context_digest: string;
+      /** Input Context Kind */
+      input_context_kind: string;
+      /** Input Context Schema Version */
+      input_context_schema_version: number;
       /** Input Tokens */
       input_tokens: number;
       /** Is Stranded */
@@ -1067,6 +1161,12 @@ export interface components {
       /** Why Choose Us */
       why_choose_us?: string[];
     };
+    /**
+     * ChannelIntent
+     * @enum {string}
+     */
+    ChannelIntent:
+      "ORGANIC_SHORT_FORM" | "TIKTOK" | "INSTAGRAM_REELS" | "PAID_SOCIAL";
     /** CompletenessResponse */
     CompletenessResponse: {
       /** Missing Fields */
@@ -1075,6 +1175,139 @@ export interface components {
       missing_sections: string[];
       /** Score */
       score: number;
+    };
+    /** CreativeConceptResponse */
+    CreativeConceptResponse: {
+      /** Concept Key */
+      concept_key: string;
+      /**
+       * Concept Set Id
+       * Format: uuid
+       */
+      concept_set_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      decision_state?: components["schemas"]["CreativeDecisionState"] | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Ordinal */
+      ordinal: number;
+      /** Payload */
+      payload: {
+        [key: string]: unknown;
+      };
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+    };
+    /** CreativeConceptSetResponse */
+    CreativeConceptSetResponse: {
+      /**
+       * Agent Run Id
+       * Format: uuid
+       */
+      agent_run_id: string;
+      /** Concepts */
+      concepts: components["schemas"]["CreativeConceptResponse"][];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Freshness */
+      freshness: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Input Context Digest */
+      input_context_digest: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Product Snapshot Digest */
+      product_snapshot_digest: string;
+      /**
+       * Product Snapshot Id
+       * Format: uuid
+       */
+      product_snapshot_id: string;
+      /** Research Snapshot Digest */
+      research_snapshot_digest: string;
+      /**
+       * Research Snapshot Id
+       * Format: uuid
+       */
+      research_snapshot_id: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+    };
+    /** CreativeDecisionRequest */
+    CreativeDecisionRequest: {
+      /** Note */
+      note?: string | null;
+      /** Reason Code */
+      reason_code?: string | null;
+      state: components["schemas"]["CreativeDecisionState"];
+    };
+    /** CreativeDecisionResponse */
+    CreativeDecisionResponse: {
+      /**
+       * Concept Id
+       * Format: uuid
+       */
+      concept_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Decided By
+       * Format: uuid
+       */
+      decided_by: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Note */
+      note: string | null;
+      /** Reason Code */
+      reason_code: string | null;
+      state: components["schemas"]["CreativeDecisionState"];
+    };
+    /**
+     * CreativeDecisionState
+     * @enum {string}
+     */
+    CreativeDecisionState:
+      "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED";
+    /** CreativeRunStart */
+    CreativeRunStart: {
+      /** @default ORGANIC_SHORT_FORM */
+      channel_intent: components["schemas"]["ChannelIntent"];
+      /**
+       * Concept Count
+       * @default 5
+       */
+      concept_count: number;
+      /** Idempotency Key */
+      idempotency_key: string;
     };
     /** CurrentActorResponse */
     CurrentActorResponse: {
@@ -2205,6 +2438,115 @@ export interface operations {
       };
     };
   };
+  get_set_v1_creative_concept_sets__set_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        set_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeConceptSetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_concept_v1_creative_concepts__concept_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        concept_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeConceptResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  decide_v1_creative_concepts__concept_id__decision_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        concept_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreativeDecisionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeDecisionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   get_current_actor_v1_me_get: {
     parameters: {
       query?: never;
@@ -2444,6 +2786,115 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CompletenessResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_sets_v1_products__product_id__creative_concept_sets_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeConceptSetResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_runs_v1_products__product_id__creative_runs_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  start_run_v1_products__product_id__creative_runs_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreativeRunStart"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
         };
       };
       /** @description Validation Error */

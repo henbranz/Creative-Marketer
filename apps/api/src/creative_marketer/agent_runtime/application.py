@@ -9,7 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from time import monotonic
 from types import TracebackType
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from jsonschema import Draft202012Validator
@@ -20,6 +20,22 @@ from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditActorKind, AuditOutcome, AuditRecord, AuditScopeKind
 from creative_marketer.audit.safety import safe_metadata
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
+from creative_marketer.creative.application import (
+    CREATIVE_CONTRACT_KEY,
+    CREATIVE_CONTRACT_VERSION,
+    build_creative_context,
+    load_creative_output_schema,
+    validate_creative_output,
+)
+from creative_marketer.creative.domain import (
+    ChannelIntent,
+    CreativeBriefIncomplete,
+    CreativeError,
+    CreativeResearchRefreshRequired,
+    CreativeStrategyContext,
+    CreativeStrategyRequest,
+    ProductClaimRef,
+)
 from creative_marketer.events.application import OutboxWriter
 from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.events.domain import DomainEvent, EventScopeKind, tenant_event
@@ -79,6 +95,216 @@ _CATEGORY_PRIORITY = {
 }
 
 
+class AgentCapabilityUnavailable(AgentRuntimeError):
+    code = "AGENT_CAPABILITY_UNAVAILABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityResult:
+    """Capability-owned durable result metadata consumed by the common lifecycle."""
+
+    value: object
+    event_type: str
+    aggregate_type: str
+    aggregate_id: UUID
+    occurred_at: datetime
+    event_payload: Mapping[str, object]
+    metric_name: str
+    metric_value: int
+
+
+class AgentCapabilityHandler(Protocol):
+    """Trusted capability seam; the common runtime alone performs provider execution."""
+
+    agent_type: str
+    output_contract_key: str
+    output_contract_version: int
+
+    def output_schema(self) -> Mapping[str, object]: ...
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation: ...
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult: ...
+
+
+class AgentCapabilityRegistry:
+    """Explicit code-owned registry; database configuration cannot import executable code."""
+
+    def __init__(self, handlers: tuple[AgentCapabilityHandler, ...]) -> None:
+        self._handlers = {item.agent_type: item for item in handlers}
+        if len(self._handlers) != len(handlers):
+            raise ValueError("agent capability types must be unique")
+
+    def resolve(self, agent_type: str) -> AgentCapabilityHandler:
+        handler = self._handlers.get(agent_type)
+        if handler is None:
+            raise AgentCapabilityUnavailable("agent capability is not installed")
+        return handler
+
+
+@dataclass(frozen=True, slots=True)
+class ResearcherCapability:
+    agent_type: str = "researcher"
+    output_contract_key: str = RESEARCH_CONTRACT_KEY
+    output_contract_version: int = RESEARCH_CONTRACT_VERSION
+
+    def output_schema(self) -> Mapping[str, object]:
+        return load_output_schema()
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation:
+        return ModelInvocation(
+            route,
+            context.system_instructions,
+            context.product_context,
+            context.evidence_blocks,
+            self.output_schema(),
+            run.output_contract_key,
+            run.output_contract_version,
+            route.max_output_tokens,
+            route.reasoning_effort,
+            output_task=context.output_task,
+        )
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult:
+        snapshot = parse_research_output(output, run=run, selected_blocks=context.evidence_blocks)
+        return CapabilityResult(
+            value=snapshot,
+            event_type="research.snapshot.created.v1",
+            aggregate_type="research_snapshot",
+            aggregate_id=snapshot.id,
+            occurred_at=snapshot.created_at,
+            event_payload={
+                "research_snapshot_id": str(snapshot.id),
+                "agent_run_id": str(run.id),
+                "product_id": str(run.product_id),
+                "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                "agent_version_id": str(run.agent_version_id),
+                "product_snapshot_digest": run.product_snapshot_digest,
+                "research_context_digest": snapshot.research_context_digest,
+                "semantic_digest": snapshot.semantic_digest,
+            },
+            metric_name="researcher.findings",
+            metric_value=len(snapshot.findings),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeStrategistCapability:
+    agent_type: str = "creative_strategist"
+    output_contract_key: str = CREATIVE_CONTRACT_KEY
+    output_contract_version: int = CREATIVE_CONTRACT_VERSION
+
+    def output_schema(self) -> Mapping[str, object]:
+        return load_creative_output_schema()
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation:
+        return ModelInvocation(
+            route,
+            context.system_instructions,
+            {},
+            (),
+            self.output_schema(),
+            run.output_contract_key,
+            run.output_contract_version,
+            route.max_output_tokens,
+            route.reasoning_effort,
+            capability_context=context.capability_context,
+            output_task=context.output_task,
+        )
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult:
+        values = context.capability_context
+        if values is None:
+            raise AgentRunNotReady("Creative capability context is unavailable")
+        research_ref = next(
+            (item for item in run.input_context_refs if item.get("kind") == "research_snapshot"),
+            None,
+        )
+        request_ref = next(
+            (item for item in run.input_context_refs if item.get("kind") == "strategy_request"),
+            None,
+        )
+        if research_ref is None or request_ref is None:
+            raise AgentRunNotReady("Creative input references are incomplete")
+        claims_value = values.get("product_claim_refs", ())
+        findings_value = values.get("research_findings", ())
+        assets_value = values.get("available_assets", ())
+        gaps_value = values.get("research_gaps", ())
+        claims = claims_value if isinstance(claims_value, (list, tuple)) else ()
+        findings = findings_value if isinstance(findings_value, (list, tuple)) else ()
+        assets = assets_value if isinstance(assets_value, (list, tuple)) else ()
+        gaps = gaps_value if isinstance(gaps_value, (list, tuple)) else ()
+        product_value = values.get("product_brand_data", {})
+        product = dict(product_value) if isinstance(product_value, Mapping) else {}
+        creative_context = CreativeStrategyContext(
+            run.product_snapshot_id,
+            run.product_snapshot_digest,
+            run.product_snapshot_schema_version,
+            UUID(str(research_ref["id"])),
+            str(research_ref["digest"]),
+            UUID(str(research_ref["agent_run_id"])),
+            product,
+            tuple(dict(item) for item in findings if isinstance(item, Mapping)),
+            tuple(str(item) for item in gaps),
+            tuple(dict(item) for item in assets if isinstance(item, Mapping)),
+            tuple(
+                ProductClaimRef(str(item["key"]), str(item["text"]))
+                for item in claims
+                if isinstance(item, Mapping)
+            ),
+            CreativeStrategyRequest(
+                int(str(request_ref["concept_count"])),
+                ChannelIntent(str(request_ref["channel_intent"])),
+            ),
+            run.input_context_digest,
+        )
+        concept_set = validate_creative_output(
+            output,
+            tenant_id=run.tenant_id,
+            product_id=run.product_id,
+            agent_run_id=run.id,
+            context=creative_context,
+        )
+        return CapabilityResult(
+            value=concept_set,
+            event_type="creative.concept_set.created.v1",
+            aggregate_type="creative_concept_set",
+            aggregate_id=concept_set.id,
+            occurred_at=concept_set.created_at,
+            event_payload={
+                "concept_set_id": str(concept_set.id),
+                "agent_run_id": str(run.id),
+                "product_id": str(run.product_id),
+                "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                "agent_version_id": str(run.agent_version_id),
+                "concept_count": len(concept_set.concepts),
+                "semantic_digest": concept_set.semantic_digest,
+            },
+            metric_name="creative.concepts",
+            metric_value=len(concept_set.concepts),
+        )
+
+
+def default_capability_registry() -> AgentCapabilityRegistry:
+    handlers = cast(
+        tuple[AgentCapabilityHandler, ...],
+        (ResearcherCapability(), CreativeStrategistCapability()),
+    )
+    return AgentCapabilityRegistry(handlers)
+
+
 def initial_researcher_route() -> ModelRoute:
     """Versioned operational route; Agent Registry remains provider-neutral."""
     return ModelRoute(
@@ -89,6 +315,19 @@ def initial_researcher_route() -> ModelRoute:
         capabilities=frozenset({"text", "reasoning", "structured_output"}),
         reasoning_effort="medium",
         max_output_tokens=6000,
+        pricing=ModelPricing("openai-2026-09-11", Decimal("2.00"), Decimal("12.00"), "USD"),
+    )
+
+
+def initial_creative_strategist_route() -> ModelRoute:
+    return ModelRoute(
+        profile_key="creative_balanced",
+        route_version="openai-gpt-5.6-terra-creative-2026-09",
+        provider="openai",
+        model="gpt-5.6-terra",
+        capabilities=frozenset({"text", "reasoning", "structured_output"}),
+        reasoning_effort="medium",
+        max_output_tokens=8000,
         pricing=ModelPricing("openai-2026-09-11", Decimal("2.00"), Decimal("12.00"), "USD"),
     )
 
@@ -142,6 +381,15 @@ class ResearcherPreparation:
 
 
 @dataclass(frozen=True, slots=True)
+class CreativePreparation:
+    strategist: ResolvedResearcher
+    product_snapshot: ProductKnowledgeSnapshot
+    research_snapshot: ResearchSnapshot
+    research_freshness: str
+    brief_completeness: int
+
+
+@dataclass(frozen=True, slots=True)
 class WorkloadIdentity:
     workload_id: str
     environment: str
@@ -175,6 +423,7 @@ class RecoveryOperatorProvider(Protocol):
 class AgentRunRepository(Protocol):
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None: ...
     async def prepare_researcher(self, product_id: UUID) -> ResearcherPreparation | None: ...
+    async def prepare_creative(self, product_id: UUID) -> CreativePreparation | None: ...
     async def active_for_product(
         self, product_id: UUID, definition_id: UUID
     ) -> AgentRun | None: ...
@@ -217,11 +466,12 @@ class AgentRunRepository(Protocol):
         self, run_id: UUID, attempt_id: UUID, workload_id: str, failure_code: str
     ) -> ModelAttempt: ...
     async def resolve_context(self, run: AgentRun) -> ModelContext: ...
+    async def resolve_creative_context(self, run: AgentRun) -> CreativeStrategyContext: ...
     async def finish_success(
         self,
         run: AgentRun,
         result: ModelInvocationResult,
-        snapshot: ResearchSnapshot,
+        snapshot: object,
         cost: Decimal,
         attempt_id: UUID,
         workload_id: str,
@@ -385,6 +635,49 @@ def conservative_input_token_bound(context: ModelContext) -> int:
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
 
+def build_creative_model_context(
+    preparation: CreativePreparation, request: CreativeStrategyRequest
+) -> tuple[CreativeStrategyContext, ModelContext]:
+    creative = build_creative_context(
+        preparation.product_snapshot, preparation.research_snapshot, request
+    )
+    sections: dict[str, object] = {
+        "product_brand_data": dict(creative.product_context),
+        "available_assets": [dict(item) for item in creative.asset_manifest],
+        "research_findings": [dict(item) for item in creative.research_findings],
+        "research_gaps": list(creative.research_gaps),
+        "product_claim_refs": [
+            {"key": item.key, "text": item.text} for item in creative.product_claims
+        ],
+        "strategy_request": {
+            "concept_count": request.concept_count,
+            "channel_intent": request.channel_intent.value,
+        },
+    }
+    model = ModelContext(
+        preparation.strategist.configuration.system_instructions,
+        {},
+        (),
+        creative.context_digest,
+        capability_context=sections,
+        output_task=(
+            "Return only the creative.creative_concept_set.v1 structure. Produce exactly "
+            f"{request.concept_count} materially different short-form vertical-video concepts."
+        ),
+    )
+    return creative, model
+
+
+def conservative_creative_input_token_bound(context: ModelContext) -> int:
+    document = {
+        "system_instructions": context.system_instructions,
+        "context_sections": dict(context.capability_context or {}),
+        "output_task": context.output_task,
+        "output_schema": load_creative_output_schema(),
+    }
+    return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
 async def _event(
     uow: AgentRuntimeUnitOfWork,
     context: ExecutionContext,
@@ -418,6 +711,7 @@ class AgentRunService:
     providers: ModelProviderRegistry
     workload_identity_provider: WorkloadIdentityProvider
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
+    capabilities: AgentCapabilityRegistry = field(default_factory=default_capability_registry)
 
     async def request_researcher(
         self, context: ExecutionContext, *, product_id: UUID, idempotency_key: str
@@ -572,6 +866,164 @@ class AgentRunService:
             )
             return run
 
+    async def request_creative_strategist(
+        self,
+        context: ExecutionContext,
+        *,
+        product_id: UUID,
+        request: CreativeStrategyRequest,
+        idempotency_key: str,
+    ) -> AgentRun:
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
+        if not idempotency_key.strip() or len(idempotency_key) > 128:
+            raise ValueError("idempotency key is required and bounded")
+        now = datetime.now(UTC)
+        async with self.uow_factory(context.tenant_id) as uow:
+            replay = await uow.runs.get_by_idempotency(idempotency_key)
+            if replay is not None:
+                if replay.product_id != product_id or replay.agent_type != "creative_strategist":
+                    raise AgentRunNotReady("idempotency key is bound to another request")
+                return replay
+            preparation = await uow.runs.prepare_creative(product_id)
+            if preparation is None:
+                raise AgentRunNotReady(
+                    "Product snapshot V2, current Research, or active Creative "
+                    "Strategist is missing"
+                )
+            if preparation.brief_completeness < 80:
+                raise CreativeBriefIncomplete("Product Brief must be at least 80% complete")
+            if preparation.research_freshness != "current":
+                raise CreativeResearchRefreshRequired("ResearchSnapshot must be current")
+            cfg = preparation.strategist.configuration
+            if (
+                cfg.output_contract_key != CREATIVE_CONTRACT_KEY
+                or cfg.output_contract_version != CREATIVE_CONTRACT_VERSION
+                or cfg.model_policy.max_turns != 1
+                or not cfg.model_policy.structured_output_required
+                or cfg.model_policy.fallback_allowed
+                or set(cfg.model_policy.required_capabilities)
+                != {"text", "reasoning", "structured_output"}
+                or cfg.allowed_tool_keys
+                or cfg.run_budget_policy.max_tool_calls != 0
+                or cfg.run_budget_policy.max_model_calls != 1
+                or cfg.memory_scopes
+                or set(cfg.read_scopes)
+                != {"catalog.product", "research.snapshot", "catalog.asset_manifest"}
+                or set(cfg.write_scopes) != {"creative.concept_set"}
+            ):
+                raise AgentRunNotReady(
+                    "active Creative Strategist configuration violates v1 invariants"
+                )
+            route = self.router.resolve(
+                cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
+            )
+            self.providers.resolve(route.provider)
+            input_allowance = cfg.run_budget_policy.max_total_tokens - route.max_output_tokens
+            worst_cost = max(
+                route.pricing.cost(input_allowance, route.max_output_tokens),
+                route.pricing.cost(cfg.run_budget_policy.max_total_tokens, 0),
+            )
+            if (
+                route.pricing.currency != cfg.run_budget_policy.currency
+                or cfg.period_budget_policy.currency != cfg.run_budget_policy.currency
+                or input_allowance <= 0
+                or worst_cost > cfg.run_budget_policy.max_cost
+            ):
+                raise BudgetExceeded("creative model route cannot fit the budget envelope")
+            active = await uow.runs.active_for_product(
+                product_id, preparation.strategist.requested_definition_id
+            )
+            if active is not None:
+                return active
+            creative_context, model_context = build_creative_model_context(preparation, request)
+            if conservative_creative_input_token_bound(model_context) > input_allowance:
+                raise BudgetExceeded("bounded Creative context exceeds input token envelope")
+            period_start = _period_start(now, cfg.period_budget_policy.period)
+            run = AgentRun(
+                tenant_id=context.tenant_id,
+                requested_agent_definition_id=preparation.strategist.requested_definition_id,
+                resolved_agent_definition_id=preparation.strategist.resolved_definition_id,
+                agent_version_id=preparation.strategist.version_id,
+                agent_version_number=preparation.strategist.version_number,
+                agent_configuration_digest=preparation.strategist.configuration_digest,
+                prompt_revision=cfg.prompt_revision,
+                product_id=product_id,
+                product_snapshot_id=preparation.product_snapshot.id,
+                product_snapshot_digest=preparation.product_snapshot.digest,
+                product_snapshot_schema_version=2,
+                research_context_digest=preparation.research_snapshot.research_context_digest,
+                context_digest=creative_context.context_digest,
+                selected_evidence=(),
+                model_profile_key=cfg.model_policy.profile_key,
+                output_contract_key=CREATIVE_CONTRACT_KEY,
+                output_contract_version=CREATIVE_CONTRACT_VERSION,
+                correlation_id=context.correlation_id,
+                initiated_by_actor_kind=context.actor.kind.value,
+                initiated_by_actor_id=context.actor.id,
+                period_start=period_start,
+                reserved_cost=cfg.run_budget_policy.max_cost,
+                currency=cfg.run_budget_policy.currency,
+                idempotency_key=idempotency_key,
+                agent_type="creative_strategist",
+                input_context_kind="creative_strategy.v1",
+                input_context_schema_version=1,
+                input_context_digest=creative_context.context_digest,
+                input_context_refs=creative_context.refs(),
+                max_total_tokens=cfg.run_budget_policy.max_total_tokens,
+                created_at=now,
+            )
+            await uow.runs.reserve_period_budget(
+                run_id=run.id,
+                definition_id=run.requested_agent_definition_id,
+                period_start=period_start,
+                max_runs=cfg.period_budget_policy.max_runs,
+                max_cost=cfg.period_budget_policy.max_cost,
+                reserve_cost=run.reserved_cost,
+                currency=run.currency,
+            )
+            if not await uow.runs.add(run):
+                raise AgentRunConflict("another Creative Strategist request won the race")
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="creative.strategy.requested",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="agent_run",
+                    resource_id=str(run.id),
+                    agent_definition_id=run.requested_agent_definition_id,
+                    agent_version_id=run.agent_version_id,
+                    agent_run_id=run.id,
+                    metadata=safe_metadata(
+                        {
+                            "product_id": str(product_id),
+                            "input_context_digest": run.input_context_digest,
+                            "concept_count": request.concept_count,
+                            "channel_intent": request.channel_intent.value,
+                        }
+                    ),
+                )
+            )
+            payload: dict[str, object] = {
+                "agent_run_id": str(run.id),
+                "product_id": str(product_id),
+                "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                "agent_version_id": str(run.agent_version_id),
+                "product_snapshot_digest": run.product_snapshot_digest,
+                "research_context_digest": run.research_context_digest,
+                "context_digest": run.context_digest,
+            }
+            await _event(uow, context, "agent.run.requested.v1", "agent_run", run.id, payload)
+            await uow.commit()
+            self.telemetry.count(
+                "agent_runs",
+                attributes={"agent.type": "creative_strategist", "result": "pending"},
+            )
+            return run
+
     async def get_run(self, context: ExecutionContext, run_id: UUID) -> AgentRun:
         async with self.uow_factory(context.tenant_id) as uow:
             run = await uow.runs.get(run_id)
@@ -641,19 +1093,15 @@ class AgentRunService:
                 await self._append_workload_started(uow, run, workload)
                 await uow.commit()
                 claim_committed = True
-            schema = load_output_schema()
+            capability = self.capabilities.resolve(run.agent_type)
+            if (
+                capability.output_contract_key != run.output_contract_key
+                or capability.output_contract_version != run.output_contract_version
+            ):
+                raise AgentCapabilityUnavailable("AgentRun contract does not match capability")
+            schema = capability.output_schema()
             provider = self.providers.resolve(route.provider)
-            invocation = ModelInvocation(
-                route=route,
-                system_instructions=context.system_instructions,
-                trusted_product_context=context.product_context,
-                untrusted_evidence=context.evidence_blocks,
-                output_schema=schema,
-                output_contract_key=run.output_contract_key,
-                output_contract_version=run.output_contract_version,
-                max_output_tokens=route.max_output_tokens,
-                reasoning_effort=route.reasoning_effort,
-            )
+            invocation = capability.invocation(run, route, context)
             async with self.uow_factory(tenant_id) as uow:
                 attempt = await uow.runs.mark_provider_started(
                     run.id, attempt.id, workload.workload_id
@@ -663,7 +1111,7 @@ class AgentRunService:
             with self.telemetry.span(
                 "model.invoke",
                 {
-                    "agent.type": "researcher",
+                    "agent.type": run.agent_type,
                     "model.profile": run.model_profile_key,
                     "provider": route.provider,
                     "model": route.model,
@@ -716,27 +1164,25 @@ class AgentRunService:
                 raise BudgetExceeded("provider usage exceeded the configured token envelope")
             if actual_cost > run.reserved_cost:
                 raise BudgetExceeded("provider usage exceeded the reserved run cost")
-            snapshot = parse_research_output(
-                result.output, run=run, selected_blocks=context.evidence_blocks
-            )
+            capability_result = capability.validate_result(result.output, run, context)
             async with self.uow_factory(tenant_id) as uow:
                 completed = await uow.runs.finish_success(
                     run,
                     result,
-                    snapshot,
+                    capability_result.value,
                     actual_cost,
                     attempt.id,
                     workload.workload_id,
                 )
-                await self._append_workload_completion(uow, completed, workload, snapshot)
+                await self._append_workload_completion(uow, completed, workload, capability_result)
                 await uow.commit()
             self.telemetry.count(
-                "agent_runs", attributes={"agent.type": "researcher", "result": "succeeded"}
+                "agent_runs", attributes={"agent.type": run.agent_type, "result": "succeeded"}
             )
             self.telemetry.duration(
                 "agent_run.duration",
                 monotonic() - timer,
-                {"agent.type": "researcher", "result": "succeeded"},
+                {"agent.type": run.agent_type, "result": "succeeded"},
             )
             self.telemetry.count(
                 "model.calls", attributes={"provider": route.provider, "result": "succeeded"}
@@ -752,14 +1198,16 @@ class AgentRunService:
                 {"provider": route.provider, "currency": run.currency},
             )
             self.telemetry.count(
-                "researcher.findings", len(snapshot.findings), {"result": "accepted"}
+                capability_result.metric_name,
+                capability_result.metric_value,
+                {"result": "accepted"},
             )
             return completed
         except Exception as error:
             if run is not None and attempt is not None and claim_committed:
                 code = (
                     error.code
-                    if isinstance(error, (AgentRuntimeError, ModelProviderError))
+                    if isinstance(error, (AgentRuntimeError, ModelProviderError, CreativeError))
                     else "MODEL_INVALID_OUTPUT"
                 )
                 if result is None and provider_started_committed:
@@ -783,7 +1231,11 @@ class AgentRunService:
                     await self._append_workload_completion(uow, failed, workload, None)
                     await uow.commit()
                 self.telemetry.count(
-                    "agent_runs", attributes={"agent.type": "researcher", "result": "failed"}
+                    "agent_runs",
+                    attributes={
+                        "agent.type": run.agent_type,
+                        "result": "failed",
+                    },
                 )
                 if code == "INVALID_RESEARCH_CITATION":
                     self.telemetry.count(
@@ -829,7 +1281,7 @@ class AgentRunService:
         uow: AgentRuntimeUnitOfWork,
         run: AgentRun,
         workload: WorkloadIdentity,
-        snapshot: ResearchSnapshot | None,
+        capability_result: CapabilityResult | None,
     ) -> None:
         metadata = safe_metadata(
             {
@@ -851,8 +1303,8 @@ class AgentRunService:
                 tenant_id=run.tenant_id,
                 actor_kind=AuditActorKind.WORKLOAD,
                 actor_id=workload.workload_id,
-                action="agent.run.succeeded" if snapshot else "agent.run.failed",
-                outcome=AuditOutcome.SUCCESS if snapshot else AuditOutcome.FAILED,
+                action="agent.run.succeeded" if capability_result else "agent.run.failed",
+                outcome=AuditOutcome.SUCCESS if capability_result else AuditOutcome.FAILED,
                 reason_code=run.failure_code,
                 resource_type="agent_run",
                 resource_id=str(run.id),
@@ -897,34 +1349,24 @@ class AgentRunService:
                 payload_schema_digest=contracts.schema_digest("agent.run.completed.v1"),
             )
         )
-        if snapshot is not None:
-            snapshot_payload = {
-                "research_snapshot_id": str(snapshot.id),
-                "agent_run_id": str(run.id),
-                "product_id": str(run.product_id),
-                "requested_agent_definition_id": str(run.requested_agent_definition_id),
-                "agent_version_id": str(run.agent_version_id),
-                "product_snapshot_digest": run.product_snapshot_digest,
-                "research_context_digest": run.research_context_digest,
-                "semantic_digest": snapshot.semantic_digest,
-            }
+        if capability_result is not None:
             await uow.outbox.append(
                 DomainEvent(
-                    event_type="research.snapshot.created.v1",
+                    event_type=capability_result.event_type,
                     schema_version=1,
                     scope_kind=EventScopeKind.TENANT,
                     tenant_id=run.tenant_id,
-                    aggregate_type="research_snapshot",
-                    aggregate_id=snapshot.id,
-                    occurred_at=snapshot.created_at,
+                    aggregate_type=capability_result.aggregate_type,
+                    aggregate_id=capability_result.aggregate_id,
+                    occurred_at=capability_result.occurred_at,
                     actor_kind=ActorKind.WORKLOAD,
                     actor_id=workload.actor_id,
                     agent_definition_id=run.requested_agent_definition_id,
                     agent_version_id=run.agent_version_id,
                     agent_run_id=run.id,
                     correlation_id=run.correlation_id,
-                    payload=snapshot_payload,
-                    payload_schema_digest=contracts.schema_digest("research.snapshot.created.v1"),
+                    payload=capability_result.event_payload,
+                    payload_schema_digest=contracts.schema_digest(capability_result.event_type),
                 )
             )
 

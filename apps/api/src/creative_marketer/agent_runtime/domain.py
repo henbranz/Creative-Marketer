@@ -211,11 +211,19 @@ class ModelContext:
     evidence_blocks: tuple[EvidenceBlockRef, ...]
     context_digest: str
     schema_version: int = 1
+    capability_context: Mapping[str, object] | None = None
+    output_task: str = "Produce the ResearchSnapshot and cite exact supplied references."
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "product_context", MappingProxyType(dict(self.product_context)))
-        if not self.evidence_blocks or not DIGEST.fullmatch(self.context_digest):
-            raise ValueError("model context requires evidence and a digest")
+        if self.capability_context is not None:
+            object.__setattr__(
+                self, "capability_context", MappingProxyType(dict(self.capability_context))
+            )
+        if (not self.evidence_blocks and self.capability_context is None) or not DIGEST.fullmatch(
+            self.context_digest
+        ):
+            raise ValueError("model context requires bounded capability data and a digest")
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +237,8 @@ class ModelInvocation:
     output_contract_version: int
     max_output_tokens: int
     reasoning_effort: str
+    capability_context: Mapping[str, object] | None = None
+    output_task: str = "Produce the ResearchSnapshot and cite exact supplied references."
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,6 +519,11 @@ class AgentRun:
     reserved_cost: Decimal
     currency: str
     idempotency_key: str
+    agent_type: str = "researcher"
+    input_context_kind: str = "researcher.v1"
+    input_context_schema_version: int = 1
+    input_context_digest: str = ""
+    input_context_refs: tuple[Mapping[str, object], ...] = ()
     recovery_of_run_id: UUID | None = None
     id: UUID = field(default_factory=uuid4)
     status: AgentRunStatus = AgentRunStatus.PENDING
@@ -535,16 +550,39 @@ class AgentRun:
     is_stranded: bool = False
 
     def __post_init__(self) -> None:
+        if not self.input_context_digest:
+            object.__setattr__(self, "input_context_digest", self.context_digest)
+        if not self.input_context_refs:
+            object.__setattr__(
+                self,
+                "input_context_refs",
+                (
+                    {
+                        "kind": "product_snapshot",
+                        "id": str(self.product_snapshot_id),
+                        "digest": self.product_snapshot_digest,
+                    },
+                    {"kind": "research_manifest", "digest": self.research_context_digest},
+                    *self.selected_evidence,
+                ),
+            )
         for value in (
             self.agent_configuration_digest,
             self.product_snapshot_digest,
             self.research_context_digest,
             self.context_digest,
+            self.input_context_digest,
         ):
             if not DIGEST.fullmatch(value):
                 raise ValueError("AgentRun provenance digest is invalid")
-        if not self.selected_evidence:
-            raise ValueError("AgentRun requires frozen selected evidence references")
+        if not self.selected_evidence and self.agent_type == "researcher":
+            raise ValueError("Researcher AgentRun requires selected evidence references")
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", self.agent_type):
+            raise ValueError("AgentRun agent_type is invalid")
+        if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", self.input_context_kind):
+            raise ValueError("AgentRun context kind is invalid")
+        if self.input_context_schema_version < 1 or not self.input_context_refs:
+            raise ValueError("AgentRun generic context provenance is required")
         if self.max_total_tokens < 0:
             raise ValueError("AgentRun token budget cannot be negative")
         if self.recovery_of_run_id == self.id:

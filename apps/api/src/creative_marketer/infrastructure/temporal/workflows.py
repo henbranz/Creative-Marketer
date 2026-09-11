@@ -15,6 +15,8 @@ with workflow.unsafe.imports_passed_through():
         TOOL_RETRY_POLICY,
     )
     from creative_marketer.workflow_orchestration.contracts import (
+        AgentExecutionActivityResult,
+        AgentExecutionWorkflowInput,
         GenerationPollResult,
         GenerationStartResult,
         GenerationState,
@@ -228,6 +230,37 @@ class ResearcherWorkflow:
                 "workflow.execute_researcher",
                 request,
                 result_type=ResearcherActivityResult,
+                start_to_close_timeout=RESEARCHER_ACTIVITY_TIMEOUT,
+                schedule_to_close_timeout=timedelta(minutes=15),
+                retry_policy=RESEARCHER_RETRY_POLICY,
+            ),
+        )
+        self._state = (
+            WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
+        )
+        return result
+
+
+@workflow.defn(name="AgentExecutionWorkflow")
+class AgentExecutionWorkflow:
+    """Future-only thin workflow; deployed Researcher history remains unchanged."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: AgentExecutionWorkflowInput) -> AgentExecutionActivityResult:
+        self._state = WorkflowState.EXECUTING
+        result = cast(
+            AgentExecutionActivityResult,
+            await workflow.execute_activity(
+                "workflow.execute_agent",
+                request,
+                result_type=AgentExecutionActivityResult,
                 start_to_close_timeout=RESEARCHER_ACTIVITY_TIMEOUT,
                 schedule_to_close_timeout=timedelta(minutes=15),
                 retry_policy=RESEARCHER_RETRY_POLICY,

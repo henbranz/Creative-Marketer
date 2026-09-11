@@ -216,3 +216,8 @@ second inference automatically. An expired attempt is classified for explicit op
 `rerun-as-new` closes the original and emits the ordinary `agent.run.requested.v1` fact for a new
 lineage-linked AgentRun, so the existing Inbox/Temporal bridge handles it as a normal new workflow.
 Exactly-once inference is explicitly not claimed.
+## Creative strategy workflow
+
+The generic request event is resolved against authoritative AgentRun type. Existing Researcher
+workflow history remains unchanged; new Creative runs use the thin AgentExecutionWorkflow. Creative
+production approval is a durable product decision and does not initiate media generation or publish.

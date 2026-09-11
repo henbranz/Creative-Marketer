@@ -14,6 +14,8 @@ from creative_marketer.tool_execution.domain import (
     TrustedAgentInvocation,
 )
 from creative_marketer.workflow_orchestration.contracts import (
+    AgentExecutionActivityResult,
+    AgentExecutionWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
     GenerationState,
@@ -140,6 +142,28 @@ class TemporalActivities:
             return ResearcherActivityResult(
                 str(run.id), run.status.value, run.result_ref, run.failure_code
             )
+
+    @activity.defn(name="workflow.execute_agent")
+    async def execute_agent(
+        self, request: AgentExecutionWorkflowInput
+    ) -> AgentExecutionActivityResult:
+        if self.agent_runtime is None:
+            raise ApplicationError(
+                "AgentRuntime is not composed",
+                type="AGENT_RUNTIME_UNAVAILABLE",
+                non_retryable=True,
+            )
+        try:
+            run = await self.agent_runtime.execute(
+                UUID(request.tenant_id), UUID(request.agent_run_id)
+            )
+        except Exception as error:
+            raise ApplicationError(
+                "Agent execution failed", type="AGENT_EXECUTION_FAILURE"
+            ) from error
+        return AgentExecutionActivityResult(
+            str(run.id), run.status.value, run.result_ref, run.failure_code
+        )
 
     @activity.defn(name="workflow.start_generation")
     async def start_generation(self, request: GenerationWorkflowInput) -> GenerationStartResult:

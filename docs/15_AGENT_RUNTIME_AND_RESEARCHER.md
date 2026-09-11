@@ -108,3 +108,9 @@ tokens, cost, and invalid-citation totals. They never contain tenant/product/sou
 content. Expired leases derive a read-only `recovery_required` operational state while preserving
 the authoritative `RUNNING` row. Recovery is an explicit, trusted CLI-only operation; see
 `16_AGENT_RUN_RECOVERY.md`. Exactly-once provider billing is not promised.
+## Multi-capability runtime
+
+AgentRun now freezes generic `agent_type` and input-context kind/version/digest/reference fields.
+Researcher is backfilled as `researcher.v1`; its evidence selection and ResearchSnapshot semantics
+are unchanged. Explicit trusted capability handlers own context/output semantics while common runtime
+owns route, budget, attempt, provider, recovery, Audit, Outbox, and telemetry behavior.

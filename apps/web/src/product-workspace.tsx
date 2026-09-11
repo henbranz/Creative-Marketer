@@ -8,6 +8,8 @@ import {
   type AgentRun,
   type Brand,
   type BriefWrite,
+  type CreativeConcept,
+  type CreativeConceptSet,
   catalogApi,
   listText,
   type Product,
@@ -855,6 +857,382 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function creativeValue(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === "string" || typeof value === "number"
+    ? String(value)
+    : "";
+}
+
+function CreativesPanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [sets, setSets] = useState<CreativeConceptSet[]>([]);
+  const [research, setResearch] = useState<ResearchSnapshot[]>([]);
+  const [selected, setSelected] = useState<CreativeConcept | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback(async () => {
+    const [nextRuns, nextSets, nextResearch] = await Promise.all([
+      catalogApi.listCreativeRuns(session, workspace.product.id),
+      catalogApi.listCreativeConceptSets(session, workspace.product.id),
+      catalogApi.listResearchSnapshots(session, workspace.product.id),
+    ]);
+    setRuns(nextRuns);
+    setSets(nextSets);
+    setResearch(nextResearch);
+  }, [session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void refresh().catch(() =>
+          setError("Creative concepts could not be loaded."),
+        ),
+    );
+  }, [refresh]);
+  const latestRun = runs[0];
+  const latest = sets[0];
+  const canGenerate =
+    workspace.product.can_edit &&
+    workspace.completeness.score >= 80 &&
+    Boolean(workspace.latest_snapshot) &&
+    research[0]?.freshness === "current" &&
+    !latestRun?.is_stranded;
+  const decide = async (
+    concept: CreativeConcept,
+    state: "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED",
+  ) => {
+    await catalogApi.decideCreativeConcept(session, concept.id, state);
+    await refresh();
+    const updated = sets
+      .flatMap((item) => item.concepts)
+      .find((item) => item.id === concept.id);
+    setSelected(updated ?? null);
+  };
+  return (
+    <div className="creative-workspace">
+      <section className="creative-hero">
+        <div>
+          <p className="eyebrow">Evidence-grounded strategy</p>
+          <h2>Creative concepts</h2>
+          <p>
+            Turn current Product Brain and Research into production-ready
+            short-form video directions. No media is generated yet.
+          </p>
+        </div>
+        <div className="creative-readiness">
+          <span>Brief {workspace.completeness.score}%</span>
+          <span>
+            Research{" "}
+            {research[0]?.freshness === "current" ? "current" : "required"}
+          </span>
+          <button
+            className="primary"
+            disabled={!canGenerate || busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              void catalogApi
+                .startCreativeStrategist(
+                  session,
+                  workspace.product.id,
+                  crypto.randomUUID(),
+                )
+                .then(refresh)
+                .catch((caught: unknown) =>
+                  setError(
+                    caught instanceof ApiError
+                      ? caught.message.replaceAll("_", " ")
+                      : "Creative Strategist could not start.",
+                  ),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? "Queueing…" : "Generate 5 concepts"}
+          </button>
+        </div>
+      </section>
+      {workspace.completeness.score < 80 && (
+        <p className="warning-banner">
+          Complete at least 80% of the Product Brief before generating concepts.
+        </p>
+      )}
+      {research[0]?.freshness !== "current" && (
+        <p className="warning-banner">
+          Current Research is required. Open Research and run Update Research
+          first.
+        </p>
+      )}
+      {latestRun && (
+        <div className="creative-run-state">
+          <strong>
+            {latestRun.is_stranded
+              ? "Needs operational recovery"
+              : latestRun.status === "PENDING"
+                ? "Queued"
+                : latestRun.status === "RUNNING"
+                  ? "Generating concepts"
+                  : latestRun.status === "SUCCEEDED"
+                    ? "Completed"
+                    : "Failed"}
+          </strong>
+          <small>Creative Strategist v{latestRun.agent_version_number}</small>
+        </div>
+      )}
+      {error && <p className="error-banner">{error}</p>}
+      {latest ? (
+        <>
+          {latest.freshness === "OUTDATED" && (
+            <p className="warning-banner">
+              These concepts were generated from outdated Product or Research
+              context. Historical decisions remain visible; refresh Research and
+              generate a current set before production.
+            </p>
+          )}
+          <div className="concept-grid">
+            {latest.concepts.map((concept) => {
+              const payload = concept.payload as Record<string, unknown>;
+              const hook = (payload.hook ?? {}) as Record<string, unknown>;
+              const assets = Array.isArray(payload.required_assets)
+                ? payload.required_assets
+                : [];
+              const missing = assets.filter(
+                (item) =>
+                  typeof item === "object" &&
+                  item !== null &&
+                  (item as Record<string, unknown>).kind === "MISSING_ASSET",
+              ).length;
+              return (
+                <article className="concept-card" key={concept.id}>
+                  <div className="concept-card-top">
+                    <span>{creativeValue(payload, "channel_intent")}</span>
+                    <span>
+                      {creativeValue(payload, "estimated_duration_seconds")} sec
+                    </span>
+                  </div>
+                  <h3>{creativeValue(payload, "title")}</h3>
+                  <p className="concept-hook">
+                    “
+                    {creativeValue(hook, "on_screen_text") ||
+                      creativeValue(hook, "visual_open")}
+                    ”
+                  </p>
+                  <p>{creativeValue(payload, "creative_angle")}</p>
+                  <div className="concept-meta">
+                    <span>
+                      {creativeValue(
+                        payload,
+                        "primary_success_metric",
+                      ).replaceAll("_", " ")}
+                    </span>
+                    <span>
+                      {assets.length - missing} ready · {missing} missing
+                    </span>
+                    <span>{concept.decision_state ?? "UNREVIEWED"}</span>
+                  </div>
+                  <button
+                    className="secondary"
+                    onClick={() => setSelected(concept)}
+                  >
+                    Inspect concept
+                  </button>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <section className="empty-panel">
+          <span className="empty-glyph">C</span>
+          <h2>No concepts yet</h2>
+          <p>
+            Run Researcher, complete the Brief, then generate a strategy set.
+          </p>
+        </section>
+      )}
+      {selected && (
+        <section
+          className="concept-detail"
+          aria-label="Creative concept detail"
+        >
+          <button className="secondary" onClick={() => setSelected(null)}>
+            Close
+          </button>
+          <p className="eyebrow">Structured production direction</p>
+          <h2>
+            {creativeValue(
+              selected.payload as Record<string, unknown>,
+              "title",
+            )}
+          </h2>
+          <p>
+            {creativeValue(
+              selected.payload as Record<string, unknown>,
+              "strategic_rationale",
+            )}
+          </p>
+          <h3>Hook</h3>
+          {Object.entries(
+            ((selected.payload as Record<string, unknown>).hook ??
+              {}) as Record<string, unknown>,
+          ).map(([key, value]) =>
+            value ? (
+              <p key={key}>
+                <strong>{key.replaceAll("_", " ")}: </strong>
+                {String(value)}
+              </p>
+            ) : null,
+          )}
+          <h3>Scenes</h3>
+          <ol>
+            {(Array.isArray(selected.payload.scenes)
+              ? selected.payload.scenes
+              : []
+            ).map((scene, index) => {
+              const value = scene as Record<string, unknown>;
+              return (
+                <li key={index}>
+                  <strong>{creativeValue(value, "purpose")}</strong>
+                  <p>{creativeValue(value, "visual_direction")}</p>
+                  <small>{creativeValue(value, "voiceover")}</small>
+                </li>
+              );
+            })}
+          </ol>
+          <h3>Experiment hypothesis</h3>
+          <p>
+            {creativeValue(
+              selected.payload as Record<string, unknown>,
+              "hypothesis",
+            )}
+          </p>
+          <h3>CTA</h3>
+          <p>
+            {creativeValue(
+              ((selected.payload as Record<string, unknown>).cta ??
+                {}) as Record<string, unknown>,
+              "text",
+            )}{" "}
+            <small>
+              {creativeValue(
+                ((selected.payload as Record<string, unknown>).cta ??
+                  {}) as Record<string, unknown>,
+                "intent",
+              ).replaceAll("_", " ")}
+            </small>
+          </p>
+          <h3>Message points &amp; claims</h3>
+          <ul>
+            {(Array.isArray(selected.payload.message_points)
+              ? selected.payload.message_points
+              : []
+            ).map((point, index) => {
+              const value = point as Record<string, unknown>;
+              return (
+                <li key={index}>
+                  {creativeValue(value, "text")}{" "}
+                  {creativeValue(value, "kind") === "PRODUCT_FACT" && (
+                    <small>Grounded in Product Brain</small>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          <h3>Research support</h3>
+          <ul>
+            {(Array.isArray(selected.payload.supporting_research_refs)
+              ? selected.payload.supporting_research_refs
+              : []
+            ).map((reference, index) => {
+              const value = reference as Record<string, unknown>;
+              const findingKey = creativeValue(value, "finding_key");
+              const finding = research
+                .flatMap((snapshot) => snapshot.findings)
+                .find((item) => item.key === findingKey);
+              return (
+                <li key={index}>
+                  <strong>{findingKey.replaceAll("_", " ")}</strong>
+                  {finding && <p>{finding.statement}</p>}
+                  <small>
+                    Open Research to inspect its evidence citations.
+                  </small>
+                </li>
+              );
+            })}
+          </ul>
+          <h3>Production assets</h3>
+          <ul>
+            {(Array.isArray(selected.payload.required_assets)
+              ? selected.payload.required_assets
+              : []
+            ).map((requirement, index) => {
+              const value = requirement as Record<string, unknown>;
+              return (
+                <li key={index}>
+                  <strong>
+                    {creativeValue(value, "kind").replaceAll("_", " ")}
+                  </strong>{" "}
+                  {creativeValue(value, "description") ||
+                    creativeValue(value, "intended_role")}
+                  {creativeValue(value, "asset_id") && (
+                    <small> · Asset {creativeValue(value, "asset_id")}</small>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+          {Array.isArray(selected.payload.required_disclaimers) &&
+            selected.payload.required_disclaimers.length > 0 && (
+              <>
+                <h3>Required disclaimers</h3>
+                <ul>
+                  {selected.payload.required_disclaimers.map((value, index) => (
+                    <li key={index}>{String(value)}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          <h3>Production notes</h3>
+          <p>
+            {creativeValue(
+              selected.payload as Record<string, unknown>,
+              "production_notes",
+            )}
+          </p>
+          {workspace.product.can_edit ? (
+            <div className="concept-actions">
+              <button onClick={() => void decide(selected, "SHORTLISTED")}>
+                Shortlist
+              </button>
+              <button
+                className="primary"
+                onClick={() => void decide(selected, "APPROVED_FOR_PRODUCTION")}
+              >
+                Approve for production
+              </button>
+              <button
+                className="danger"
+                onClick={() => void decide(selected, "REJECTED")}
+              >
+                Reject
+              </button>
+            </div>
+          ) : (
+            <p className="readonly-note">
+              Creative review is read-only for members.
+            </p>
+          )}
+          <small>
+            Approval accepts this concept as a future Production input. It does
+            not authorize media spend or publishing.
+          </small>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function PillList({
   values,
   empty = "Not provided",
@@ -1533,6 +1911,8 @@ export function ProductWorkspaceApp() {
                     <AssetsPanel workspace={workspace} />
                   ) : tab === "Research" ? (
                     <ResearchPanel workspace={workspace} />
+                  ) : tab === "Creatives" ? (
+                    <CreativesPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

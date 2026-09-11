@@ -1162,3 +1162,117 @@ label small,
     grid-template-columns: 1fr;
   }
 }
+.creative-workspace {
+  display: grid;
+  gap: 20px;
+}
+.creative-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(
+    135deg,
+    rgba(103, 78, 167, 0.12),
+    rgba(240, 164, 91, 0.09)
+  );
+}
+.creative-hero h2,
+.concept-detail h2 {
+  margin: 4px 0 8px;
+}
+.creative-readiness {
+  min-width: 230px;
+  display: grid;
+  gap: 8px;
+  align-content: center;
+}
+.creative-readiness span,
+.concept-card-top span,
+.concept-meta span {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.creative-run-state {
+  display: flex;
+  justify-content: space-between;
+  padding: 13px 16px;
+  border-radius: 12px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+.concept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+.concept-card {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--paper);
+  box-shadow: 0 12px 35px rgba(27, 21, 43, 0.05);
+}
+.concept-card-top,
+.concept-meta,
+.concept-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 9px;
+}
+.concept-hook {
+  font-family: Georgia, serif;
+  font-size: 20px;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.concept-meta span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
+.concept-detail {
+  position: fixed;
+  z-index: 20;
+  inset: 4vh 3vw 4vh auto;
+  width: min(640px, 92vw);
+  overflow: auto;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--paper);
+  box-shadow: 0 30px 90px rgba(20, 16, 31, 0.28);
+}
+.concept-detail ol {
+  display: grid;
+  gap: 10px;
+  padding-left: 24px;
+}
+.concept-detail li {
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+.concept-actions {
+  margin: 22px 0 10px;
+  justify-content: flex-start;
+}
+@media (max-width: 720px) {
+  .creative-hero {
+    flex-direction: column;
+  }
+  .creative-readiness {
+    min-width: 0;
+  }
+  .concept-detail {
+    inset: 2vh 2vw;
+    width: auto;
+  }
+}

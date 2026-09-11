@@ -107,3 +107,6 @@ See [`DEVELOPMENT.md`](DEVELOPMENT.md) for prerequisites, local startup, reposit
 Phase 2 introduces the first real, evidence-grounded AI vertical slice. See
 [`docs/15_AGENT_RUNTIME_AND_RESEARCHER.md`](docs/15_AGENT_RUNTIME_AND_RESEARCHER.md) for its
 provider-neutral AgentRuntime, OpenAI route, explicit bootstrap, and optional live smoke path.
+Creative Strategist development bootstrap: `cd apps/api && uv run python scripts/bootstrap_creative_strategist.py`
+requires the same explicit bootstrap tenant/user environment variables as Researcher. See
+`docs/17_CREATIVE_STRATEGIST.md` for its frozen-context and review model.

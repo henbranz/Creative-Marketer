@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "creative.creative_concept_set.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["concepts", "strategy_limitations"],
+  "properties": {
+    "concepts": {"type": "array", "minItems": 3, "maxItems": 5, "items": {"$ref": "#/$defs/concept"}},
+    "strategy_limitations": {"type": "array", "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+  },
+  "$defs": {
+    "hook": {
+      "type": "object", "additionalProperties": false,
+      "required": ["spoken_or_voiceover", "on_screen_text", "visual_open"],
+      "properties": {
+        "spoken_or_voiceover": {"type": ["string", "null"], "maxLength": 500},
+        "on_screen_text": {"type": ["string", "null"], "maxLength": 240},
+        "visual_open": {"type": "string", "minLength": 1, "maxLength": 500}
+      }
+    },
+    "research_ref": {
+      "type": "object", "additionalProperties": false,
+      "required": ["research_snapshot_id", "finding_key"],
+      "properties": {
+        "research_snapshot_id": {"type": "string", "format": "uuid"},
+        "finding_key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}
+      }
+    },
+    "message_point": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "kind", "text", "product_claim_ref"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "kind": {"enum": ["VALUE_PROPOSITION", "PRODUCT_FACT", "EMOTIONAL_MESSAGE", "SOCIAL_PROOF_ANGLE", "OFFER", "CTA"]},
+        "text": {"type": "string", "minLength": 1, "maxLength": 500},
+        "product_claim_ref": {"type": ["string", "null"], "maxLength": 71}
+      }
+    },
+    "asset_requirement": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "asset_id", "intended_role"],
+          "properties": {"kind": {"const": "EXISTING_ASSET"}, "asset_id": {"type": "string", "format": "uuid"}, "intended_role": {"type": "string", "minLength": 1, "maxLength": 100}}
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "asset_kind", "description", "shot_requirement", "priority"],
+          "properties": {"kind": {"const": "MISSING_ASSET"}, "asset_kind": {"type": "string", "minLength": 1, "maxLength": 64}, "description": {"type": "string", "minLength": 1, "maxLength": 500}, "shot_requirement": {"type": "string", "minLength": 1, "maxLength": 500}, "priority": {"enum": ["LOW", "MEDIUM", "HIGH"]}}
+        }
+      ]
+    },
+    "scene": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ordinal", "estimated_duration_seconds", "purpose", "visual_direction", "on_screen_text", "voiceover", "message_point_refs", "asset_requirements"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 1, "maximum": 10},
+        "estimated_duration_seconds": {"type": "integer", "minimum": 1, "maximum": 45},
+        "purpose": {"type": "string", "minLength": 1, "maxLength": 300},
+        "visual_direction": {"type": "string", "minLength": 1, "maxLength": 600},
+        "on_screen_text": {"type": ["string", "null"], "maxLength": 300},
+        "voiceover": {"type": ["string", "null"], "maxLength": 600},
+        "message_point_refs": {"type": "array", "maxItems": 10, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"}},
+        "asset_requirements": {"type": "array", "maxItems": 15, "items": {"$ref": "#/$defs/asset_requirement"}}
+      }
+    },
+    "concept": {
+      "type": "object", "additionalProperties": false,
+      "required": ["concept_key", "title", "format", "channel_intent", "creative_angle", "strategic_rationale", "target_audience", "hook", "estimated_duration_seconds", "scenes", "cta", "hypothesis", "primary_success_metric", "supporting_research_refs", "message_points", "required_assets", "required_disclaimers", "production_notes"],
+      "properties": {
+        "concept_key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 160},
+        "format": {"const": "SHORT_FORM_VIDEO"},
+        "channel_intent": {"enum": ["ORGANIC_SHORT_FORM", "TIKTOK", "INSTAGRAM_REELS", "PAID_SOCIAL"]},
+        "creative_angle": {"type": "string", "minLength": 1, "maxLength": 500},
+        "strategic_rationale": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "target_audience": {"type": "string", "minLength": 1, "maxLength": 500},
+        "hook": {"$ref": "#/$defs/hook"},
+        "estimated_duration_seconds": {"type": "integer", "minimum": 10, "maximum": 60},
+        "scenes": {"type": "array", "minItems": 3, "maxItems": 10, "items": {"$ref": "#/$defs/scene"}},
+        "cta": {"type": "object", "additionalProperties": false, "required": ["text", "intent"], "properties": {"text": {"type": "string", "minLength": 1, "maxLength": 240}, "intent": {"enum": ["LEARN_MORE", "SHOP_NOW", "DISCOVER", "SIGN_UP"]}}},
+        "hypothesis": {"type": "string", "minLength": 20, "maxLength": 600},
+        "primary_success_metric": {"enum": ["THREE_SECOND_VIEW_RATE", "HOOK_HOLD_RATE", "WATCH_THROUGH_RATE", "CTR", "CONVERSION_RATE"]},
+        "supporting_research_refs": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"$ref": "#/$defs/research_ref"}},
+        "message_points": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"$ref": "#/$defs/message_point"}},
+        "required_assets": {"type": "array", "maxItems": 15, "items": {"$ref": "#/$defs/asset_requirement"}},
+        "required_disclaimers": {"type": "array", "maxItems": 10, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+        "production_notes": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    }
+  }
+}

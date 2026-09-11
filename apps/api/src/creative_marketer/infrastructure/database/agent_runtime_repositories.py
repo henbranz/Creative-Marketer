@@ -15,8 +15,10 @@ from creative_marketer.agent_governance.domain import (
     AgentVersionConfiguration,
 )
 from creative_marketer.agent_runtime.application import (
+    CreativePreparation,
     ResearcherPreparation,
     ResolvedResearcher,
+    build_creative_model_context,
 )
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
@@ -42,6 +44,13 @@ from creative_marketer.agent_runtime.domain import (
     classify_stranded_attempt,
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
+from creative_marketer.creative.domain import (
+    ChannelIntent,
+    CreativeConceptSet,
+    CreativeStrategyContext,
+    CreativeStrategyRequest,
+    product_claim_refs,
+)
 from creative_marketer.infrastructure.database.agent_governance_repositories import _configuration
 from creative_marketer.infrastructure.database.agent_governance_schema import (
     agent_activations,
@@ -56,6 +65,7 @@ from creative_marketer.infrastructure.database.agent_runtime_schema import (
     research_snapshots,
 )
 from creative_marketer.infrastructure.database.catalog_schema import product_knowledge_snapshots
+from creative_marketer.infrastructure.database.creative_schema import concept_sets, concepts
 from creative_marketer.infrastructure.database.research_repositories import _evidence
 from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
 from creative_marketer.research.domain import (
@@ -93,6 +103,13 @@ def _run(row: object) -> AgentRun:
         reserved_cost=d["reserved_cost"],
         currency=d["currency"],
         idempotency_key=d["idempotency_key"],
+        agent_type=d.get("agent_type", "researcher"),
+        input_context_kind=d.get("input_context_kind", "researcher.v1"),
+        input_context_schema_version=d.get("input_context_schema_version", 1),
+        input_context_digest=d.get("input_context_digest", d["context_digest"]),
+        input_context_refs=tuple(
+            dict(item) for item in d.get("input_context_refs", d["selected_evidence"])
+        ),
         recovery_of_run_id=d["recovery_of_run_id"],
         status=AgentRunStatus(d["status"]),
         created_at=d["created_at"],
@@ -144,6 +161,11 @@ def _run_values(value: AgentRun) -> dict[str, object]:
         "reserved_cost": value.reserved_cost,
         "currency": value.currency,
         "idempotency_key": value.idempotency_key,
+        "agent_type": value.agent_type,
+        "input_context_kind": value.input_context_kind,
+        "input_context_schema_version": value.input_context_schema_version,
+        "input_context_digest": value.input_context_digest,
+        "input_context_refs": [dict(item) for item in value.input_context_refs],
         "recovery_of_run_id": value.recovery_of_run_id,
         "status": value.status.value,
         "created_at": value.created_at,
@@ -355,6 +377,124 @@ class SqlAlchemyAgentRunRepository:
             _configuration(v),
         )
         return ResearcherPreparation(researcher, product_snapshot, manifest, evidence)
+
+    async def prepare_creative(self, product_id: UUID) -> CreativePreparation | None:
+        requested_rows = (
+            await self._session.execute(
+                select(agent_definitions)
+                .where(
+                    agent_definitions.c.tenant_id.is_not(None),
+                    agent_definitions.c.agent_type == "creative_strategist",
+                    agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                )
+                .order_by(agent_definitions.c.created_at)
+                .limit(2)
+            )
+        ).all()
+        if len(requested_rows) != 1:
+            return None
+        requested = requested_rows[0]._mapping
+        resolved_id = requested["id"]
+        activation = (
+            await self._session.execute(
+                select(agent_activations).where(agent_activations.c.definition_id == resolved_id)
+            )
+        ).first()
+        if activation is None and requested["platform_template_id"] is not None:
+            resolved_id = requested["platform_template_id"]
+            template = (
+                await self._session.execute(
+                    select(agent_definitions).where(
+                        agent_definitions.c.id == resolved_id,
+                        agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                    )
+                )
+            ).first()
+            if template is None:
+                return None
+            activation = (
+                await self._session.execute(
+                    select(agent_activations).where(
+                        agent_activations.c.definition_id == resolved_id
+                    )
+                )
+            ).first()
+        if activation is None:
+            return None
+        version_row = (
+            await self._session.execute(
+                select(agent_versions).where(
+                    agent_versions.c.id == activation._mapping["active_version_id"]
+                )
+            )
+        ).first()
+        snapshot_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots)
+                .where(
+                    product_knowledge_snapshots.c.product_id == product_id,
+                    product_knowledge_snapshots.c.schema_version == 2,
+                )
+                .order_by(
+                    product_knowledge_snapshots.c.created_at.desc(),
+                    product_knowledge_snapshots.c.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        research_row = (
+            await self._session.execute(
+                select(research_snapshots)
+                .where(research_snapshots.c.product_id == product_id)
+                .order_by(research_snapshots.c.created_at.desc(), research_snapshots.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if version_row is None or snapshot_row is None or research_row is None:
+            return None
+        v, s = version_row._mapping, snapshot_row._mapping
+        product = ProductKnowledgeSnapshot(
+            id=s["id"],
+            tenant_id=s["tenant_id"],
+            product_id=s["product_id"],
+            schema_version=s["schema_version"],
+            source_revision=s["source_revision"],
+            content=s["content"],
+            digest=s["digest"],
+            created_by=s["created_by"],
+            created_at=s["created_at"],
+        )
+        research = _snapshot(research_row)
+        freshness = await self.snapshot_freshness(research)
+        profile = product.content.get("profile", {})
+        brief = product.content.get("brief", {})
+        if not isinstance(profile, dict) or not isinstance(brief, dict):
+            completeness = 0
+        else:
+            primary = brief.get("primary_audience")
+            pain_points = primary.get("pain_points") if isinstance(primary, dict) else ()
+            checks = (
+                profile.get("description"),
+                brief.get("product_why"),
+                profile.get("target_audiences"),
+                pain_points,
+                brief.get("positioning_statement"),
+                profile.get("differentiators"),
+                profile.get("features"),
+                profile.get("benefits"),
+                brief.get("desired_creative_style"),
+                profile.get("prohibited_claims") or brief.get("prohibited_messaging"),
+            )
+            completeness = 100 - 10 * sum(not bool(item) for item in checks)
+        strategist = ResolvedResearcher(
+            requested["id"],
+            resolved_id,
+            v["id"],
+            v["version_number"],
+            v["configuration_digest"],
+            _configuration(v),
+        )
+        return CreativePreparation(strategist, product, research, freshness, completeness)
 
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None:
         row = (
@@ -668,6 +808,57 @@ class SqlAlchemyAgentRunRepository:
         s = snapshot_row._mapping
         if s["digest"] != run.product_snapshot_digest:
             raise ValueError("bound Product snapshot digest mismatch")
+        if run.agent_type == "creative_strategist":
+            research_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "research_snapshot"
+                ),
+                None,
+            )
+            request_ref = next(
+                (item for item in run.input_context_refs if item.get("kind") == "strategy_request"),
+                None,
+            )
+            if research_ref is None or request_ref is None:
+                raise ValueError("Creative run context references are incomplete")
+            research = await self.get_snapshot(UUID(str(research_ref["id"])))
+            if research is None or research.semantic_digest != research_ref["digest"]:
+                raise ValueError("bound Research snapshot digest mismatch")
+            product = ProductKnowledgeSnapshot(
+                id=s["id"],
+                tenant_id=s["tenant_id"],
+                product_id=s["product_id"],
+                schema_version=s["schema_version"],
+                source_revision=s["source_revision"],
+                content=s["content"],
+                digest=s["digest"],
+                created_by=s["created_by"],
+                created_at=s["created_at"],
+            )
+            preparation = CreativePreparation(
+                ResolvedResearcher(
+                    run.requested_agent_definition_id,
+                    run.resolved_agent_definition_id,
+                    run.agent_version_id,
+                    run.agent_version_number,
+                    run.agent_configuration_digest,
+                    _configuration(v),
+                ),
+                product,
+                research,
+                "frozen",
+                100,
+            )
+            request = CreativeStrategyRequest(
+                cast(int, request_ref["concept_count"]),
+                ChannelIntent(str(request_ref["channel_intent"])),
+            )
+            creative, model = build_creative_model_context(preparation, request)
+            if creative.context_digest != run.input_context_digest:
+                raise ValueError("bound Creative context digest mismatch")
+            return model
         blocks: list[EvidenceBlockRef] = []
         for identity in run.selected_evidence:
             evidence_id = UUID(str(identity["evidence_snapshot_id"]))
@@ -738,17 +929,75 @@ class SqlAlchemyAgentRunRepository:
             raise ValueError("bound context digest mismatch")
         return context
 
+    async def resolve_creative_context(self, run: AgentRun) -> CreativeStrategyContext:
+        if run.agent_type != "creative_strategist":
+            raise ValueError("AgentRun is not a Creative Strategist run")
+        model = await self.resolve_context(run)
+        research_ref = next(
+            (item for item in run.input_context_refs if item.get("kind") == "research_snapshot"),
+            None,
+        )
+        request_ref = next(
+            (item for item in run.input_context_refs if item.get("kind") == "strategy_request"),
+            None,
+        )
+        if research_ref is None or request_ref is None or model.capability_context is None:
+            raise ValueError("Creative strategy context is incomplete")
+        research = await self.get_snapshot(UUID(str(research_ref["id"])))
+        snapshot_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots).where(
+                    product_knowledge_snapshots.c.id == run.product_snapshot_id
+                )
+            )
+        ).one()
+        s = snapshot_row._mapping
+        if research is None:
+            raise ValueError("bound ResearchSnapshot is unavailable")
+        product_content = dict(s["content"])
+        request = CreativeStrategyRequest(
+            cast(int, request_ref["concept_count"]),
+            ChannelIntent(str(request_ref["channel_intent"])),
+        )
+        assets = model.capability_context.get("available_assets", ())
+        findings = model.capability_context.get("research_findings", ())
+        gaps = model.capability_context.get("research_gaps", ())
+        asset_items = assets if isinstance(assets, (list, tuple)) else ()
+        finding_items = findings if isinstance(findings, (list, tuple)) else ()
+        gap_items = gaps if isinstance(gaps, (list, tuple)) else ()
+        return CreativeStrategyContext(
+            run.product_snapshot_id,
+            run.product_snapshot_digest,
+            run.product_snapshot_schema_version,
+            research.id,
+            research.semantic_digest,
+            research.agent_run_id,
+            product_content,
+            tuple(dict(item) for item in finding_items if isinstance(item, dict)),
+            tuple(str(item) for item in gap_items),
+            tuple(dict(item) for item in asset_items if isinstance(item, dict)),
+            product_claim_refs(run.product_snapshot_digest, product_content),
+            request,
+            run.input_context_digest,
+        )
+
     async def finish_success(
         self,
         run: AgentRun,
         result: ModelInvocationResult,
-        snapshot: ResearchSnapshot,
+        snapshot: object,
         cost: Decimal,
         attempt_id: UUID,
         workload_id: str,
     ) -> AgentRun:
+        if not isinstance(snapshot, (ResearchSnapshot, CreativeConceptSet)):
+            raise ValueError("unsupported capability result type")
         now = datetime.now(UTC)
-        result_ref = f"research-snapshot://{snapshot.id}"
+        result_ref = (
+            f"creative-concept-set://{snapshot.id}"
+            if isinstance(snapshot, CreativeConceptSet)
+            else f"research-snapshot://{snapshot.id}"
+        )
         owned_run = await self._session.scalar(
             select(agent_runs.c.id)
             .where(
@@ -775,31 +1024,66 @@ class SqlAlchemyAgentRunRepository:
         ).scalar_one_or_none()
         if attempt_row is None:
             raise AgentRunRecoveryConflict("stale model attempt cannot persist success")
-        await self._session.execute(
-            insert(research_snapshots).values(
-                id=snapshot.id,
-                tenant_id=snapshot.tenant_id,
-                product_id=snapshot.product_id,
-                agent_run_id=snapshot.agent_run_id,
-                schema_version=snapshot.schema_version,
-                product_snapshot_id=snapshot.product_snapshot_id,
-                product_snapshot_digest=snapshot.product_snapshot_digest,
-                research_context_digest=snapshot.research_context_digest,
-                findings=[item.semantic() for item in snapshot.findings],
-                research_gaps=list(snapshot.research_gaps),
-                recommended_next_sources=[
-                    {
-                        "category": i.category,
-                        "reason": i.reason,
-                        "suggested_query": i.suggested_query,
-                    }
-                    for i in snapshot.recommended_next_sources
-                ],
-                semantic_digest=snapshot.semantic_digest,
-                created_at=snapshot.created_at,
-                valid_until=snapshot.valid_until,
+        if isinstance(snapshot, CreativeConceptSet):
+            await self._session.execute(
+                insert(concept_sets).values(
+                    id=snapshot.id,
+                    tenant_id=snapshot.tenant_id,
+                    product_id=snapshot.product_id,
+                    agent_run_id=snapshot.agent_run_id,
+                    schema_version=snapshot.schema_version,
+                    product_snapshot_id=snapshot.product_snapshot_id,
+                    product_snapshot_digest=snapshot.product_snapshot_digest,
+                    research_snapshot_id=snapshot.research_snapshot_id,
+                    research_snapshot_digest=snapshot.research_snapshot_digest,
+                    input_context_digest=snapshot.input_context_digest,
+                    semantic_digest=snapshot.semantic_digest,
+                    created_at=snapshot.created_at,
+                )
             )
-        )
+            await self._session.execute(
+                insert(concepts),
+                [
+                    {
+                        "id": item.id,
+                        "tenant_id": item.tenant_id,
+                        "concept_set_id": item.concept_set_id,
+                        "product_id": item.product_id,
+                        "concept_key": item.concept_key,
+                        "ordinal": item.ordinal,
+                        "concept_payload": dict(item.payload),
+                        "semantic_digest": item.semantic_digest,
+                        "created_at": item.created_at,
+                    }
+                    for item in snapshot.concepts
+                ],
+            )
+        else:
+            await self._session.execute(
+                insert(research_snapshots).values(
+                    id=snapshot.id,
+                    tenant_id=snapshot.tenant_id,
+                    product_id=snapshot.product_id,
+                    agent_run_id=snapshot.agent_run_id,
+                    schema_version=snapshot.schema_version,
+                    product_snapshot_id=snapshot.product_snapshot_id,
+                    product_snapshot_digest=snapshot.product_snapshot_digest,
+                    research_context_digest=snapshot.research_context_digest,
+                    findings=[item.semantic() for item in snapshot.findings],
+                    research_gaps=list(snapshot.research_gaps),
+                    recommended_next_sources=[
+                        {
+                            "category": i.category,
+                            "reason": i.reason,
+                            "suggested_query": i.suggested_query,
+                        }
+                        for i in snapshot.recommended_next_sources
+                    ],
+                    semantic_digest=snapshot.semantic_digest,
+                    created_at=snapshot.created_at,
+                    valid_until=snapshot.valid_until,
+                )
+            )
         row = (
             await self._session.execute(
                 update(agent_runs)

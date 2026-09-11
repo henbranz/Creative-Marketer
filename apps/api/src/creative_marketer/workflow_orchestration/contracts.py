@@ -146,3 +146,27 @@ class ResearcherActivityResult:
 
 def researcher_workflow_id(value: ResearcherWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/agent-run/{value.agent_run_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionWorkflowInput:
+    tenant_id: str
+    agent_run_id: str
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.agent_run_id, "agent_run_id")
+        _uuid(self.correlation_id, "correlation_id")
+
+
+@dataclass(frozen=True, slots=True)
+class AgentExecutionActivityResult:
+    agent_run_id: str
+    status: str
+    result_ref: str | None = None
+    failure_code: str | None = None
+
+
+def agent_execution_workflow_id(value: AgentExecutionWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/agent-run/{value.agent_run_id}"

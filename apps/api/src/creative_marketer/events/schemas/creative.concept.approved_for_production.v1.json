@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "creative.concept.approved_for_production.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["concept_id", "concept_set_id", "product_id", "concept_digest", "decision_id"],
+  "properties": {
+    "concept_id": {"type": "string", "format": "uuid"},
+    "concept_set_id": {"type": "string", "format": "uuid"},
+    "product_id": {"type": "string", "format": "uuid"},
+    "concept_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "decision_id": {"type": "string", "format": "uuid"}
+  }
+}

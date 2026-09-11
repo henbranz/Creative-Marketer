@@ -304,3 +304,9 @@ Researcher context building, exact model routing and pricing, run/period budgets
 and citation validation, and ResearchSnapshot persistence. PostgreSQL Outbox/Inbox and a thin
 ID-only Temporal workflow provide asynchronous execution. Researcher V1 has no Tools, memory,
 handoffs, or Product mutation authority. See `docs/15_AGENT_RUNTIME_AND_RESEARCHER.md` and ADR-026.
+## Creative Strategist capability (Phase 2)
+
+AgentRuntime dispatches through an explicit code-owned capability boundary. Generic AgentRun
+provenance records agent type, context kind/version/digest, and bounded references. Research and
+Creative retain their own domain validation and durable result models; neither can access a provider
+directly. See `17_CREATIVE_STRATEGIST.md` and ADR-028.

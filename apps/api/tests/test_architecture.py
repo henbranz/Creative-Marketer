@@ -237,3 +237,14 @@ def test_asset_policy_is_provider_neutral_and_s3_sdk_is_infrastructure_only() ->
         if "boto3" in path.read_text() or "botocore" in path.read_text()
     ]
     assert sdk_imports == [root / "infrastructure" / "object_storage" / "s3.py"]
+
+
+def test_creative_capability_cannot_bypass_agent_runtime_provider_boundary() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    creative_files = list((root / "creative").glob("**/*.py"))
+    assert imported_roots(creative_files).isdisjoint(
+        {"openai", "anthropic", "temporalio", "fastapi", "sqlalchemy"}
+    )
+    source = "\n".join(path.read_text().lower() for path in creative_files)
+    for forbidden in ("generate_structured(", "asyncopenai", "responses.create", "toolgateway"):
+        assert forbidden not in source

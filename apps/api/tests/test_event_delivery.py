@@ -171,6 +171,8 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         "agent.run.requested.v1",
         "agent.run.completed.v1",
         "research.snapshot.created.v1",
+        "creative.concept_set.created.v1",
+        "creative.concept.approved_for_production.v1",
     }
     (tmp_path / "bad.json").write_text(
         '{"$schema":"https://json-schema.org/draft/2020-12/schema",'
