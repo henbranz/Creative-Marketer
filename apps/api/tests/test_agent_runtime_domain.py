@@ -248,6 +248,9 @@ def test_runtime_entities_reject_tampering() -> None:
         replace(run(), selected_evidence=())
     with pytest.raises(ValueError):
         replace(run(), max_total_tokens=-1)
+    value = run()
+    with pytest.raises(ValueError):
+        replace(value, recovery_of_run_id=value.id)
     now = datetime.now(UTC)
     attempt = ModelAttempt(
         tenant_id=uuid4(),

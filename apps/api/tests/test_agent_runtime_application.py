@@ -27,6 +27,7 @@ from creative_marketer.agent_runtime.application import (
     select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
+    AgentRunConflict,
     AgentRunDenied,
     AgentRunNotFound,
     AgentRunNotReady,
@@ -478,6 +479,13 @@ def context(tenant_id, *, role=MembershipRole.OWNER):
     )
 
 
+def test_workload_identity_rejects_missing_or_unbounded_identity() -> None:
+    with pytest.raises(ValueError, match="explicit and bounded"):
+        WorkloadIdentity(" ", "test")
+    with pytest.raises(ValueError, match="explicit and bounded"):
+        WorkloadIdentity("w" * 129, "test")
+
+
 def service(prepared, provider):
     repository = MemoryRepository(prepared)
     audit, outbox = RecordingWriter(), RecordingWriter()
@@ -489,6 +497,78 @@ def service(prepared, provider):
         IdentityProvider(),
     )
     return value, repository, audit, outbox
+
+
+@pytest.mark.asyncio
+async def test_monthly_budget_reservation_uses_month_boundary() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    cfg = replace(
+        prepared.researcher.configuration,
+        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.MONTHLY, 10, Decimal("1.50"), "USD"),
+    )
+    prepared = replace(
+        prepared,
+        researcher=replace(
+            prepared.researcher,
+            configuration=cfg,
+            configuration_digest=cfg.configuration_digest,
+        ),
+    )
+    runtime, _, _, _ = service(
+        prepared,
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="monthly-budget"
+    )
+
+    assert requested.period_start.day == 1
+
+
+@pytest.mark.asyncio
+async def test_request_recovers_the_winning_idempotency_race(monkeypatch) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, _, _ = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+
+    async def lose_insert_race(run):
+        repository.runs[run.id] = run
+        return False
+
+    monkeypatch.setattr(repository, "add", lose_insert_race)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="insert-race"
+    )
+
+    assert requested is repository.runs[requested.id]
+
+
+@pytest.mark.asyncio
+async def test_request_fails_closed_when_insert_race_has_no_matching_replay(monkeypatch) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, _, _ = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+
+    async def lose_insert_race(_run):
+        return False
+
+    monkeypatch.setattr(repository, "add", lose_insert_race)
+    with pytest.raises(AgentRunConflict, match="won the race"):
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="unmatched-insert-race"
+        )
 
 
 @pytest.mark.asyncio
@@ -835,6 +915,33 @@ async def test_ambiguous_recovery_creates_new_run_and_reconciles_unknown_cost_on
 
 
 @pytest.mark.asyncio
+async def test_recovery_fails_closed_when_successor_insert_loses_the_race(monkeypatch) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, audit, outbox = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ),
+    )
+    original = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="recovery-insert-race"
+    )
+    await _stranded(repository, original.id, status=ModelAttemptStatus.CLAIMED)
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+    )
+
+    async def lose_successor_race(_run):
+        return False
+
+    monkeypatch.setattr(repository, "add_recovery_run", lose_successor_race)
+    with pytest.raises(AgentRunRecoveryConflict, match="already has"):
+        await recovery.rerun_as_new(original.id)
+
+
+@pytest.mark.asyncio
 async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_errors() -> None:
     tenant_id, product_id = uuid4(), uuid4()
     runtime, repository, audit, outbox = service(
@@ -971,6 +1078,32 @@ async def test_cost_overrun_defense_and_provider_unavailability_fail_closed() ->
         await unavailable.request_researcher(
             context(tenant_id), product_id=product_id, idempotency_key="provider-unavailable"
         )
+
+
+@pytest.mark.asyncio
+async def test_unexpected_provider_exception_is_normalized_and_never_retried() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    calls = 0
+
+    def crash(_invocation):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider internals must not escape")
+
+    runtime, repository, _, _ = service(
+        preparation(tenant_id, product_id), FakeModelProvider(crash)
+    )
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="unexpected-provider-error"
+    )
+
+    with pytest.raises(AgentRunNotReady, match="ambiguous"):
+        await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert attempt.status is ModelAttemptStatus.UNKNOWN
+    assert attempt.failure_code == "MODEL_PROVIDER_UNAVAILABLE"
+    assert calls == 1
 
 
 @pytest.mark.asyncio
