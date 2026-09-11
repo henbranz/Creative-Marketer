@@ -68,14 +68,9 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
                 "TRUNCATE research.research_snapshots, agent_runtime.agent_budget_usage, "
                 "agent_runtime.agent_runs, research.evidence_snapshots, research.source_fetches, "
                 "research.sources, catalog.assets, catalog.product_knowledge_snapshots, "
-                "catalog.product_briefs, "
-                "catalog.product_profiles, catalog.products, catalog.brand_profiles, "
-                "catalog.brands"
-            )
-        )
-        await connection.execute(
-            text(
-                "TRUNCATE event_delivery.inbox_receipts, event_delivery.outbox_events, "
+                "catalog.product_briefs, catalog.product_profiles, catalog.products, "
+                "catalog.brand_profiles, catalog.brands, "
+                "event_delivery.inbox_receipts, event_delivery.outbox_events, "
                 "tool_execution.tool_calls, "
                 "approval_governance.approval_revocations, "
                 "approval_governance.approval_decisions, "

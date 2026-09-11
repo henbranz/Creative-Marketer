@@ -86,12 +86,14 @@ def test_openai_provider_requires_real_key_and_deployed_workload_identity() -> N
         Settings(
             app_env="production",
             database_url=database_url,
+            object_storage_backend="disabled",
             model_provider_backend="openai",
             openai_api_key="unit-live-shaped-credential",
         )
     configured = Settings(
         app_env="production",
         database_url=database_url,
+        object_storage_backend="disabled",
         model_provider_backend="openai",
         openai_api_key="unit-live-shaped-credential",
         agent_workload_id="kubernetes/service-account/researcher",
