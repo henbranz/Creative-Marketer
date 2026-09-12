@@ -1,5 +1,13 @@
 # 14 — Research Sources and Evidence
 
+## Human graph projection
+
+ResearchSource, EvidenceSnapshot, ResearchSnapshot, and deterministic ResearchFinding projections
+expose citations and provenance to humans. Evidence projection may contain sanitized extracted
+structured blocks but never raw fetched HTML, raw object keys, signed URLs, or request/response
+headers. A finding links to its exact EvidenceSnapshot citations and originating immutable
+ResearchSnapshot; Obsidian remains read-only.
+
 ## Trust boundary
 
 ```text

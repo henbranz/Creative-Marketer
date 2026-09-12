@@ -31,10 +31,15 @@ from creative_marketer.infrastructure.database import (
     create_session_factory,
 )
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.database.knowledge_projection import (
+    SqlAlchemyCanonicalKnowledgeReader,
+    SqlAlchemyKnowledgeProjectionStore,
+)
 from creative_marketer.infrastructure.model_providers import ExecutionProcessOnlyModelProvider
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.research import SafeWebFetcher
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
+from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.observability.configuration import (
     ObservabilityConfiguration,
     build_runtime,
@@ -47,6 +52,7 @@ from creative_marketer_api.authentication_routes import create_authentication_ro
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
+from creative_marketer_api.knowledge_routes import create_knowledge_router
 from creative_marketer_api.research_routes import create_research_router
 
 
@@ -219,6 +225,18 @@ def create_app(
             identity_uow,
             agent_service,
             CreativeService(creative_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_knowledge_router(
+            authenticator,
+            identity_uow,
+            KnowledgeGraphProjector(
+                SqlAlchemyCanonicalKnowledgeReader(session_factory),
+                SqlAlchemyKnowledgeProjectionStore(session_factory),
+            ),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

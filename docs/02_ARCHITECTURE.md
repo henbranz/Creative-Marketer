@@ -310,3 +310,11 @@ AgentRuntime dispatches through an explicit code-owned capability boundary. Gene
 provenance records agent type, context kind/version/digest, and bounded references. Research and
 Creative retain their own domain validation and durable result models; neither can access a provider
 directly. See `17_CREATIVE_STRATEGIST.md` and ADR-028.
+
+## Human Knowledge Projection boundary (Phase 2)
+
+Knowledge Projection is a cross-context, read-only application boundary. It deterministically reads
+tenant-scoped canonical artifacts and emits provider-neutral nodes/edges. A disposable forced-RLS
+cache and immutable revision ledger support full and incremental reads; neither is a semantic source
+of truth. The local Obsidian Bridge is an infrastructure adapter and the only component with vault
+filesystem access. See `docs/18_KNOWLEDGE_GRAPH_AND_OBSIDIAN.md` and ADR-029.

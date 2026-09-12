@@ -12,6 +12,7 @@ import {
   type CreativeConceptSet,
   catalogApi,
   listText,
+  obsidianOpenUrl,
   type Product,
   type ResearchEvidence,
   type ResearchFetch,
@@ -1704,6 +1705,7 @@ export function ProductWorkspaceApp() {
     () => brands.find((brand) => brand.id === workspace?.brand.id) ?? brands[0],
     [brands, workspace],
   );
+  const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
 
   const connect = async (next: Session) => {
     sessionStorage.setItem("cm-session", JSON.stringify(next));
@@ -1798,6 +1800,20 @@ export function ProductWorkspaceApp() {
             <h1>{workspace?.product.name ?? "Products"}</h1>
           </div>
           <div className="top-actions">
+            {workspace && obsidianVaultName && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  void obsidianOpenUrl(
+                    obsidianVaultName,
+                    "product",
+                    workspace.product.id,
+                  ).then((url) => window.location.assign(url));
+                }}
+              >
+                Open in Obsidian
+              </button>
+            )}
             <button className="secondary" onClick={() => setDialog("brand")}>
               New brand
             </button>

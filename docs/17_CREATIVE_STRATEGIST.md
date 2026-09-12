@@ -1,5 +1,13 @@
 # Creative Strategist
 
+## Human graph projection
+
+Concept sets, concepts, and append-only decisions are projected with direct links to the Product,
+exact Product/Research snapshots, Creative Strategist AgentRun, supporting findings/evidence,
+referenced Assets, and decisions. Tenant-visible rationale and production notes are allowed;
+provider reasoning is not. Obsidian review notes remain personal navigation context and never change
+Creative decision state.
+
 ## Purpose and boundary
 
 Creative Strategist is the second governed AI capability. It turns an exact ProductKnowledgeSnapshot
@@ -69,4 +77,3 @@ provider spend, media generation, or publishing.
 The future Producer should consume `ApprovedCreativeConcept`, translate provider-neutral scenes and
 Asset requirements into a versioned ProductionPlan, re-check context freshness and compliance, then
 use independently governed Tool Gateway approvals for side effects.
-

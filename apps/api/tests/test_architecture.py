@@ -248,3 +248,16 @@ def test_creative_capability_cannot_bypass_agent_runtime_provider_boundary() -> 
     source = "\n".join(path.read_text().lower() for path in creative_files)
     for forbidden in ("generate_structured(", "asyncopenai", "responses.create", "toolgateway"):
         assert forbidden not in source
+
+
+def test_knowledge_projection_domain_is_provider_and_adapter_neutral() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    protected = list((root / "knowledge").glob("*.py"))
+    assert imported_roots(protected).isdisjoint(
+        {"fastapi", "sqlalchemy", "openai", "temporalio", "boto3", "urllib"}
+    )
+    assert not any("obsidian" in path.read_text().lower() for path in protected)
+    filesystem_users = [
+        path for path in root.glob("**/*.py") if "OBSIDIAN_VAULT_PATH" in path.read_text()
+    ]
+    assert filesystem_users == [root / "infrastructure" / "obsidian" / "bridge.py"]

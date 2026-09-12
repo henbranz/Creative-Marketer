@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap researcher-live-smoke agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost phase0-gate architecture-security build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap researcher-live-smoke agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-sync obsidian-rebuild phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -71,6 +71,12 @@ agent-run-rerun:
 
 agent-run-reconcile-cost:
 	cd apps/api && uv run python -m creative_marketer_api.agent_run_recovery reconcile-cost $(RUN_ID) $(ACTUAL_COST) $(CURRENCY)
+
+obsidian-sync:
+	cd apps/api && uv run python -m creative_marketer_api.obsidian_bridge
+
+obsidian-rebuild:
+	cd apps/api && uv run python -m creative_marketer_api.obsidian_bridge --full
 
 phase0-gate: lint format-check typecheck
 	docker compose up -d postgres object-storage

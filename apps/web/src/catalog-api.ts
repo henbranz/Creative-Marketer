@@ -246,3 +246,21 @@ export function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
+
+export async function obsidianOpenUrl(
+  vaultName: string,
+  nodeType: string,
+  canonicalId: string,
+): Promise<string> {
+  const material = new TextEncoder().encode(`${nodeType}:${canonicalId}`);
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", material));
+  const digest = Array.from(bytes, (value) =>
+    value.toString(16).padStart(2, "0"),
+  ).join("");
+  const filename = `${nodeType.replaceAll("_", "-")}--${digest}`;
+  const query = new URLSearchParams({
+    vault: vaultName,
+    file: `Products/${filename}`,
+  });
+  return `obsidian://open?${query.toString()}`;
+}

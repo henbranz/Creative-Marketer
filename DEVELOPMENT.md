@@ -181,6 +181,15 @@ depends on storage health; `/health/ready` deliberately continues to report data
 
 `.env.example` contains safe local defaults only. `.env` and all `.env.*` variants are ignored except for the example file. Never commit production credentials, OAuth tokens, or provider secrets.
 
+## Local Obsidian projection
+
+Set `OBSIDIAN_VAULT_PATH`, `CM_API_BASE_URL`, `CM_TENANT_ID`, and `CM_API_TOKEN` in your shell, then
+run `make obsidian-sync`. Use `make obsidian-rebuild` to reconcile the full canonical graph. The
+token is the current explicit development identity credential and must never be committed;
+production needs a user-scoped read-only session/PAT. The API never sees the local path, and the
+bridge never uploads or interprets user Markdown. Optionally set `NEXT_PUBLIC_OBSIDIAN_VAULT_NAME`
+to enable Product Workspace deep links. See `docs/18_KNOWLEDGE_GRAPH_AND_OBSIDIAN.md`.
+
 ## Researcher development
 
 After creating a development tenant, owner, Product snapshot, and Research evidence, explicitly

@@ -279,6 +279,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/knowledge/projection": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Full Projection */
+    get: operations["full_projection_v1_knowledge_projection_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/knowledge/projection/changes": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Projection Changes */
+    get: operations["projection_changes_v1_knowledge_projection_changes_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/me": {
     parameters: {
       query?: never;
@@ -1319,6 +1353,13 @@ export interface components {
        */
       user_id: string;
     };
+    /** DeletedNodeResponse */
+    DeletedNodeResponse: {
+      /** Canonical Id */
+      canonical_id: string;
+      /** Node Type */
+      node_type: string;
+    };
     /** DownloadGrantResponse */
     DownloadGrantResponse: {
       /**
@@ -1470,10 +1511,63 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** FullProjectionResponse */
+    FullProjectionResponse: {
+      /** Edges */
+      edges: components["schemas"]["KnowledgeEdgeResponse"][];
+      /** Next Cursor */
+      next_cursor: string;
+      /** Nodes */
+      nodes: components["schemas"]["KnowledgeNodeResponse"][];
+      /** Revision */
+      revision: number;
+    };
     /** HTTPValidationError */
     HTTPValidationError: {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
+    };
+    /** KnowledgeEdgeResponse */
+    KnowledgeEdgeResponse: {
+      /** Relationship Type */
+      relationship_type: string;
+      /** Source Canonical Id */
+      source_canonical_id: string;
+      /** Source Node Type */
+      source_node_type: string;
+      /** Target Canonical Id */
+      target_canonical_id: string;
+      /** Target Node Type */
+      target_node_type: string;
+    };
+    /** KnowledgeNodeResponse */
+    KnowledgeNodeResponse: {
+      /** Canonical Id */
+      canonical_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Node Type */
+      node_type: string;
+      /** Properties */
+      properties: {
+        [key: string]: unknown;
+      };
+      /** Relationships */
+      relationships: components["schemas"]["RelationshipResponse"][];
+      /** Semantic Digest */
+      semantic_digest: string | null;
+      /** Status */
+      status: string;
+      /** Title */
+      title: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
     };
     /** ManifestResponse */
     ManifestResponse: {
@@ -1687,6 +1781,22 @@ export interface components {
        */
       status: "draft" | "active" | "archived";
     };
+    /** ProjectionChangeResponse */
+    ProjectionChangeResponse: {
+      deleted_node: components["schemas"]["DeletedNodeResponse"] | null;
+      node: components["schemas"]["KnowledgeNodeResponse"] | null;
+      /** Revision */
+      revision: number;
+    };
+    /** ProjectionChangesResponse */
+    ProjectionChangesResponse: {
+      /** Changes */
+      changes: components["schemas"]["ProjectionChangeResponse"][];
+      /** Has More */
+      has_more: boolean;
+      /** Next Cursor */
+      next_cursor: string;
+    };
     /** RecommendedSourceResponse */
     RecommendedSourceResponse: {
       /** Category */
@@ -1695,6 +1805,15 @@ export interface components {
       reason: string;
       /** Suggested Query */
       suggested_query: string;
+    };
+    /** RelationshipResponse */
+    RelationshipResponse: {
+      /** Relationship Type */
+      relationship_type: string;
+      /** Target Canonical Id */
+      target_canonical_id: string;
+      /** Target Node Type */
+      target_node_type: string;
     };
     /**
      * ResearchCategory
@@ -2534,6 +2653,75 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CreativeDecisionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  full_projection_v1_knowledge_projection_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FullProjectionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  projection_changes_v1_knowledge_projection_changes_get: {
+    parameters: {
+      query?: {
+        cursor?: string | null;
+        limit?: number;
+      };
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProjectionChangesResponse"];
         };
       };
       /** @description Validation Error */

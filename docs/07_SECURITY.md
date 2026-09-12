@@ -2,6 +2,16 @@
 
 Security is a product requirement, not a later hardening phase.
 
+## Human knowledge projection
+
+Knowledge projection authenticates through authoritative `ExecutionContext`, sets transaction-local
+tenant context, and combines RLS with explicit tenant predicates. Projection cursors are tenant-bound
+traversal positions, not credentials. Field allowlists plus credential-shaped filtering remove
+secrets, tokens, headers, object keys/signed URLs, prompts/system instructions, provider responses,
+hidden reasoning, and raw HTML before persistence or export. Only the local Obsidian Bridge receives
+`OBSIDIAN_VAULT_PATH`; resolved writes must stay beneath it and tombstones archive rather than delete
+notes. Obsidian edits never authorize canonical writes.
+
 ## Threat Model Highlights
 
 The platform connects to high-value systems:

@@ -1,5 +1,13 @@
 # Agent Runtime and Evidence-Grounded Researcher
 
+## Human-visible execution graph
+
+AgentDefinition, safe AgentVersion configuration, and AgentRun provenance are projected into the
+human knowledge graph. System instructions, prompts, provider response identifiers/content,
+workload identities, and hidden reasoning are excluded. Graph relationships show which exact
+version executed, frozen inputs consumed, durable result produced, and downstream capability
+consumed it; the projection cannot start or recover a run.
+
 ## Boundary
 
 ```text

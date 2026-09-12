@@ -19,6 +19,7 @@ APPLICATION_SCHEMAS = (
     "tool_execution",
     "catalog",
     "research",
+    "knowledge_projection",
 )
 
 

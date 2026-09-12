@@ -1657,6 +1657,22 @@
         "title": "CurrentActorResponse",
         "type": "object"
       },
+      "DeletedNodeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_id": {
+            "title": "Canonical Id",
+            "type": "string"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          }
+        },
+        "required": ["node_type", "canonical_id"],
+        "title": "DeletedNodeResponse",
+        "type": "object"
+      },
       "DownloadGrantResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2015,6 +2031,36 @@
         "title": "FetchResponse",
         "type": "object"
       },
+      "FullProjectionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeEdgeResponse"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeNodeResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": ["revision", "next_cursor", "nodes", "edges"],
+        "title": "FullProjectionResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2026,6 +2072,107 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "KnowledgeEdgeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "relationship_type": {
+            "title": "Relationship Type",
+            "type": "string"
+          },
+          "source_canonical_id": {
+            "title": "Source Canonical Id",
+            "type": "string"
+          },
+          "source_node_type": {
+            "title": "Source Node Type",
+            "type": "string"
+          },
+          "target_canonical_id": {
+            "title": "Target Canonical Id",
+            "type": "string"
+          },
+          "target_node_type": {
+            "title": "Target Node Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_node_type",
+          "source_canonical_id",
+          "target_node_type",
+          "target_canonical_id",
+          "relationship_type"
+        ],
+        "title": "KnowledgeEdgeResponse",
+        "type": "object"
+      },
+      "KnowledgeNodeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_id": {
+            "title": "Canonical Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "title": "Properties",
+            "type": "object"
+          },
+          "relationships": {
+            "items": {
+              "$ref": "#/components/schemas/RelationshipResponse"
+            },
+            "title": "Relationships",
+            "type": "array"
+          },
+          "semantic_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Digest"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_type",
+          "canonical_id",
+          "title",
+          "status",
+          "semantic_digest",
+          "created_at",
+          "updated_at",
+          "properties",
+          "relationships"
+        ],
+        "title": "KnowledgeNodeResponse",
         "type": "object"
       },
       "ManifestResponse": {
@@ -2643,6 +2790,61 @@
         "title": "ProductWrite",
         "type": "object"
       },
+      "ProjectionChangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "deleted_node": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeletedNodeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "node": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnowledgeNodeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": ["revision", "node", "deleted_node"],
+        "title": "ProjectionChangeResponse",
+        "type": "object"
+      },
+      "ProjectionChangesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectionChangeResponse"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "title": "Next Cursor",
+            "type": "string"
+          }
+        },
+        "required": ["changes", "next_cursor", "has_more"],
+        "title": "ProjectionChangesResponse",
+        "type": "object"
+      },
       "RecommendedSourceResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2661,6 +2863,30 @@
         },
         "required": ["category", "reason", "suggested_query"],
         "title": "RecommendedSourceResponse",
+        "type": "object"
+      },
+      "RelationshipResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "relationship_type": {
+            "title": "Relationship Type",
+            "type": "string"
+          },
+          "target_canonical_id": {
+            "title": "Target Canonical Id",
+            "type": "string"
+          },
+          "target_node_type": {
+            "title": "Target Node Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relationship_type",
+          "target_node_type",
+          "target_canonical_id"
+        ],
+        "title": "RelationshipResponse",
         "type": "object"
       },
       "ResearchCategory": {
@@ -4651,6 +4877,197 @@
         },
         "summary": "Decide",
         "tags": ["creative"]
+      }
+    },
+    "/v1/knowledge/projection": {
+      "get": {
+        "operationId": "full_projection_v1_knowledge_projection_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FullProjectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Full Projection",
+        "tags": ["knowledge"]
+      }
+    },
+    "/v1/knowledge/projection/changes": {
+      "get": {
+        "operationId": "projection_changes_v1_knowledge_projection_changes_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 250,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionChangesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Projection Changes",
+        "tags": ["knowledge"]
       }
     },
     "/v1/me": {

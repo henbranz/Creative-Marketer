@@ -55,10 +55,16 @@ from creative_marketer.infrastructure.database.creative_uow import (
     SqlAlchemyCreativeUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.knowledge_projection import (
+    SqlAlchemyCanonicalKnowledgeReader,
+    SqlAlchemyKnowledgeProjectionStore,
+)
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
+from creative_marketer.knowledge.application import KnowledgeGraphProjector
+from creative_marketer.knowledge.domain import KnowledgeNodeType
 from creative_marketer.research.application import ResearchService
 from creative_marketer.research.domain import ResearchCategory
-from tests.integration.test_asset_library import product_setup
+from tests.integration.test_asset_library import asset, product_setup
 from tests.integration.test_catalog import owner_context, seed_catalog_identity
 from tests.integration.test_research_evidence import MemoryStore, StaticFetcher
 from tests.test_agent_runtime_application import configuration, creative_configuration
@@ -235,7 +241,22 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     research_factory,
     agent_registry_factory,
 ) -> None:
-    context, _, product = await product_setup(admin_engine, catalog_factory)
+    context, brand, product = await product_setup(admin_engine, catalog_factory)
+    ready_asset = (
+        asset(context, brand, product)
+        .validating()
+        .ready(
+            object_key=f"tenants/{context.tenant_id}/assets/ready.png",
+            detected_mime_type="image/png",
+            byte_size=64,
+            digest="sha256:" + "b" * 64,
+            width=10,
+            height=10,
+        )
+    )
+    async with catalog_factory(context) as catalog_uow:
+        await catalog_uow.assets.add(ready_asset)
+        await catalog_uow.commit()
     catalog = CatalogService(catalog_factory)
     audience = Audience("Commuters", pain_points=("Disposable bottle waste",))
     await catalog.update_product(
@@ -244,7 +265,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         ProductProfile(
             context.tenant_id,
             product.id,
-            description="A repairable daily bottle.",
+            description="A repairable daily bottle. sk-AgentRunSecret000000",
             features=("Double wall",),
             benefits=("Cold all day",),
             target_audiences=(audience,),
@@ -269,7 +290,10 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     await catalog.create_snapshot(context, product.id)
     research = ResearchService(
         research_factory,
-        StaticFetcher(b"<p>Commuters want a lower-waste daily routine.</p>"),
+        StaticFetcher(
+            b"<p>Commuters want a lower-waste daily routine. "
+            b"Authorization: Bearer EvidenceSecret000000</p>"
+        ),
         MemoryStore(),
     )
     await research.create_source(
@@ -315,6 +339,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         finding_key = creative_context.research_findings[0]["key"]
         for concept in raw["concepts"]:
             concept["supporting_research_refs"][0]["finding_key"] = finding_key
+        raw["concepts"][0]["required_assets"] = [
+            {
+                "kind": "EXISTING_ASSET",
+                "asset_id": str(ready_asset.id),
+                "intended_role": "product hero",
+            }
+        ]
+        raw["concepts"][0]["strategic_rationale"] += " client_secret=CreativeSecret000000"
         return ModelInvocationResult(
             raw,
             "creative-persisted",
@@ -360,6 +392,33 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert loaded.semantic_digest == concept.semantic_digest
     assert current == decision
     assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
+
+    graph, _ = await KnowledgeGraphProjector(
+        SqlAlchemyCanonicalKnowledgeReader(sessions),
+        SqlAlchemyKnowledgeProjectionStore(sessions),
+    ).full(context)
+    graph_refs = {node.ref for node in graph.nodes}
+    projected_text = str([node.primitive() for node in graph.nodes])
+    for sentinel in ("AgentRunSecret", "EvidenceSecret", "CreativeSecret"):
+        assert sentinel not in projected_text
+    concept_node = next(
+        node
+        for node in graph.nodes
+        if node.node_type is KnowledgeNodeType.CREATIVE_CONCEPT
+        and node.canonical_id == str(concept.id)
+    )
+    target_types = {relationship.target.node_type for relationship in concept_node.relationships}
+    assert {
+        KnowledgeNodeType.PRODUCT,
+        KnowledgeNodeType.PRODUCT_KNOWLEDGE_SNAPSHOT,
+        KnowledgeNodeType.AGENT_RUN,
+        KnowledgeNodeType.RESEARCH_SNAPSHOT,
+        KnowledgeNodeType.RESEARCH_FINDING,
+        KnowledgeNodeType.EVIDENCE_SNAPSHOT,
+        KnowledgeNodeType.ASSET,
+        KnowledgeNodeType.CREATIVE_CONCEPT_DECISION,
+    } <= target_types
+    assert all(relationship.target in graph_refs for relationship in concept_node.relationships)
 
     other_tenant, other_user = await seed_catalog_identity(admin_engine)
     other = owner_context(other_tenant, other_user)

@@ -8,7 +8,17 @@ describe("getPublicConfig", () => {
       getPublicConfig({ NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000" }),
     ).toEqual({
       apiBaseUrl: "http://localhost:8000",
+      obsidianVaultName: undefined,
     });
+  });
+
+  it("accepts an optional local Obsidian vault display name", () => {
+    expect(
+      getPublicConfig({
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000",
+        NEXT_PUBLIC_OBSIDIAN_VAULT_NAME: "Creative Brain",
+      }).obsidianVaultName,
+    ).toBe("Creative Brain");
   });
 
   it("rejects an invalid API URL", () => {
