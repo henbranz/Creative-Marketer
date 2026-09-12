@@ -123,6 +123,7 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
     database_url = "postgresql+psycopg://test:test@localhost:5432/test"
     local = Settings(
         database_url=database_url,
+        object_storage_backend="disabled",
         media_image_provider="fake",
         media_video_provider="fake",
     )
@@ -131,11 +132,13 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
         Settings(
             app_env="production",
             database_url=database_url,
+            object_storage_backend="disabled",
             media_image_provider="fake",
         )
     with pytest.raises(ValidationError, match="ALLOW_BILLABLE_MEDIA"):
         Settings(
             database_url=database_url,
+            object_storage_backend="disabled",
             media_image_provider="openai",
             openai_api_key="real-shaped-key-value",
         )
@@ -143,6 +146,7 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
         Settings(
             app_env="production",
             database_url=database_url,
+            object_storage_backend="disabled",
             media_image_provider="openai",
             openai_api_key="real-shaped-key-value",
             allow_billable_media=True,
@@ -150,6 +154,7 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
     deployed = Settings(
         app_env="production",
         database_url=database_url,
+        object_storage_backend="disabled",
         media_image_provider="openai",
         openai_api_key="real-shaped-key-value",
         allow_billable_media=True,

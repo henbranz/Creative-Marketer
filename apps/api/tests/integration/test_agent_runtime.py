@@ -548,13 +548,15 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert prepared_image.references[0].data == reference_content
     assert prepared_image.generation_spec["size"] == "1024x1536"
     assert prepared_video.duration_seconds == 12
+    generated_asset_id = uuid4()
+    generated_prefix = f"tenants/{context.tenant_id}/assets/{generated_asset_id}"
     generated_output = replace(
         ready_asset,
-        id=uuid4(),
+        id=generated_asset_id,
         origin=AssetOrigin.GENERATED,
         original_filename="LOCAL-DEMO-generated-image.png",
-        upload_object_key=object_key + ".generated",
-        object_key=object_key + ".generated",
+        upload_object_key=generated_prefix + "/uploads/generated-image.png",
+        object_key=generated_prefix + "/objects/generated-image.png",
     )
     async with catalog_factory(context) as catalog_uow:
         await catalog_uow.assets.add(generated_output)
