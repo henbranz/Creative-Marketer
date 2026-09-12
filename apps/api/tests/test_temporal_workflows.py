@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer
 
@@ -22,6 +23,7 @@ from creative_marketer.infrastructure.temporal.activities import (
 from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.worker import create_worker
 from creative_marketer.infrastructure.temporal.workflows import (
+    AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
     MediaGenerationWorkflow,
     ResearcherWorkflow,
@@ -31,6 +33,7 @@ from creative_marketer.permission_governance.domain import Decision, Obligation
 from creative_marketer.tool_execution.domain import ToolInvocationRequest, TrustedAgentInvocation
 from creative_marketer.tool_governance.domain import RiskLevel
 from creative_marketer.workflow_orchestration.contracts import (
+    AgentExecutionWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
     GenerationState,
@@ -39,6 +42,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     ToolActivityResult,
     ToolWorkflowInput,
     WorkflowState,
+    agent_execution_workflow_id,
     generation_workflow_id,
     researcher_workflow_id,
     tool_workflow_id,
@@ -675,3 +679,67 @@ async def test_researcher_pending_run_completes_once_after_worker_starts_and_his
     assert str(request.agent_run_id) in history_text
     for forbidden in ("product description", "evidence block", "system prompt", "api key"):
         assert forbidden not in history_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED"])
+async def test_generic_agent_workflow_executes_locator_only_and_records_terminal_state(
+    temporal_environment, status
+):
+    class Runtime:
+        calls = 0
+
+        async def execute(self, tenant_id, run_id):
+            self.calls += 1
+            return SimpleNamespace(
+                id=run_id,
+                status=SimpleNamespace(value=status),
+                result_ref="creative-concept-set://opaque" if status == "SUCCEEDED" else None,
+                failure_code=None if status == "SUCCEEDED" else "INVALID_CREATIVE_OUTPUT",
+            )
+
+    runtime = Runtime()
+    request = AgentExecutionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), agent_runtime=runtime
+    )
+    async with create_worker(
+        temporal_environment.client,
+        activities,
+        graceful_shutdown_timeout=timedelta(0),
+    ):
+        handle = await temporal_environment.client.start_workflow(
+            AgentExecutionWorkflow.run,
+            request,
+            id=agent_execution_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        result = await handle.result()
+        history_json = (await handle.fetch_history()).to_json()
+        decoded = "\n".join(
+            base64.b64decode(value).decode("utf-8", errors="replace")
+            for value in re.findall(r'"data": "([A-Za-z0-9+/=]+)"', history_json)
+        )
+        history = (history_json + decoded).lower()
+    assert result.status == status
+    assert runtime.calls == 1
+    assert str(request.agent_run_id) in history
+    assert "product description" not in history
+
+
+@pytest.mark.asyncio
+async def test_generic_agent_activity_fails_closed_when_runtime_is_absent_or_fails() -> None:
+    request = AgentExecutionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    unavailable = TemporalActivities(FakeGatewayService(), FakeGenerationService())
+    with pytest.raises(ApplicationError, match="not composed"):
+        await unavailable.execute_agent(request)
+
+    class FailingRuntime:
+        async def execute(self, tenant_id, run_id):
+            raise RuntimeError(f"unavailable:{tenant_id}:{run_id}")
+
+    failing = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), agent_runtime=FailingRuntime()
+    )
+    with pytest.raises(ApplicationError, match="execution failed"):
+        await failing.execute_agent(request)

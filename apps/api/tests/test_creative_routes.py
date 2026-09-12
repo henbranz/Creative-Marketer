@@ -1,17 +1,24 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,assignment,union-attr"
 
 from dataclasses import replace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
+import creative_marketer_api.creative_routes as creative_routes
 from creative_marketer.agent_runtime.domain import AgentRunNotReady
 from creative_marketer.creative.domain import (
     CreativeConceptDecision,
     CreativeDecisionState,
     CreativeNotFound,
     CreativePermissionDenied,
+)
+from creative_marketer.identity.application.errors import (
+    AuthenticationUnavailable,
+    TenantAccessDenied,
+    Unauthenticated,
 )
 from creative_marketer_api.creative_routes import (
     CreativeDecisionRequest,
@@ -142,6 +149,9 @@ async def test_creative_routes_map_bounded_errors() -> None:
     with pytest.raises(HTTPException) as get_error:
         await endpoint(value, "/v1/creative/concept-sets/{set_id}", "GET")(uuid4(), object())
     assert get_error.value.status_code == 404
+    with pytest.raises(HTTPException) as concept_error:
+        await endpoint(value, "/v1/creative/concepts/{concept_id}", "GET")(uuid4(), object())
+    assert concept_error.value.status_code == 404
     creative.error = CreativePermissionDenied("denied")
     with pytest.raises(HTTPException) as decision_error:
         await endpoint(value, "/v1/creative/concepts/{concept_id}/decision", "POST")(
@@ -150,3 +160,52 @@ async def test_creative_routes_map_bounded_errors() -> None:
             object(),
         )
     assert decision_error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_creative_route_authentication_boundary_maps_failures(monkeypatch) -> None:
+    class Authenticator:
+        error = None
+
+        async def authenticate(self, _credential):
+            if self.error:
+                raise self.error
+            return object()
+
+    class Resolver:
+        error = None
+
+        def __init__(self, *_values):
+            pass
+
+        async def __call__(self, *_values):
+            if self.error:
+                raise self.error
+            return object()
+
+    authenticator = Authenticator()
+    monkeypatch.setattr(creative_routes, "ResolveTenantExecutionContext", Resolver)
+    value = create_creative_router(
+        authenticator, object(), AgentService(), CreativeService(), "test", object()
+    )
+    dependency = cast(Any, value.routes[0]).dependant.dependencies[0].call
+    tenant_id = uuid4()
+
+    with pytest.raises(HTTPException) as missing:
+        await dependency(None, tenant_id, None)
+    assert missing.value.status_code == 401
+    authenticator.error = AuthenticationUnavailable()
+    with pytest.raises(HTTPException) as unavailable:
+        await dependency("Bearer token", tenant_id, None)
+    assert unavailable.value.status_code == 503
+    authenticator.error = Unauthenticated()
+    with pytest.raises(HTTPException) as unknown:
+        await dependency("Bearer token", tenant_id, None)
+    assert unknown.value.status_code == 401
+    authenticator.error = None
+    Resolver.error = TenantAccessDenied()
+    with pytest.raises(HTTPException) as denied:
+        await dependency("Bearer token", tenant_id, None)
+    assert denied.value.status_code == 403
+    Resolver.error = None
+    assert await dependency("Bearer token", tenant_id, uuid4()) is not None

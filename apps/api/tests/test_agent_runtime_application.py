@@ -54,7 +54,12 @@ from creative_marketer.agent_runtime.domain import (
     classify_stranded_attempt,
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
-from creative_marketer.creative.domain import ChannelIntent, CreativeStrategyRequest
+from creative_marketer.creative.domain import (
+    ChannelIntent,
+    CreativeBriefIncomplete,
+    CreativeResearchRefreshRequired,
+    CreativeStrategyRequest,
+)
 from creative_marketer.events.domain import event_sha256_v1
 from creative_marketer.identity.application.authentication import (
     Actor,
@@ -805,6 +810,132 @@ async def test_creative_capability_reuses_runtime_and_freezes_exact_context() ->
         "creative.concept_set.created.v1",
     ]
     assert "Break the bottle cycle" not in str(outbox.values)
+
+
+@pytest.mark.asyncio
+async def test_creative_request_preflight_fails_closed_and_reuses_active_run() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def research_model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "preflight-research-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-terra",
+        )
+
+    provider = FakeModelProvider(research_model)
+    runtime, repository, _, _ = service(prepared, provider)
+    request = CreativeStrategyRequest(3, ChannelIntent.TIKTOK)
+
+    with pytest.raises(AgentRunDenied):
+        await runtime.request_creative_strategist(
+            context(tenant_id, role=MembershipRole.MEMBER),
+            product_id=product_id,
+            request=request,
+            idempotency_key="denied-creative",
+        )
+    with pytest.raises(ValueError):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key=" "
+        )
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_strategist(
+            context(tenant_id),
+            product_id=product_id,
+            request=request,
+            idempotency_key="missing-creative",
+        )
+
+    research_run = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="preflight-research"
+    )
+    await runtime.execute(tenant_id, research_run.id)
+    research_snapshot = next(iter(repository.snapshots.values()))
+    valid = creative_preparation(prepared, research_snapshot)
+
+    repository.creative_prepared = replace(valid, brief_completeness=70)
+    with pytest.raises(CreativeBriefIncomplete):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="brief"
+        )
+    repository.creative_prepared = replace(valid, research_freshness="outdated")
+    with pytest.raises(CreativeResearchRefreshRequired):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="stale"
+        )
+
+    invalid_cfg = replace(valid.strategist.configuration, output_contract_version=2)
+    repository.creative_prepared = replace(
+        valid,
+        strategist=replace(
+            valid.strategist,
+            configuration=invalid_cfg,
+            configuration_digest=invalid_cfg.configuration_digest,
+        ),
+    )
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="config"
+        )
+
+    constrained_cfg = replace(
+        valid.strategist.configuration,
+        run_budget_policy=replace(
+            valid.strategist.configuration.run_budget_policy, max_cost=Decimal("0.01")
+        ),
+    )
+    repository.creative_prepared = replace(
+        valid,
+        strategist=replace(
+            valid.strategist,
+            configuration=constrained_cfg,
+            configuration_digest=constrained_cfg.configuration_digest,
+        ),
+    )
+    with pytest.raises(BudgetExceeded):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="budget"
+        )
+
+    oversized_content = dict(valid.product_snapshot.content)
+    oversized_content["oversized_optional_context"] = "x" * 20_000
+    oversized_product = ProductKnowledgeSnapshot(
+        tenant_id=tenant_id,
+        product_id=product_id,
+        source_revision=valid.product_snapshot.source_revision,
+        content=oversized_content,
+        digest=event_sha256_v1(
+            {
+                "schema_version": 2,
+                "source_revision": valid.product_snapshot.source_revision,
+                "content": oversized_content,
+            }
+        ),
+        created_by=uuid4(),
+        schema_version=2,
+    )
+    repository.creative_prepared = replace(valid, product_snapshot=oversized_product)
+    with pytest.raises(BudgetExceeded):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="context"
+        )
+
+    repository.creative_prepared = valid
+    pending = await runtime.request_creative_strategist(
+        context(tenant_id), product_id=product_id, request=request, idempotency_key="pending"
+    )
+    assert (
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=product_id, request=request, idempotency_key="active"
+        )
+    ).id == pending.id
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_strategist(
+            context(tenant_id), product_id=uuid4(), request=request, idempotency_key="pending"
+        )
 
 
 @pytest.mark.asyncio

@@ -116,3 +116,7 @@ async def test_generic_bridge_fails_closed_for_bad_events_and_unknown_types() ->
         await bridge(mismatched, None)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="not routed"):
         await StartAgentExecutionWorkflow(Never(), Resolver())(event(), None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="unsupported"):
+        await StartAgentExecutionWorkflow(Never(), Resolver())(invalid, None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="identity mismatch"):
+        await StartAgentExecutionWorkflow(Never(), Resolver())(mismatched, None)  # type: ignore[arg-type]

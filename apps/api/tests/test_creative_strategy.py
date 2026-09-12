@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -10,8 +11,11 @@ from creative_marketer.creative.application import (
     validate_creative_output,
 )
 from creative_marketer.creative.domain import (
+    ApprovedCreativeConcept,
     ChannelIntent,
+    CreativeConceptDecision,
     CreativeConceptSet,
+    CreativeDecisionState,
     CreativeStrategyContext,
     CreativeStrategyRequest,
     InvalidCreativeAssetReference,
@@ -174,3 +178,88 @@ def test_extra_model_field_fails_closed() -> None:
     raw["tool_request"] = {"name": "publish"}
     with pytest.raises(InvalidCreativeOutput):
         validate(raw, value)
+
+
+@pytest.mark.parametrize(
+    "mutation,error",
+    [
+        (lambda raw: raw["concepts"].pop(), InvalidCreativeOutput),
+        (
+            lambda raw: raw["concepts"][0]["message_points"][0].update(kind="VALUE_PROPOSITION"),
+            InvalidCreativeClaimReference,
+        ),
+        (
+            lambda raw: raw["concepts"][0].update(required_disclaimers=[]),
+            InvalidCreativeClaimReference,
+        ),
+        (
+            lambda raw: raw["concepts"][0].update(estimated_duration_seconds=14),
+            InvalidCreativeOutput,
+        ),
+    ],
+)
+def test_contract_semantics_fail_closed(
+    mutation: Callable[[dict[str, Any]], object], error: type[Exception]
+) -> None:
+    value, raw = context(), None
+    raw = output(value)
+    mutation(raw)
+    with pytest.raises(error):
+        validate(raw, value)
+
+
+def test_existing_asset_rights_shape_fails_closed() -> None:
+    value, raw = context(), None
+    raw = output(value)
+    asset_id = value.asset_manifest[0]["asset_id"]
+    value.asset_manifest[0]["allowed_uses"] = "generation_input"  # type: ignore[index]
+    raw["concepts"][0]["required_assets"] = [
+        {"kind": "EXISTING_ASSET", "asset_id": asset_id, "intended_role": "hero"}
+    ]
+    with pytest.raises(InvalidCreativeAssetReference):
+        validate(raw, value)
+
+
+def test_creative_value_objects_reject_invalid_identity_and_handoff() -> None:
+    value = context()
+    result = validate(output(value), value)
+    concept = result.concepts[0]
+    with pytest.raises(ValueError):
+        CreativeStrategyRequest(2)
+    with pytest.raises(InvalidCreativeOutput):
+        replace(concept, concept_key="INVALID")
+    with pytest.raises(InvalidCreativeOutput):
+        replace(concept, semantic_digest="sha256:" + "0" * 64)
+    with pytest.raises(InvalidCreativeOutput):
+        replace(result, concepts=result.concepts[:2])
+    with pytest.raises(InvalidCreativeOutput):
+        replace(result, id=uuid4())
+    with pytest.raises(InvalidCreativeOutput):
+        replace(result, semantic_digest="sha256:" + "0" * 64)
+    with pytest.raises(ValueError):
+        CreativeConceptDecision(
+            result.tenant_id,
+            result.product_id,
+            concept.id,
+            CreativeDecisionState.REJECTED,
+            uuid4(),
+            reason_code="invalid",
+        )
+    with pytest.raises(ValueError):
+        CreativeConceptDecision(
+            result.tenant_id,
+            result.product_id,
+            concept.id,
+            CreativeDecisionState.REJECTED,
+            uuid4(),
+            note="x" * 1001,
+        )
+    rejected = CreativeConceptDecision(
+        result.tenant_id,
+        result.product_id,
+        concept.id,
+        CreativeDecisionState.REJECTED,
+        uuid4(),
+    )
+    with pytest.raises(ValueError):
+        ApprovedCreativeConcept(concept, result, rejected)

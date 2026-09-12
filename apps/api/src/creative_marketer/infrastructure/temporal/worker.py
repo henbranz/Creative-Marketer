@@ -9,6 +9,7 @@ from temporalio.worker import Worker
 from creative_marketer.infrastructure.temporal.activities import TemporalActivities
 from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.workflows import (
+    AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
     MediaGenerationWorkflow,
     ResearcherWorkflow,
@@ -28,12 +29,14 @@ def create_worker(
         client,
         task_queue=task_queue,
         workflows=[
+            AgentExecutionWorkflow,
             ApprovalBlockingWorkflow,
             MediaGenerationWorkflow,
             ScheduledPublicationWorkflow,
             ResearcherWorkflow,
         ],
         activities=[
+            activities.execute_agent,
             activities.invoke_tool,
             activities.start_generation,
             activities.poll_generation,
