@@ -89,6 +89,7 @@ def test_asset_lifecycle_is_explicit_and_ready_binary_is_manifested() -> None:
     )
     assert ready.manifest() == {
         "asset_id": str(ready.id),
+        "status": "ready",
         "kind": "image",
         "role": "product_detail",
         "mime_type": "image/png",

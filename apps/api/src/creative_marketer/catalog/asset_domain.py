@@ -208,6 +208,7 @@ class Asset:
             raise CatalogValidationError("only ready assets belong in a snapshot")
         return {
             "asset_id": str(self.id),
+            "status": self.status.value,
             "kind": self.kind.value,
             "role": self.role.value,
             "mime_type": self.detected_mime_type,
