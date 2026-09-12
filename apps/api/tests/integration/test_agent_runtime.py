@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from hashlib import sha256
 from uuid import uuid4
 
 import pytest
@@ -42,6 +43,7 @@ from creative_marketer.agent_runtime.domain import (
     UnknownCostReconciliationConflict,
 )
 from creative_marketer.catalog.application import CatalogService
+from creative_marketer.catalog.asset_domain import AssetOrigin
 from creative_marketer.catalog.domain import Audience, ProductBrief, ProductProfile
 from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import (
@@ -60,6 +62,10 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.production_authority import (
+    MediaWorkloadIdentity,
+    SqlAlchemyGenerationAuthority,
+)
 from creative_marketer.infrastructure.database.production_uow import (
     SqlAlchemyProductionUnitOfWorkFactory,
 )
@@ -68,6 +74,9 @@ from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
 from creative_marketer.production.application import initial_media_router, initial_producer_route
 from creative_marketer.production.domain import (
+    MediaKind,
+    ProductionNotFound,
+    ProductionPermissionDenied,
     ProductionPlanDecisionState,
     ProductionPlanningRequest,
 )
@@ -87,6 +96,15 @@ from tests.test_production import valid_output as production_output
 class IdentityProvider:
     async def current(self) -> WorkloadIdentity:
         return WorkloadIdentity("integration-researcher-worker", "test")
+
+
+class ReferenceStore(MemoryStore):
+    def __init__(self, key: str, content: bytes) -> None:
+        self.key, self.content = key, content
+
+    async def stream(self, *, key: str):
+        assert key == self.key
+        yield self.content
 
 
 class OperatorProvider:
@@ -255,11 +273,13 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
 ) -> None:
     context, brand, product = await product_setup(admin_engine, catalog_factory)
     pending_asset = asset(context, brand, product)
+    reference_content = b"\x89PNG\r\n\x1a\n" + b"x" * 56
+    object_key = f"tenants/{context.tenant_id}/assets/{pending_asset.id}/objects/ready.png"
     ready_asset = pending_asset.validating().ready(
-        object_key=(f"tenants/{context.tenant_id}/assets/{pending_asset.id}/objects/ready.png"),
+        object_key=object_key,
         detected_mime_type="image/png",
         byte_size=64,
-        digest="sha256:" + "b" * 64,
+        digest="sha256:" + sha256(reference_content).hexdigest(),
         width=10,
         height=10,
     )
@@ -300,13 +320,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         ),
     )
     await catalog.create_snapshot(context, product.id)
+    reference_store = ReferenceStore(object_key, reference_content)
     research = ResearchService(
         research_factory,
         StaticFetcher(
             b"<p>Commuters want a lower-waste daily routine. "
             b"Authorization: Bearer EvidenceSecret000000</p>"
         ),
-        MemoryStore(),
+        reference_store,
     )
     await research.create_source(
         context,
@@ -500,6 +521,13 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     plans = await production.list_plans(context, product.id)
     assert len(plans) == 1
     plan = (await production.get_plan(context, plans[0].plan.id)).plan
+    authority = SqlAlchemyGenerationAuthority(
+        sessions,
+        reference_store,  # type: ignore[arg-type]
+        MediaWorkloadIdentity(uuid4(), "integration-media-worker", "test"),
+    )
+    with pytest.raises(ProductionNotFound):
+        await authority.prepare(context.tenant_id, uuid4(), MediaKind.IMAGE)
     approved_plan = await production.decide(
         context, plan.id, ProductionPlanDecisionState.APPROVED_FOR_GENERATION
     )
@@ -507,6 +535,40 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     jobs = await production.list_jobs(context, plan.id)
     assert len(jobs) == 2
     assert (await production.get_job(context, jobs[0].id)).production_plan_id == plan.id
+    image_job = next(item for item in jobs if item.kind is MediaKind.IMAGE)
+    video_job = next(item for item in jobs if item.kind is MediaKind.VIDEO)
+    with pytest.raises(ProductionNotFound):
+        await authority.prepare(context.tenant_id, uuid4(), MediaKind.IMAGE)
+    with pytest.raises(ProductionNotFound):
+        await authority.prepare(uuid4(), image_job.id, MediaKind.IMAGE)
+    with pytest.raises(ProductionPermissionDenied, match="authority mismatch"):
+        await authority.prepare(context.tenant_id, image_job.id, MediaKind.VIDEO)
+    prepared_image = await authority.prepare(context.tenant_id, image_job.id, MediaKind.IMAGE)
+    prepared_video = await authority.prepare(context.tenant_id, video_job.id, MediaKind.VIDEO)
+    assert prepared_image.references[0].data == reference_content
+    assert prepared_image.generation_spec["size"] == "1024x1536"
+    assert prepared_video.duration_seconds == 12
+    generated_output = replace(
+        ready_asset,
+        id=uuid4(),
+        origin=AssetOrigin.GENERATED,
+        original_filename="LOCAL-DEMO-generated-image.png",
+        upload_object_key=object_key + ".generated",
+        object_key=object_key + ".generated",
+    )
+    async with catalog_factory(context) as catalog_uow:
+        await catalog_uow.assets.add(generated_output)
+        await catalog_uow.commit()
+    await authority.provider_started(image_job.id, None)
+    await authority.importing(image_job.id)
+    await authority.succeeded(image_job.id, generated_output.id, Decimal("0.125"))
+    with pytest.raises(ValueError, match="invalid generation job transition"):
+        await authority.succeeded(image_job.id, generated_output.id, Decimal("0.125"))
+    await authority.provider_started(video_job.id, None)
+    await authority.provider_started(video_job.id, "provider-operation-1")
+    await authority.processing(video_job.id)
+    await authority.importing(video_job.id)
+    await authority.failed(video_job.id, "LOCAL_DEMO_FAILURE", Decimal(0))
 
     graph, _ = await KnowledgeGraphProjector(
         SqlAlchemyCanonicalKnowledgeReader(sessions),

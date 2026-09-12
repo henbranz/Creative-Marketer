@@ -274,6 +274,8 @@ class SqlAlchemyProductionRepository:
                     currency=value.currency,
                     output_asset_id=value.output_asset_id,
                     failure_code=value.failure_code,
+                    initiated_by_user_id=value.initiated_by_user_id,
+                    executed_by_workload_id=value.executed_by_workload_id,
                     created_at=value.created_at,
                     updated_at=value.updated_at,
                 )
@@ -341,6 +343,8 @@ class SqlAlchemyProductionRepository:
             unknown_cost=d["unknown_cost"],
             output_asset_id=d["output_asset_id"],
             failure_code=d["failure_code"],
+            initiated_by_user_id=d.get("initiated_by_user_id"),
+            executed_by_workload_id=d.get("executed_by_workload_id"),
             created_at=d["created_at"],
             updated_at=d["updated_at"],
         )

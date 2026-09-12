@@ -11,8 +11,10 @@ from creative_marketer.agent_governance.application import (
     CreateAgentVersion,
     CreateTenantAgentDefinition,
     ListTenantAgentDefinitions,
+    ResolveActiveAgentVersion,
 )
 from creative_marketer.agent_governance.domain import (
+    AgentUnavailable,
     AgentVersionConfiguration,
     BudgetPeriod,
     ModelPolicy,
@@ -64,7 +66,12 @@ def producer_configuration() -> AgentVersionConfiguration:
         ),
         write_scopes=("production.plan",),
         memory_scopes=(),
-        allowed_tool_keys=(),
+        allowed_tool_keys=(
+            "media.image.generate",
+            "media.video.generate.start",
+            "media.video.generate.status",
+            "media.video.generate.import",
+        ),
         denied_tool_keys=(),
         approval_policy_key="production.plan_review",
         output_contract_key="production.production_plan",
@@ -107,7 +114,15 @@ async def run() -> None:
             context, agent_key="astra-producer", agent_type="producer"
         )
     )
-    version = await CreateAgentVersion(factory)(context, definition.id, producer_configuration())
+    desired = producer_configuration()
+    try:
+        active = await ResolveActiveAgentVersion(factory)(context, definition.id)
+    except AgentUnavailable:
+        active = None
+    if active is not None and active.configuration_digest == desired.configuration_digest:
+        print(f"Astra Producer already active: {definition.id} version {active.version_number}")
+        return
+    version = await CreateAgentVersion(factory)(context, definition.id, desired)
     await ActivateAgentVersion(factory)(context, definition.id, version.id)
     print(f"Activated Astra Producer {definition.id} version {version.version_number}")
 

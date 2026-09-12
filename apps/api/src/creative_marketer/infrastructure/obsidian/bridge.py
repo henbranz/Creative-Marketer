@@ -1,9 +1,11 @@
 import hashlib
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -195,6 +197,7 @@ class ObsidianBridge:
         self.config = config
         self.root = config.vault_path.expanduser().resolve()
         self.state_path = self.root / ".creative-marketer" / "state.json"
+        self.lock_path = self.root / ".creative-marketer" / "watch.lock"
 
     def _safe_path(self, relative: Path) -> Path:
         if relative.is_absolute() or ".." in relative.parts:
@@ -378,3 +381,41 @@ class ObsidianBridge:
         self._write_mocs(state)
         self._save_state(state)
         return {"written": written, "archived": archived}
+
+    def validate_setup(self) -> dict[str, str]:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._safe_path(Path(".creative-marketer")).mkdir(parents=True, exist_ok=True)
+        self._request("/health/live")
+        self._request("/v1/knowledge/projection")
+        return {
+            "vault": str(self.root),
+            "api": self.config.api_base_url,
+            "tenant": self.config.tenant_id,
+        }
+
+    def watch(self, *, interval_seconds: float = 4.0, max_cycles: int | None = None) -> None:
+        if not 1 <= interval_seconds <= 60:
+            raise ValueError("Obsidian watch interval must be between 1 and 60 seconds")
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.lock_path.mkdir()
+        except FileExistsError as error:
+            raise RuntimeError("another Obsidian watch process already owns this Vault") from error
+        cycles = 0
+        backoff = interval_seconds
+        try:
+            while max_cycles is None or cycles < max_cycles:
+                try:
+                    self.sync(full=cycles == 0 and not self.state_path.exists())
+                except (OSError, ValueError, json.JSONDecodeError):
+                    time.sleep(backoff)
+                    backoff = min(backoff * 2, 30.0)
+                else:
+                    backoff = interval_seconds
+                    cycles += 1
+                    if max_cycles is None or cycles < max_cycles:
+                        time.sleep(interval_seconds)
+        finally:
+            with suppress(FileNotFoundError):
+                self.lock_path.rmdir()

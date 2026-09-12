@@ -227,3 +227,7 @@ production approval is a durable product decision and does not initiate media ge
 tenant/plan/job/correlation IDs and status. It executes images before dependent videos through
 Tool Gateway-backed activities, polls known Seedance task IDs durably, imports temporary results
 immediately, and never retries an ambiguous start. Deadline expiry never authorizes a new start.
+The production event bridge uses the transactional Outbox/Inbox path, reloads the committed Job set,
+and starts one logical plan workflow. Each activity then executes through Tool Gateway and
+GenerationAuthority. Restart polls the persisted provider operation; an accepted start with a lost
+response is terminal `OUTCOME_UNKNOWN` pending operator reconciliation.

@@ -554,6 +554,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/production/runs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Runs */
+    get: operations["list_runs_v1_products__product_id__production_runs_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/research-context-manifest": {
     parameters: {
       query?: never;
@@ -1926,21 +1943,43 @@ export interface components {
       actual_cost: string;
       /** Currency */
       currency: string;
+      /** Failure Code */
+      failure_code: string | null;
       /**
        * Id
        * Format: uuid
        */
       id: string;
       kind: components["schemas"]["MediaKind"];
+      /** Local Demo Provider */
+      local_demo_provider: boolean;
+      /** Media Profile */
+      media_profile: string;
+      /** Model */
+      model: string;
       /** Output Asset Id */
       output_asset_id: string | null;
+      /** Provider */
+      provider: string;
+      /** Reserved Cost */
+      reserved_cost: string;
       /** Status */
       status: string;
       /** Unknown Cost */
       unknown_cost: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
     };
     /** ProductionPlanResponse */
     ProductionPlanResponse: {
+      /**
+       * Agent Run Id
+       * Format: uuid
+       */
+      agent_run_id: string;
       /**
        * Concept Id
        * Format: uuid
@@ -1963,6 +2002,8 @@ export interface components {
       existing_asset_count: number;
       /** Generated Image Count */
       generated_image_count: number;
+      /** Generation Segments */
+      generation_segments: components["schemas"]["ProductionSegmentResponse"][];
       /**
        * Id
        * Format: uuid
@@ -1983,18 +2024,57 @@ export interface components {
     };
     /** ProductionSceneResponse */
     ProductionSceneResponse: {
+      /** Duration Seconds */
+      duration_seconds: number;
+      /** Message */
+      message: string;
+      /** On Screen Text */
+      on_screen_text: string | null;
       /** Ordinal */
       ordinal: number;
+      /** Purpose */
+      purpose: string;
       /** Scene Key */
       scene_key: string;
       /** Shots */
       shots: components["schemas"]["ProductionShotResponse"][];
+      /** Voiceover */
+      voiceover: string | null;
+    };
+    /** ProductionSegmentResponse */
+    ProductionSegmentResponse: {
+      /** Continuity */
+      continuity: string[];
+      /** Duration Seconds */
+      duration_seconds: number | null;
+      /** Generation Spec */
+      generation_spec: {
+        [key: string]: unknown;
+      };
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      media_kind: components["schemas"]["MediaKind"];
+      /** Reference Asset Ids */
+      reference_asset_ids: string[];
+      /** Segment Key */
+      segment_key: string;
+      /** Shot Keys */
+      shot_keys: string[];
     };
     /** ProductionShotResponse */
     ProductionShotResponse: {
+      /** Ordinal */
+      ordinal: number;
       /** Shot Key */
       shot_key: string;
       source_strategy: components["schemas"]["SourceStrategy"];
+      /** Specification */
+      specification: {
+        [key: string]: unknown;
+      };
     };
     /** ProjectionChangeResponse */
     ProjectionChangeResponse: {
@@ -3556,6 +3636,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ProductionPlanResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_runs_v1_products__product_id__production_runs_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"][];
         };
       };
       /** @description Validation Error */

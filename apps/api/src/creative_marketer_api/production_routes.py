@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Annotated
-from uuid import UUID, uuid4
+from typing import Annotated, Any
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,21 +50,41 @@ class ProducerRunStart(Contract):
 
 class ProductionShotResponse(Contract):
     shot_key: str
+    ordinal: int
     source_strategy: SourceStrategy
+    specification: dict[str, Any]
 
 
 class ProductionSceneResponse(Contract):
     scene_key: str
     ordinal: int
+    purpose: str
+    duration_seconds: int
+    message: str
+    voiceover: str | None
+    on_screen_text: str | None
     shots: list[ProductionShotResponse]
+
+
+class ProductionSegmentResponse(Contract):
+    id: UUID
+    segment_key: str
+    shot_keys: list[str]
+    media_kind: MediaKind
+    duration_seconds: int | None
+    continuity: list[str]
+    reference_asset_ids: list[UUID]
+    generation_spec: dict[str, Any]
 
 
 class ProductionPlanResponse(Contract):
     id: UUID
+    agent_run_id: UUID
     concept_id: UUID
     strategy: str
     status: str
     scenes: list[ProductionSceneResponse]
+    generation_segments: list[ProductionSegmentResponse]
     generated_image_count: int
     video_segment_count: int
     existing_asset_count: int
@@ -81,10 +101,17 @@ class ProductionJobResponse(Contract):
     id: UUID
     kind: MediaKind
     status: str
+    media_profile: str
+    provider: str
+    model: str
+    reserved_cost: str
     actual_cost: str
     unknown_cost: str
     currency: str
     output_asset_id: UUID | None
+    failure_code: str | None
+    local_demo_provider: bool
+    updated_at: datetime
 
 
 def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
@@ -92,6 +119,7 @@ def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
     shots = [shot for scene in plan.scenes for shot in scene.shots]
     return ProductionPlanResponse(
         id=plan.id,
+        agent_run_id=plan.agent_run_id,
         concept_id=plan.context.concept_id,
         strategy=plan.strategy,
         status=value.decision.state.value if value.decision else "UNREVIEWED",
@@ -99,14 +127,35 @@ def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
             ProductionSceneResponse(
                 scene_key=scene.scene_key,
                 ordinal=scene.ordinal,
+                purpose=scene.purpose,
+                duration_seconds=scene.duration_seconds,
+                message=scene.message,
+                voiceover=scene.voiceover,
+                on_screen_text=scene.on_screen_text,
                 shots=[
                     ProductionShotResponse(
-                        shot_key=shot.shot_key, source_strategy=shot.source_strategy
+                        shot_key=shot.shot_key,
+                        ordinal=shot.ordinal,
+                        source_strategy=shot.source_strategy,
+                        specification=dict(shot.specification),
                     )
                     for shot in scene.shots
                 ],
             )
             for scene in plan.scenes
+        ],
+        generation_segments=[
+            ProductionSegmentResponse(
+                id=uuid5(NAMESPACE_URL, f"{plan.id}:segment:{item.segment_key}"),
+                segment_key=item.segment_key,
+                shot_keys=list(item.shot_keys),
+                media_kind=item.media_kind,
+                duration_seconds=item.duration_seconds,
+                continuity=list(item.continuity),
+                reference_asset_ids=list(item.reference_asset_ids),
+                generation_spec=dict(item.generation_spec),
+            )
+            for item in plan.generation_segments
         ],
         generated_image_count=sum(
             item.media_kind is MediaKind.IMAGE for item in plan.generation_segments
@@ -129,15 +178,22 @@ def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
     )
 
 
-def _job(value: GenerationJob) -> ProductionJobResponse:
+def _job(value: GenerationJob, *, local_demo_provider: bool = False) -> ProductionJobResponse:
     return ProductionJobResponse(
         id=value.id,
         kind=value.kind,
         status=value.status.value,
+        media_profile=value.media_profile,
+        provider=value.provider,
+        model=value.model,
+        reserved_cost=str(value.reserved_cost),
         actual_cost=str(value.actual_cost),
         unknown_cost=str(value.unknown_cost),
         currency=value.currency,
         output_asset_id=value.output_asset_id,
+        failure_code=value.failure_code,
+        local_demo_provider=local_demo_provider,
+        updated_at=value.updated_at,
     )
 
 
@@ -148,6 +204,7 @@ def create_production_router(
     production_service: ProductionService,
     environment: str,
     audit: IdentityAuditService,
+    local_demo_media_kinds: frozenset[MediaKind] = frozenset(),
 ) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["production"])
 
@@ -203,6 +260,14 @@ def create_production_router(
         except (AgentRuntimeError, ProductionError, ValueError) as error:
             raise failure(error) from error
 
+    @router.get("/products/{product_id}/production/runs", response_model=list[AgentRunResponse])
+    async def list_runs(product_id: UUID, ctx: Context) -> list[AgentRunResponse]:
+        return [
+            _agent_run(item)
+            for item in await agent_service.list_runs(ctx, product_id)
+            if item.agent_type == "producer"
+        ]
+
     @router.get(
         "/products/{product_id}/production/plans",
         response_model=list[ProductionPlanResponse],
@@ -239,14 +304,21 @@ def create_production_router(
     @router.get("/production/plans/{plan_id}/jobs", response_model=list[ProductionJobResponse])
     async def list_jobs(plan_id: UUID, ctx: Context) -> list[ProductionJobResponse]:
         try:
-            return [_job(item) for item in await production_service.list_jobs(ctx, plan_id)]
+            return [
+                _job(item, local_demo_provider=item.kind in local_demo_media_kinds)
+                for item in await production_service.list_jobs(ctx, plan_id)
+            ]
         except ProductionError as error:
             raise failure(error) from error
 
     @router.get("/production/jobs/{job_id}", response_model=ProductionJobResponse)
     async def get_job(job_id: UUID, ctx: Context) -> ProductionJobResponse:
         try:
-            return _job(await production_service.get_job(ctx, job_id))
+            job = await production_service.get_job(ctx, job_id)
+            return _job(
+                job,
+                local_demo_provider=job.kind in local_demo_media_kinds,
+            )
         except ProductionError as error:
             raise failure(error) from error
 

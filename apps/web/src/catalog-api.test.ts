@@ -23,4 +23,15 @@ describe("catalog form utilities", () => {
       /^obsidian:\/\/open\?vault=Creative\+Brain&file=Products%2Fproduct--[a-f0-9]{64}$/,
     );
   });
+  it("matches the bridge golden path for Production identities", async () => {
+    const id = "00000000-0000-0000-0000-000000000001";
+    await expect(
+      obsidianOpenUrl("Creative Brain", "production_plan", id),
+    ).resolves.toBe(
+      "obsidian://open?vault=Creative+Brain&file=Production%2Fproduction-plan--5c81f666cc720c0fe27d45f159f68c12b7bb592484ba772e44eaa3b6231107b2",
+    );
+    await expect(obsidianOpenUrl("Creative Brain", "asset", id)).resolves.toBe(
+      "obsidian://open?vault=Creative+Brain&file=Assets%2Fasset--4b60dacb33a2049ec4da0d7d23f06760c66731b5463ee5eb140647ae5fd298fa",
+    );
+  });
 });

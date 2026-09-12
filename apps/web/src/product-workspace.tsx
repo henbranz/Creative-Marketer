@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element -- private signed asset grants cannot use Next Image */
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -353,6 +354,7 @@ function safeSourceLabel(value: string) {
 
 function ResearchPanel({ workspace }: { workspace: Workspace }) {
   const session = useMemo(() => readSession(), []);
+  const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
   const [sources, setSources] = useState<SourceWithFetch[]>([]);
   const [url, setUrl] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -556,6 +558,20 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             <span className={`fetch-state ${snapshots[0].freshness}`}>
               {snapshots[0].freshness}
             </span>
+            {obsidianVaultName && (
+              <button
+                className="secondary"
+                onClick={() =>
+                  void obsidianOpenUrl(
+                    obsidianVaultName,
+                    "research_snapshot",
+                    snapshots[0]!.id,
+                  ).then((url) => window.location.assign(url))
+                }
+              >
+                Open in Obsidian
+              </button>
+            )}
           </div>
           <div className="finding-list">
             {snapshots[0].findings.map((finding) => (
@@ -869,6 +885,7 @@ function creativeValue(payload: Record<string, unknown>, key: string): string {
 
 function CreativesPanel({ workspace }: { workspace: Workspace }) {
   const session = useMemo(() => readSession(), []);
+  const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [sets, setSets] = useState<CreativeConceptSet[]>([]);
   const [research, setResearch] = useState<ResearchSnapshot[]>([]);
@@ -981,6 +998,20 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
                     : "Failed"}
           </strong>
           <small>Creative Strategist v{latestRun.agent_version_number}</small>
+          {obsidianVaultName && (
+            <button
+              className="secondary"
+              onClick={() =>
+                void obsidianOpenUrl(
+                  obsidianVaultName,
+                  "agent_run",
+                  latestRun.id,
+                ).then((url) => window.location.assign(url))
+              }
+            >
+              Open run in Obsidian
+            </button>
+          )}
         </div>
       )}
       {error && <p className="error-banner">{error}</p>}
@@ -1069,6 +1100,20 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
               "title",
             )}
           </h2>
+          {obsidianVaultName && (
+            <button
+              className="secondary"
+              onClick={() =>
+                void obsidianOpenUrl(
+                  obsidianVaultName,
+                  "creative_concept",
+                  selected.id,
+                ).then((url) => window.location.assign(url))
+              }
+            >
+              Open concept in Obsidian
+            </button>
+          )}
           <p>
             {creativeValue(
               selected.payload as Record<string, unknown>,
@@ -1236,19 +1281,30 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
-function ProductionPanel({ workspace }: { workspace: Workspace }) {
+function ProductionPanel({
+  workspace,
+  onOpenAssets,
+}: {
+  workspace: Workspace;
+  onOpenAssets: () => void;
+}) {
   const session = useMemo(() => readSession(), []);
+  const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
   const [plans, setPlans] = useState<ProductionPlan[]>([]);
   const [jobs, setJobs] = useState<ProductionJob[]>([]);
+  const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
   const [concept, setConcept] = useState<CreativeConcept | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refresh = useCallback(async () => {
-    const [nextPlans, conceptSets] = await Promise.all([
+    const [nextPlans, conceptSets, nextRuns] = await Promise.all([
       catalogApi.listProductionPlans(session, workspace.product.id),
       catalogApi.listCreativeConceptSets(session, workspace.product.id),
+      catalogApi.listProducerRuns(session, workspace.product.id),
     ]);
     setPlans(nextPlans);
+    setRuns(nextRuns);
     setConcept(
       conceptSets
         .flatMap((item) => item.concepts)
@@ -1267,7 +1323,26 @@ function ProductionPanel({ workspace }: { workspace: Workspace }) {
         void refresh().catch(() => setError("Production could not be loaded.")),
     );
   }, [refresh]);
+  useEffect(() => {
+    const active = jobs.some((job) =>
+      ["READY", "STARTING", "PROCESSING", "IMPORTING"].includes(job.status),
+    );
+    if (!active) return;
+    const timer = window.setInterval(() => void refresh(), 4000);
+    return () => window.clearInterval(timer);
+  }, [jobs, refresh]);
+  useEffect(() => {
+    for (const job of jobs) {
+      if (!job.output_asset_id || previews[job.id]) continue;
+      void catalogApi
+        .downloadAsset(session, job.output_asset_id)
+        .then((grant) =>
+          setPreviews((current) => ({ ...current, [job.id]: grant.url })),
+        );
+    }
+  }, [jobs, previews, session]);
   const plan = plans[0];
+  const producerRun = runs[0];
   const act = async (operation: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -1296,7 +1371,22 @@ function ProductionPanel({ workspace }: { workspace: Workspace }) {
         <div className="creative-readiness">
           <span>Approved Concept: {concept ? "Ready" : "Required"}</span>
           <span>Creative context: {concept ? "Current" : "Unavailable"}</span>
-          <span>Producer: {concept ? "Ready" : "Waiting"}</span>
+          <span>
+            Producer:{" "}
+            {producerRun?.is_stranded
+              ? "Needs operational recovery"
+              : producerRun?.status === "RUNNING"
+                ? "Planning"
+                : producerRun?.status === "PENDING"
+                  ? "Queued"
+                  : producerRun?.status === "FAILED"
+                    ? "Failed"
+                    : plan
+                      ? "Completed"
+                      : concept
+                        ? "Ready"
+                        : "Waiting"}
+          </span>
           {workspace.product.can_edit && concept && !plan && (
             <button
               className="primary"
@@ -1326,19 +1416,125 @@ function ProductionPanel({ workspace }: { workspace: Workspace }) {
           <p className="eyebrow">{plan.status.replaceAll("_", " ")}</p>
           <h3>Production plan</h3>
           <p>{plan.strategy}</p>
+          {concept && (
+            <p>
+              Source concept:{" "}
+              <strong>
+                {String(concept.payload.title ?? concept.concept_key)}
+              </strong>
+            </p>
+          )}
+          {obsidianVaultName && (
+            <button
+              className="secondary"
+              onClick={() =>
+                void obsidianOpenUrl(
+                  obsidianVaultName,
+                  "production_plan",
+                  plan.id,
+                ).then((url) => window.location.assign(url))
+              }
+            >
+              Open plan in Obsidian
+            </button>
+          )}
+          {obsidianVaultName && (
+            <button
+              className="secondary"
+              onClick={() =>
+                void obsidianOpenUrl(
+                  obsidianVaultName,
+                  "agent_run",
+                  plan.agent_run_id,
+                ).then((url) => window.location.assign(url))
+              }
+            >
+              Open Producer run in Obsidian
+            </button>
+          )}
           {plan.scenes.map((scene) => (
             <div key={scene.scene_key} className="concept-scene">
-              <strong>Scene {scene.ordinal}</strong>
+              <strong>
+                Scene {scene.ordinal} · {scene.purpose} ·{" "}
+                {scene.duration_seconds}s
+              </strong>
+              <p>{scene.message}</p>
               <ul>
                 {scene.shots.map((shot) => (
                   <li key={shot.shot_key}>
                     {shot.shot_key.replaceAll("_", " ")} —{" "}
                     {shot.source_strategy.replaceAll("_", " ").toLowerCase()}
+                    {obsidianVaultName && (
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void obsidianOpenUrl(
+                            obsidianVaultName,
+                            "production_shot",
+                            `${plan.id}:${shot.shot_key}`,
+                          ).then((url) => window.location.assign(url))
+                        }
+                      >
+                        Open in Obsidian
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             </div>
           ))}
+          <h3>Generation segments</h3>
+          <div className="concept-grid">
+            {plan.generation_segments.map((segment) => (
+              <article key={segment.segment_key} className="concept-card">
+                <p className="eyebrow">
+                  {segment.media_kind === "IMAGE"
+                    ? "Image generation"
+                    : "Video generation"}
+                </p>
+                <strong>{segment.segment_key.replaceAll("_", " ")}</strong>
+                <p>
+                  {segment.shot_keys
+                    .map((shot) => shot.replaceAll("_", " "))
+                    .join(" → ")}
+                  {segment.duration_seconds
+                    ? ` · ${segment.duration_seconds}s`
+                    : ""}
+                </p>
+                <details>
+                  <summary>Technical specification</summary>
+                  <dl>
+                    {Object.entries(segment.generation_spec).map(
+                      ([key, value]) => (
+                        <div key={key}>
+                          <dt>{key.replaceAll("_", " ")}</dt>
+                          <dd>
+                            {Array.isArray(value)
+                              ? value.join(", ")
+                              : String(value)}
+                          </dd>
+                        </div>
+                      ),
+                    )}
+                  </dl>
+                </details>
+                {obsidianVaultName && (
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void obsidianOpenUrl(
+                        obsidianVaultName,
+                        "generation_segment",
+                        segment.id,
+                      ).then((url) => window.location.assign(url))
+                    }
+                  >
+                    Open in Obsidian
+                  </button>
+                )}
+              </article>
+            ))}
+          </div>
           <div className="creative-readiness">
             <span>
               Astra planning: {plan.planning_cost} {plan.currency}
@@ -1347,7 +1543,7 @@ function ProductionPanel({ workspace }: { workspace: Workspace }) {
               Images: {plan.estimated_max_image_cost} {plan.currency}
             </span>
             <span>
-              Seedance: {plan.estimated_max_video_cost} {plan.currency}
+              Video generation: {plan.estimated_max_video_cost} {plan.currency}
             </span>
             <strong>
               Total generation budget: {plan.estimated_total_cost}{" "}
@@ -1382,15 +1578,105 @@ function ProductionPanel({ workspace }: { workspace: Workspace }) {
           )}
           <h3>Generation progress</h3>
           {jobs.length ? (
-            <ul>
+            <div className="concept-grid">
               {jobs.map((job) => (
-                <li key={job.id}>
-                  {job.kind === "IMAGE" ? "Image" : "Video"}:{" "}
-                  {job.status.replaceAll("_", " ").toLowerCase()} —{" "}
-                  {job.actual_cost} {job.currency}
-                </li>
+                <article key={job.id} className="concept-card">
+                  <p className="eyebrow">
+                    {job.kind === "IMAGE"
+                      ? "Image generation"
+                      : "Video generation"}
+                  </p>
+                  {job.local_demo_provider && (
+                    <span className="status draft">Local demo provider</span>
+                  )}
+                  <h4>
+                    {{
+                      READY: "Waiting for production worker",
+                      STARTING: "Starting",
+                      PROCESSING: "Generating",
+                      IMPORTING: "Importing",
+                      SUCCEEDED: "Ready for use",
+                      FAILED: "Failed",
+                      OUTCOME_UNKNOWN: "Needs operational recovery",
+                    }[job.status] ?? job.status.replaceAll("_", " ")}
+                  </h4>
+                  <p>
+                    Reserved: {job.reserved_cost} {job.currency} · Actual:{" "}
+                    {job.status === "SUCCEEDED"
+                      ? `${job.actual_cost} ${job.currency}`
+                      : job.status === "OUTCOME_UNKNOWN"
+                        ? `unknown (${job.unknown_cost} ${job.currency} reserved)`
+                        : "not settled"}
+                  </p>
+                  {job.failure_code && (
+                    <p className="error">{job.failure_code}</p>
+                  )}
+                  {previews[job.id] && job.kind === "IMAGE" && (
+                    <img
+                      className="asset-preview"
+                      src={previews[job.id]}
+                      alt="Generated demo output"
+                    />
+                  )}
+                  {previews[job.id] && job.kind === "VIDEO" && (
+                    <video
+                      className="asset-preview"
+                      src={previews[job.id]}
+                      controls
+                    />
+                  )}
+                  {job.output_asset_id && (
+                    <div className="concept-actions">
+                      <code>{job.output_asset_id}</code>
+                      <a
+                        className="button secondary"
+                        href={previews[job.id]}
+                        target="_blank"
+                      >
+                        Preview
+                      </a>
+                      <button className="secondary" onClick={onOpenAssets}>
+                        Open Asset
+                      </button>
+                      {obsidianVaultName && (
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            void obsidianOpenUrl(
+                              obsidianVaultName,
+                              "generation_job",
+                              job.id,
+                            ).then((url) => window.location.assign(url))
+                          }
+                        >
+                          Open job in Obsidian
+                        </button>
+                      )}
+                      {obsidianVaultName && (
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            void obsidianOpenUrl(
+                              obsidianVaultName,
+                              "asset",
+                              job.output_asset_id!,
+                            ).then((url) => window.location.assign(url))
+                          }
+                        >
+                          Open Asset in Obsidian
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <details>
+                    <summary>Provider details</summary>
+                    <p>
+                      {job.model} · {job.provider} · {job.media_profile}
+                    </p>
+                  </details>
+                </article>
               ))}
-            </ul>
+            </div>
           ) : (
             <p>No media jobs started.</p>
           )}
@@ -2101,7 +2387,10 @@ export function ProductWorkspaceApp() {
                   ) : tab === "Creatives" ? (
                     <CreativesPanel workspace={workspace} />
                   ) : tab === "Production" ? (
-                    <ProductionPanel workspace={workspace} />
+                    <ProductionPanel
+                      workspace={workspace}
+                      onOpenAssets={() => setTab("Assets")}
+                    />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

@@ -6,6 +6,8 @@ import {
   type AgentRun,
   type Asset,
   type CreativeConceptSet,
+  type ProductionJob,
+  type ProductionPlan,
   type ResearchEvidence,
   type ResearchFetch,
   type ResearchSource,
@@ -350,6 +352,104 @@ const creativeSet: CreativeConceptSet = {
   ],
 };
 
+const productionPlan: ProductionPlan = {
+  id: "a1000000-0000-0000-0000-000000000001",
+  agent_run_id: agentRun.id,
+  concept_id: creativeSet.concepts[0]!.id,
+  strategy: "Preserve the approved hook and show the product.",
+  status: "UNREVIEWED",
+  scenes: [
+    {
+      scene_key: "scene_one",
+      ordinal: 1,
+      purpose: "Hook",
+      duration_seconds: 12,
+      message: "Product value",
+      voiceover: null,
+      on_screen_text: "Look",
+      shots: [
+        {
+          shot_key: "shot_one",
+          ordinal: 1,
+          source_strategy: "GENERATE_IMAGE",
+          specification: { subject: "Product" },
+        },
+      ],
+    },
+  ],
+  generation_segments: [
+    {
+      id: "a2000000-0000-0000-0000-000000000001",
+      segment_key: "image_one",
+      shot_keys: ["shot_one"],
+      media_kind: "IMAGE",
+      duration_seconds: null,
+      continuity: [],
+      reference_asset_ids: [readyAsset.id],
+      generation_spec: { subject: "Product", aspect_ratio: "9:16" },
+    },
+  ],
+  generated_image_count: 1,
+  video_segment_count: 1,
+  existing_asset_count: 0,
+  manual_shot_count: 0,
+  planning_cost: "0.42",
+  estimated_max_image_cost: "0.40",
+  estimated_max_video_cost: "5.54",
+  estimated_total_cost: "5.94",
+  currency: "USD",
+};
+const productionJobs: ProductionJob[] = [
+  {
+    id: "a3000000-0000-0000-0000-000000000001",
+    kind: "IMAGE",
+    status: "SUCCEEDED",
+    media_profile: "production_image",
+    provider: "openai",
+    model: "gpt-image-2",
+    reserved_cost: "0.40",
+    actual_cost: "0.125",
+    unknown_cost: "0",
+    currency: "USD",
+    output_asset_id: readyAsset.id,
+    failure_code: null,
+    local_demo_provider: true,
+    updated_at: product.updated_at,
+  },
+  {
+    id: "a3000000-0000-0000-0000-000000000002",
+    kind: "VIDEO",
+    status: "FAILED",
+    media_profile: "production_video",
+    provider: "byteplus",
+    model: "dreamina-seedance-2-5-260628",
+    reserved_cost: "5.54",
+    actual_cost: "0",
+    unknown_cost: "0",
+    currency: "USD",
+    output_asset_id: null,
+    failure_code: "LOCAL_DEMO_FAILURE",
+    local_demo_provider: true,
+    updated_at: product.updated_at,
+  },
+  {
+    id: "a3000000-0000-0000-0000-000000000003",
+    kind: "VIDEO",
+    status: "SUCCEEDED",
+    media_profile: "production_video",
+    provider: "byteplus",
+    model: "dreamina-seedance-2-5-260628",
+    reserved_cost: "5.54",
+    actual_cost: "5.54",
+    unknown_cost: "0",
+    currency: "USD",
+    output_asset_id: readyAsset.id,
+    failure_code: null,
+    local_demo_provider: true,
+    updated_at: product.updated_at,
+  },
+];
+
 function mocks() {
   vi.spyOn(catalogApi, "listBrands").mockResolvedValue([brand]);
   vi.spyOn(catalogApi, "listProducts").mockResolvedValue([product]);
@@ -412,6 +512,19 @@ function mocks() {
     note: null,
     created_at: product.created_at,
   });
+  vi.spyOn(catalogApi, "listProductionPlans").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listProducerRuns").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listProductionJobs").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "downloadAsset").mockResolvedValue({
+    url: "https://assets.example.test/signed-preview",
+    expires_at: product.updated_at,
+  });
+  vi.spyOn(catalogApi, "approveProductionPlan").mockResolvedValue(
+    productionPlan,
+  );
+  vi.spyOn(catalogApi, "rejectProductionPlan").mockResolvedValue(
+    productionPlan,
+  );
 }
 
 async function renderConnected() {
@@ -652,6 +765,57 @@ describe("Product Workspace", () => {
     expect(
       await screen.findByText("A captured product fact."),
     ).toBeInTheDocument();
+  });
+
+  it("renders governed Production, partial failure, costs, and private preview", async () => {
+    vi.mocked(catalogApi.listCreativeConceptSets).mockResolvedValue([
+      {
+        ...creativeSet,
+        concepts: [
+          {
+            ...creativeSet.concepts[0]!,
+            decision_state: "APPROVED_FOR_PRODUCTION",
+          },
+        ],
+      },
+    ]);
+    vi.mocked(catalogApi.listProductionPlans).mockResolvedValue([
+      productionPlan,
+    ]);
+    vi.mocked(catalogApi.listProductionJobs).mockResolvedValue(productionJobs);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Production" }));
+    expect(await screen.findByText("Production plan")).toBeInTheDocument();
+    expect(screen.getByText(/Scene 1 · Hook · 12s/)).toBeInTheDocument();
+    expect(screen.getByText(/shot one — generate image/)).toBeInTheDocument();
+    expect(screen.getByText(/Astra planning: 0.42 USD/)).toBeInTheDocument();
+    expect(screen.getByText(/Video generation: 5.54 USD/)).toBeInTheDocument();
+    expect(screen.getAllByText("Local demo provider")).toHaveLength(3);
+    expect(screen.getAllByText("Ready for use")).toHaveLength(2);
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("LOCAL_DEMO_FAILURE")).toBeInTheDocument();
+    expect(await screen.findByAltText("Generated demo output")).toHaveAttribute(
+      "src",
+      "https://assets.example.test/signed-preview",
+    );
+    await waitFor(() =>
+      expect(document.querySelector("video")).toHaveAttribute(
+        "src",
+        "https://assets.example.test/signed-preview",
+      ),
+    );
+    expect(screen.getAllByRole("button", { name: "Open Asset" })).toHaveLength(
+      2,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve & Generate" }));
+    await waitFor(() =>
+      expect(catalogApi.approveProductionPlan).toHaveBeenCalledWith(
+        expect.anything(),
+        productionPlan.id,
+      ),
+    );
   });
 
   it("shows stranded runs as operator-recovery work without an unsafe retry action", async () => {

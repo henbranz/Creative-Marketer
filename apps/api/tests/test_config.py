@@ -117,3 +117,43 @@ def test_recovery_operator_configuration_is_paired_and_deployment_safe() -> None
             agent_recovery_operator_id="local-recovery",
             agent_recovery_tenant_id=uuid4(),
         )
+
+
+def test_media_provider_activation_is_environment_and_spend_gated() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    local = Settings(
+        database_url=database_url,
+        media_image_provider="fake",
+        media_video_provider="fake",
+    )
+    assert not local.allow_billable_media
+    with pytest.raises(ValidationError, match="forbidden outside"):
+        Settings(
+            app_env="production",
+            database_url=database_url,
+            media_image_provider="fake",
+        )
+    with pytest.raises(ValidationError, match="ALLOW_BILLABLE_MEDIA"):
+        Settings(
+            database_url=database_url,
+            media_image_provider="openai",
+            openai_api_key="real-shaped-key-value",
+        )
+    with pytest.raises(ValidationError, match="deployment-issued workload"):
+        Settings(
+            app_env="production",
+            database_url=database_url,
+            media_image_provider="openai",
+            openai_api_key="real-shaped-key-value",
+            allow_billable_media=True,
+        )
+    deployed = Settings(
+        app_env="production",
+        database_url=database_url,
+        media_image_provider="openai",
+        openai_api_key="real-shaped-key-value",
+        allow_billable_media=True,
+        media_workload_actor_id=uuid4(),
+        media_workload_id="kubernetes/service-account/media",
+    )
+    assert deployed.allow_billable_media

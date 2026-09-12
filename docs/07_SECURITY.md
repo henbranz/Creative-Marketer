@@ -397,3 +397,8 @@ Immediately before provider I/O, Production revalidates same-tenant READY Asset 
 provider capability, pricing version, approval binding, permission, connector state, and budget.
 Ambiguous starts become `OUTCOME_UNKNOWN`. Provider locators, bytes, credentials, and generated
 prompts are excluded from workflow history, events, audit, logs, and knowledge projection.
+
+The media process authenticates as a distinct workload and never reconstructs or impersonates an
+OWNER from workflow input. Its canonical reload retains the actual initiating User only for
+provenance. Fake providers are rejected outside development/test; real providers require both a
+valid secret and `ALLOW_BILLABLE_MEDIA=true`; deployed workers require an issued workload identity.

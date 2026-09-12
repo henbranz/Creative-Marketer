@@ -2830,6 +2830,17 @@
             "title": "Currency",
             "type": "string"
           },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -2837,6 +2848,18 @@
           },
           "kind": {
             "$ref": "#/components/schemas/MediaKind"
+          },
+          "local_demo_provider": {
+            "title": "Local Demo Provider",
+            "type": "boolean"
+          },
+          "media_profile": {
+            "title": "Media Profile",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
           },
           "output_asset_id": {
             "anyOf": [
@@ -2850,6 +2873,14 @@
             ],
             "title": "Output Asset Id"
           },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "reserved_cost": {
+            "title": "Reserved Cost",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -2857,16 +2888,28 @@
           "unknown_cost": {
             "title": "Unknown Cost",
             "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "kind",
           "status",
+          "media_profile",
+          "provider",
+          "model",
+          "reserved_cost",
           "actual_cost",
           "unknown_cost",
           "currency",
-          "output_asset_id"
+          "output_asset_id",
+          "failure_code",
+          "local_demo_provider",
+          "updated_at"
         ],
         "title": "ProductionJobResponse",
         "type": "object"
@@ -2874,6 +2917,11 @@
       "ProductionPlanResponse": {
         "additionalProperties": false,
         "properties": {
+          "agent_run_id": {
+            "format": "uuid",
+            "title": "Agent Run Id",
+            "type": "string"
+          },
           "concept_id": {
             "format": "uuid",
             "title": "Concept Id",
@@ -2907,6 +2955,13 @@
           "generated_image_count": {
             "title": "Generated Image Count",
             "type": "integer"
+          },
+          "generation_segments": {
+            "items": {
+              "$ref": "#/components/schemas/ProductionSegmentResponse"
+            },
+            "title": "Generation Segments",
+            "type": "array"
           },
           "id": {
             "format": "uuid",
@@ -2943,10 +2998,12 @@
         },
         "required": [
           "id",
+          "agent_run_id",
           "concept_id",
           "strategy",
           "status",
           "scenes",
+          "generation_segments",
           "generated_image_count",
           "video_segment_count",
           "existing_asset_count",
@@ -2964,9 +3021,32 @@
       "ProductionSceneResponse": {
         "additionalProperties": false,
         "properties": {
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "on_screen_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Screen Text"
+          },
           "ordinal": {
             "title": "Ordinal",
             "type": "integer"
+          },
+          "purpose": {
+            "title": "Purpose",
+            "type": "string"
           },
           "scene_key": {
             "title": "Scene Key",
@@ -2978,24 +3058,120 @@
             },
             "title": "Shots",
             "type": "array"
+          },
+          "voiceover": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Voiceover"
           }
         },
-        "required": ["scene_key", "ordinal", "shots"],
+        "required": [
+          "scene_key",
+          "ordinal",
+          "purpose",
+          "duration_seconds",
+          "message",
+          "voiceover",
+          "on_screen_text",
+          "shots"
+        ],
         "title": "ProductionSceneResponse",
+        "type": "object"
+      },
+      "ProductionSegmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "continuity": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Continuity",
+            "type": "array"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "generation_spec": {
+            "additionalProperties": true,
+            "title": "Generation Spec",
+            "type": "object"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "media_kind": {
+            "$ref": "#/components/schemas/MediaKind"
+          },
+          "reference_asset_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reference Asset Ids",
+            "type": "array"
+          },
+          "segment_key": {
+            "title": "Segment Key",
+            "type": "string"
+          },
+          "shot_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Shot Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "segment_key",
+          "shot_keys",
+          "media_kind",
+          "duration_seconds",
+          "continuity",
+          "reference_asset_ids",
+          "generation_spec"
+        ],
+        "title": "ProductionSegmentResponse",
         "type": "object"
       },
       "ProductionShotResponse": {
         "additionalProperties": false,
         "properties": {
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
           "shot_key": {
             "title": "Shot Key",
             "type": "string"
           },
           "source_strategy": {
             "$ref": "#/components/schemas/SourceStrategy"
+          },
+          "specification": {
+            "additionalProperties": true,
+            "title": "Specification",
+            "type": "object"
           }
         },
-        "required": ["shot_key", "source_strategy"],
+        "required": ["shot_key", "ordinal", "source_strategy", "specification"],
         "title": "ProductionShotResponse",
         "type": "object"
       },
@@ -6875,6 +7051,101 @@
           }
         },
         "summary": "List Plans",
+        "tags": ["production"]
+      }
+    },
+    "/v1/products/{product_id}/production/runs": {
+      "get": {
+        "operationId": "list_runs_v1_products__product_id__production_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRunResponse"
+                  },
+                  "title": "Response List Runs V1 Products  Product Id  Production Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Runs",
         "tags": ["production"]
       }
     },

@@ -15,7 +15,9 @@ from creative_marketer.tool_governance.application import (
     CreateToolDefinition,
     CreateToolVersion,
     PlatformControlContext,
+    ResolveActiveTool,
 )
+from creative_marketer.tool_governance.domain import ToolUnavailable
 from creative_marketer_api.config import Settings
 
 
@@ -38,6 +40,16 @@ async def run() -> None:
             definition = await CreateToolDefinition(factory)(
                 context, tool_key=contract.tool_key, category="media"
             )
+        try:
+            active = await ResolveActiveTool(factory)(contract.tool_key)
+        except ToolUnavailable:
+            active = None
+        if (
+            active is not None
+            and active.configuration_digest == contract.configuration.configuration_digest
+        ):
+            print(f"{contract.tool_key} already active: version {active.version_number}")
+            continue
         version = await CreateToolVersion(factory)(context, definition.id, contract.configuration)
         await ActivateToolVersion(factory)(context, definition.id, version.id)
         print(f"Activated {contract.tool_key} version {version.version_number}")

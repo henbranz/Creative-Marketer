@@ -83,11 +83,15 @@ The test suite uses the official SDK time-skipping server and may download its c
 binary on first run. Set `TEMPORAL_TEST_SERVER_PATH` only to reuse an already downloaded official
 binary. No separately running Temporal service is required for tests.
 
-The independent worker factory is
-`creative_marketer.infrastructure.temporal.worker:create_worker`; it accepts composed application
-Activities and never imports FastAPI routes. The module CLI deliberately fails closed until a
-deployment-specific authenticated workload identity and authoritative request resolver are
-implemented. Do not work around this by reconstructing a User from workflow input.
+The generic worker factory is `creative_marketer.infrastructure.temporal.worker:create_worker`.
+The activated media entrypoint is `make production-worker`: it composes the existing Tool Gateway,
+canonical PostgreSQL authority, private object storage, media adapters, and Temporal workflow in a
+separate process. Development may derive the labeled local workload identity; staging/production
+must inject `MEDIA_WORKLOAD_ACTOR_ID` and `MEDIA_WORKLOAD_ID`. The worker retains the initiating
+User only as immutable provenance and never impersonates that User.
+
+For the complete free local walkthrough, including deterministic identity output and Obsidian watch
+mode, follow [the local product runbook](docs/20_LOCAL_PRODUCT_AND_OBSIDIAN_RUNBOOK.md).
 
 ## Quality commands
 
@@ -184,7 +188,9 @@ depends on storage health; `/health/ready` deliberately continues to report data
 ## Local Obsidian projection
 
 Set `OBSIDIAN_VAULT_PATH`, `CM_API_BASE_URL`, `CM_TENANT_ID`, and `CM_API_TOKEN` in your shell, then
-run `make obsidian-sync`. Use `make obsidian-rebuild` to reconcile the full canonical graph. The
+run `make obsidian-sync`. Use `make obsidian-rebuild` to reconcile the full canonical graph, or
+`make obsidian-watch` for crash-safe incremental synchronization. `make obsidian-setup` validates
+the Vault and API without mutating canonical product data. The
 token is the current explicit development identity credential and must never be committed;
 production needs a user-scoped read-only session/PAT. The API never sees the local path, and the
 bridge never uploads or interprets user Markdown. Optionally set `NEXT_PUBLIC_OBSIDIAN_VAULT_NAME`

@@ -50,6 +50,9 @@ class AgentService:
             raise self.error
         return self.run
 
+    async def list_runs(self, _context, _product_id):
+        return (self.run, replace(self.run, id=uuid4(), agent_type="orchestrator"))
+
 
 class ProductionService:
     def __init__(self):
@@ -127,6 +130,9 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
     listed = await endpoint(value, "/v1/products/{product_id}/production/plans", "GET")(
         plan.product_id, context
     )
+    runs = await endpoint(value, "/v1/products/{product_id}/production/runs", "GET")(
+        plan.product_id, context
+    )
     loaded = await endpoint(value, "/v1/production/plans/{plan_id}", "GET")(plan.id, context)
     approved = await endpoint(value, "/v1/production/plans/{plan_id}/approve-generation", "POST")(
         plan.id, context
@@ -139,6 +145,7 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
         production.jobs[0].id, context
     )
     assert started.id == agent.run.id
+    assert [item.id for item in runs] == [agent.run.id]
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value
     assert rejected.status == ProductionPlanDecisionState.REJECTED.value

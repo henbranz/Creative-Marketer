@@ -8,12 +8,25 @@ from typing import Protocol
 from uuid import UUID
 
 from creative_marketer.action_binding import NormalizedToolInput
+from creative_marketer.identity.application.authentication import ExecutionContext
+from creative_marketer.permission_governance.domain import (
+    ScopeAccess,
+    ScopeRequirement,
+    TrustedScopeRequirements,
+)
+from creative_marketer.tool_execution.application import ResourceAccessDenied, ResourceResolution
 from creative_marketer.tool_execution.domain import (
+    GatewayResult,
+    GatewayStatus,
     OutcomeUnknown,
     PreEffectFailure,
     ToolExecutionContext,
     ToolExecutorResult,
+    ToolInvocationRequest,
+    TrustedAgentInvocation,
 )
+from creative_marketer.tool_governance.domain import ResolvedToolVersion
+from creative_marketer.workflow_orchestration.contracts import MediaProductionJobResult
 
 from .domain import GenerationJob, GenerationJobStatus, MediaKind
 from .media import (
@@ -36,6 +49,10 @@ class ExecutableGeneration:
     generation_spec: dict[str, object]
     references: tuple[MaterializedReference, ...]
     duration_seconds: int | None = None
+    initiating_context: ExecutionContext | None = None
+    brand_id: UUID | None = None
+    product_id: UUID | None = None
+    requested_agent_definition_id: UUID | None = None
 
 
 class GenerationAuthority(Protocol):
@@ -51,6 +68,8 @@ class GenerationAuthority(Protocol):
     async def failed(self, job_id: UUID, failure_code: str, actual_cost: Decimal) -> None: ...
     async def outcome_unknown(self, job_id: UUID) -> None: ...
     async def succeeded(self, job_id: UUID, asset_id: UUID, actual_cost: Decimal) -> None: ...
+    async def authorize_resource(self, tenant_id: UUID, job_id: UUID) -> None: ...
+    async def current_job(self, tenant_id: UUID, job_id: UUID) -> GenerationJob: ...
 
 
 class GeneratedAssetImporter(Protocol):
@@ -67,6 +86,109 @@ def _job_id(value: NormalizedToolInput) -> UUID:
     if not isinstance(raw, Mapping) or set(raw) != {"generation_job_id"}:
         raise ValueError("governed media input must contain only generation_job_id")
     return UUID(str(raw["generation_job_id"]))
+
+
+def normalize_generation_input(value: object) -> NormalizedToolInput:
+    normalized = NormalizedToolInput.from_trusted_value(value)
+    _job_id(normalized)
+    return normalized
+
+
+@dataclass(slots=True)
+class GenerationJobResourceResolver:
+    authority: GenerationAuthority
+
+    async def __call__(
+        self,
+        context: ExecutionContext,
+        tool: ResolvedToolVersion,
+        normalized_input: NormalizedToolInput,
+    ) -> ResourceResolution:
+        del tool
+        job_id = _job_id(normalized_input)
+        try:
+            await self.authority.authorize_resource(context.tenant_id, job_id)
+        except Exception as error:
+            raise ResourceAccessDenied(
+                "GenerationJob is outside the trusted tenant scope"
+            ) from error
+        return ResourceResolution(
+            TrustedScopeRequirements(
+                (
+                    ScopeRequirement(
+                        "production.media",
+                        ScopeAccess.WRITE,
+                        resource_type="generation_job",
+                        resource_id=str(job_id),
+                    ),
+                )
+            ),
+            "generation_job",
+            str(job_id),
+        )
+
+
+class ProductionGateway(Protocol):
+    async def invoke(
+        self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
+    ) -> GatewayResult: ...
+
+
+@dataclass(slots=True)
+class GovernedProductionJobExecutor:
+    authority: GenerationAuthority
+    gateway: ProductionGateway
+
+    async def execute(
+        self, tenant_id: UUID, plan_id: UUID, job_id: UUID
+    ) -> MediaProductionJobResult:
+        job = await self.authority.current_job(tenant_id, job_id)
+        if job.production_plan_id != plan_id:
+            raise ValueError("GenerationJob does not belong to the workflow ProductionPlan")
+        if job.status in {
+            GenerationJobStatus.SUCCEEDED,
+            GenerationJobStatus.FAILED,
+            GenerationJobStatus.OUTCOME_UNKNOWN,
+        }:
+            return MediaProductionJobResult(str(job.id), job.status.value, job.failure_code)
+        execution = await self.authority.prepare(tenant_id, job_id, job.kind)
+        if execution.initiating_context is None or execution.requested_agent_definition_id is None:
+            raise ValueError("GenerationJob lacks authoritative invocation identity")
+        tool_key = self._tool(job)
+        operation_id = (
+            "op_"
+            + __import__("hashlib")
+            .sha256(f"{job.id}:{tool_key}:{job.status.value}:{job.updated_at.isoformat()}".encode())
+            .hexdigest()[:32]
+        )
+        result = await self.gateway.invoke(
+            TrustedAgentInvocation(
+                execution.initiating_context, execution.requested_agent_definition_id
+            ),
+            ToolInvocationRequest(tool_key, {"generation_job_id": str(job.id)}, operation_id),
+        )
+        status = getattr(result, "status", None)
+        if status not in {GatewayStatus.EXECUTED, GatewayStatus.REPLAYED}:
+            current = await self.authority.current_job(tenant_id, job_id)
+            return MediaProductionJobResult(
+                str(job.id), current.status.value, getattr(result, "reason_code", None)
+            )
+        current = await self.authority.current_job(tenant_id, job_id)
+        return MediaProductionJobResult(str(job.id), current.status.value, current.failure_code)
+
+    @staticmethod
+    def _tool(job: GenerationJob) -> str:
+        if job.kind is MediaKind.IMAGE:
+            if job.status is not GenerationJobStatus.READY:
+                raise ValueError("image generation is already in progress")
+            return "media.image.generate"
+        return {
+            GenerationJobStatus.READY: "media.video.generate.start",
+            GenerationJobStatus.PROCESSING: "media.video.generate.status",
+            GenerationJobStatus.IMPORTING: "media.video.generate.import",
+        }.get(job.status) or (_ for _ in ()).throw(
+            ValueError("video generation lifecycle cannot execute")
+        )
 
 
 def _instruction(spec: dict[str, object]) -> str:

@@ -111,6 +111,8 @@ generation_jobs = _table(
     Column("currency", String(3), nullable=False),
     Column("output_asset_id", UUID(as_uuid=True)),
     Column("failure_code", String(64)),
+    Column("initiated_by_user_id", UUID(as_uuid=True)),
+    Column("executed_by_workload_id", String(128)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )

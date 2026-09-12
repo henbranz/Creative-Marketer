@@ -52,9 +52,12 @@ class Settings(BaseSettings):
     asset_download_ttl_seconds: int = Field(default=600, ge=300, le=900)
     model_provider_backend: Literal["disabled", "openai"] = "disabled"
     openai_api_key: SecretStr | None = None
-    media_image_provider: Literal["disabled", "openai"] = "disabled"
-    media_video_provider: Literal["disabled", "byteplus"] = "disabled"
+    media_image_provider: Literal["disabled", "fake", "openai"] = "disabled"
+    media_video_provider: Literal["disabled", "fake", "byteplus"] = "disabled"
     byteplus_las_api_key: SecretStr | None = None
+    allow_billable_media: bool = False
+    media_workload_actor_id: UUID | None = None
+    media_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
     production_max_plan_cost_usd: Decimal = Field(default=Decimal("100"), gt=0)
     agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -85,6 +88,27 @@ class Settings(BaseSettings):
             )
             if not key or key.startswith(("disabled-", "test-", "fake-", "replace-")):
                 raise ValueError("BytePlus video provider requires a non-placeholder API key")
+        media_enabled = (
+            self.media_image_provider != "disabled" or self.media_video_provider != "disabled"
+        )
+        fake_enabled = self.media_image_provider == "fake" or self.media_video_provider == "fake"
+        real_enabled = (
+            self.media_image_provider == "openai" or self.media_video_provider == "byteplus"
+        )
+        if fake_enabled and self.app_env not in {"development", "test"}:
+            raise ValueError("fake media providers are forbidden outside development/test")
+        if real_enabled and not self.allow_billable_media:
+            raise ValueError("real media providers require ALLOW_BILLABLE_MEDIA=true")
+        if (
+            media_enabled
+            and self.app_env in {"staging", "production"}
+            and (
+                self.media_workload_actor_id is None
+                or self.media_workload_id is None
+                or self.media_workload_id.startswith("local-")
+            )
+        ):
+            raise ValueError("deployed media workers require deployment-issued workload identity")
         if (
             self.model_provider_backend != "disabled"
             and self.app_env in {"staging", "production"}

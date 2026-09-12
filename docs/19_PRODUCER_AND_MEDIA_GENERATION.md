@@ -103,3 +103,18 @@ generated image → generated video. Final editing/compositing and social publis
 
 Provider composition defaults disabled. Live smoke targets require an explicit flag and credential
 and are never CI dependencies. Metrics use bounded dimensions without tenant/Plan/Job/Asset IDs.
+
+## Activated worker authority
+
+`creative_marketer_api.production_worker` is the independent media workload. Every activity carries
+only Tenant, Plan, and Job identities. Immediately before each Tool operation,
+`SqlAlchemyGenerationAuthority` reloads the Job, exact approved Plan and decision, current source
+snapshots and Creative approval, route/pricing/capability binding, reservation, and every referenced
+Asset's READY state, bytes, digest, and current generation rights. Any mismatch fails before a
+provider call. The actual provider remains reachable only through the existing Tool Gateway,
+current tenant permission, idempotency ledger, and audit boundary.
+
+Image and video fake adapters use the identical path and create ordinary private generated Assets;
+they are allowed only in development/test and are labeled `LOCAL DEMO`. Real adapters additionally
+require `ALLOW_BILLABLE_MEDIA=true`. Staging/production also require deployment-issued workload
+identity configuration. See the local runbook for exact no-cost and optional billed commands.

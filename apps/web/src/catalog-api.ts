@@ -28,23 +28,42 @@ export type CreativeDecision =
   components["schemas"]["CreativeDecisionResponse"];
 export interface ProductionShot {
   shot_key: string;
+  ordinal: number;
   source_strategy:
     | "USE_EXISTING_ASSET"
     | "GENERATE_IMAGE"
     | "GENERATE_VIDEO"
     | "MANUAL_CAPTURE";
+  specification: Record<string, unknown>;
 }
 export interface ProductionScene {
   scene_key: string;
   ordinal: number;
+  purpose: string;
+  duration_seconds: number;
+  message: string;
+  voiceover: string | null;
+  on_screen_text: string | null;
   shots: ProductionShot[];
+}
+export interface ProductionSegment {
+  id: string;
+  segment_key: string;
+  shot_keys: string[];
+  media_kind: "IMAGE" | "VIDEO";
+  duration_seconds: number | null;
+  continuity: string[];
+  reference_asset_ids: string[];
+  generation_spec: Record<string, unknown>;
 }
 export interface ProductionPlan {
   id: string;
+  agent_run_id: string;
   concept_id: string;
   strategy: string;
   status: string;
   scenes: ProductionScene[];
+  generation_segments: ProductionSegment[];
   generated_image_count: number;
   video_segment_count: number;
   existing_asset_count: number;
@@ -59,10 +78,17 @@ export interface ProductionJob {
   id: string;
   kind: "IMAGE" | "VIDEO";
   status: string;
+  media_profile: string;
+  provider: string;
+  model: string;
+  reserved_cost: string;
   actual_cost: string;
   unknown_cost: string;
   currency: string;
   output_asset_id: string | null;
+  failure_code: string | null;
+  local_demo_provider: boolean;
+  updated_at: string;
 }
 
 export interface Session {
@@ -245,6 +271,8 @@ export const catalogApi = {
       session,
       `/v1/products/${productId}/production/plans`,
     ),
+  listProducerRuns: (session: Session, productId: string) =>
+    request<AgentRun[]>(session, `/v1/products/${productId}/production/runs`),
   startProducer: (
     session: Session,
     conceptId: string,
@@ -322,6 +350,29 @@ export async function obsidianOpenUrl(
   nodeType: string,
   canonicalId: string,
 ): Promise<string> {
+  const directories: Record<string, string> = {
+    brand: "Products",
+    product: "Products",
+    product_knowledge_snapshot: "Products",
+    agent_definition: "Agents",
+    agent_version: "Agents",
+    agent_run: "Runs",
+    research_source: "Research",
+    evidence_snapshot: "Research/Evidence",
+    research_snapshot: "Research",
+    research_finding: "Research/Findings",
+    creative_concept_set: "Creative",
+    creative_concept: "Creative",
+    creative_concept_decision: "Creative",
+    asset: "Assets",
+    production_plan: "Production",
+    production_shot: "Production/Shots",
+    generation_segment: "Production/Segments",
+    generation_job: "Production/Jobs",
+  };
+  const directory = directories[nodeType];
+  if (!directory || !canonicalId.trim())
+    throw new Error("Unsupported Obsidian node identity.");
   const material = new TextEncoder().encode(`${nodeType}:${canonicalId}`);
   const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", material));
   const digest = Array.from(bytes, (value) =>
@@ -330,7 +381,7 @@ export async function obsidianOpenUrl(
   const filename = `${nodeType.replaceAll("_", "-")}--${digest}`;
   const query = new URLSearchParams({
     vault: vaultName,
-    file: `Products/${filename}`,
+    file: `${directory}/${filename}`,
   });
   return `obsidian://open?${query.toString()}`;
 }

@@ -3,6 +3,7 @@
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -26,12 +27,16 @@ from creative_marketer.production.domain import (
 )
 from creative_marketer.production.execution import (
     ExecutableGeneration,
+    GenerationJobResourceResolver,
+    GovernedProductionJobExecutor,
     ImageGenerateToolExecutor,
     VideoImportToolExecutor,
     VideoStartToolExecutor,
     VideoStatusToolExecutor,
+    normalize_generation_input,
 )
 from creative_marketer.production.infrastructure import (
+    ApplicationGeneratedAssetImporter,
     FakeImageProvider,
     FakeSeedanceMediaProvider,
 )
@@ -45,6 +50,8 @@ from creative_marketer.production.media import (
 )
 from creative_marketer.production.service import ProductionPlanRecord, ProductionService
 from creative_marketer.tool_execution.domain import (
+    GatewayResult,
+    GatewayStatus,
     OutcomeUnknown,
     PreEffectFailure,
     ToolExecutionContext,
@@ -243,6 +250,14 @@ class Authority:
     async def succeeded(self, job_id, asset_id, actual_cost):
         self.states.append(("succeeded", asset_id))
 
+    async def authorize_resource(self, tenant_id, job_id):
+        if tenant_id != self.execution.job.tenant_id or job_id != self.execution.job.id:
+            raise ValueError("wrong tenant")
+
+    async def current_job(self, tenant_id, job_id):
+        await self.authorize_resource(tenant_id, job_id)
+        return self.execution.job
+
 
 class Importer:
     def __init__(self) -> None:
@@ -386,6 +401,136 @@ async def test_media_tool_executor_terminal_and_failure_paths() -> None:
     ).execute(tool_context(video_job.tenant_id), video_input)
     assert imported_result.output["status"] == GenerationJobStatus.SUCCEEDED.value
     assert imported.states[-1][0] == "succeeded"
+
+
+class Gateway:
+    def __init__(self, authority):
+        self.authority = authority
+        self.calls = []
+
+    async def invoke(self, invocation, request):
+        self.calls.append((invocation, request))
+        self.authority.execution = replace(
+            self.authority.execution,
+            job=replace(
+                self.authority.execution.job,
+                status=GenerationJobStatus.SUCCEEDED,
+                output_asset_id=uuid4(),
+            ),
+        )
+        return GatewayResult(
+            GatewayStatus.EXECUTED, request.operation_id, result_ref="result://done"
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_job_dispatch_and_resource_resolution_are_id_only() -> None:
+    service, repository, _uow = service_fixture()
+    actor = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        actor,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image_job, video_job = repository.jobs
+    authority = Authority(
+        ExecutableGeneration(
+            image_job,
+            {},
+            (),
+            initiating_context=actor,
+            requested_agent_definition_id=uuid4(),
+        )
+    )
+    gateway = Gateway(authority)
+    result = await GovernedProductionJobExecutor(authority, gateway).execute(
+        image_job.tenant_id, image_job.production_plan_id, image_job.id
+    )
+    assert result.status == "SUCCEEDED"
+    assert gateway.calls[0][1].tool_key == "media.image.generate"
+    normalized = normalize_generation_input({"generation_job_id": str(image_job.id)})
+    resource = await GenerationJobResourceResolver(authority)(actor, object(), normalized)
+    assert resource.resource_id == str(image_job.id)
+    with pytest.raises(Exception, match="outside"):
+        await GenerationJobResourceResolver(authority)(
+            replace(actor, tenant_id=uuid4()), object(), normalized
+        )
+
+    terminal = replace(image_job, status=GenerationJobStatus.FAILED, failure_code="failed")
+    authority.execution = replace(authority.execution, job=terminal)
+    assert (
+        await GovernedProductionJobExecutor(authority, gateway).execute(
+            terminal.tenant_id, terminal.production_plan_id, terminal.id
+        )
+    ).status == "FAILED"
+    authority.execution = ExecutableGeneration(video_job, {}, ())
+    with pytest.raises(ValueError, match="does not belong"):
+        await GovernedProductionJobExecutor(authority, gateway).execute(
+            video_job.tenant_id, uuid4(), video_job.id
+        )
+    with pytest.raises(ValueError, match="lacks authoritative"):
+        await GovernedProductionJobExecutor(authority, gateway).execute(
+            video_job.tenant_id, video_job.production_plan_id, video_job.id
+        )
+
+
+def test_governed_job_tool_selection_covers_video_lifecycle() -> None:
+    _service, repository, _uow = service_fixture()
+    plan = repository.record.plan
+    image, video = ProductionService._jobs(
+        plan,
+        initial_media_router().resolve("production_video"),
+        initial_media_router().resolve("production_image"),
+    )
+    executor = GovernedProductionJobExecutor(object(), object())
+    assert executor._tool(image) == "media.image.generate"
+    assert executor._tool(video) == "media.video.generate.start"
+    assert executor._tool(replace(video, status=GenerationJobStatus.PROCESSING)) == (
+        "media.video.generate.status"
+    )
+    assert executor._tool(replace(video, status=GenerationJobStatus.IMPORTING)) == (
+        "media.video.generate.import"
+    )
+    with pytest.raises(ValueError, match="already in progress"):
+        executor._tool(replace(image, status=GenerationJobStatus.IMPORTING))
+    with pytest.raises(ValueError, match="lifecycle"):
+        executor._tool(replace(video, status=GenerationJobStatus.STARTING))
+    with pytest.raises(ValueError):
+        normalize_generation_input({"generation_job_id": str(video.id), "extra": True})
+
+
+@pytest.mark.asyncio
+async def test_generated_asset_import_uses_authoritative_catalog_context() -> None:
+    service, repository, _uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image_job = repository.jobs[0]
+
+    class Assets:
+        async def ingest_generated(self, supplied_context, **values):
+            assert supplied_context == context
+            assert values["original_filename"].startswith("LOCAL-DEMO")
+            assert values["content"]
+            return SimpleNamespace(id=uuid4())
+
+    importer = ApplicationGeneratedAssetImporter(Assets(), object(), local_demo=True)
+    execution = ExecutableGeneration(
+        replace(image_job, input_assets=()),
+        {},
+        (),
+        initiating_context=context,
+        brand_id=uuid4(),
+        product_id=repository.record.plan.product_id,
+    )
+    assert await importer.import_result(execution, b"\x89PNG\r\n\x1a\nbytes", "image/png")
+    with pytest.raises(ValueError, match="lacks authoritative"):
+        await importer.import_result(
+            ExecutableGeneration(image_job, {}, ()), b"\x89PNG\r\n\x1a\nbytes", "image/png"
+        )
 
 
 @pytest.mark.asyncio

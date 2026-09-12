@@ -22,7 +22,7 @@ local Obsidian Bridge → Markdown Properties + wikilinks
 
 The provider-neutral contract includes `KnowledgeNode`, `KnowledgeEdge`, `KnowledgeNodeRef`, `KnowledgeRelationship`, `KnowledgeProjectionRevision`, and tombstoned `KnowledgeChange`. Node identity is `(node_type, canonical_id)`; display titles do not participate in identity. Obsidian syntax is confined to the local adapter.
 
-Implemented node types are Brand, Product, ProductKnowledgeSnapshot, AgentDefinition, AgentVersion, AgentRun, ResearchSource, EvidenceSnapshot, ResearchSnapshot, ResearchFinding, CreativeConceptSet, CreativeConcept, CreativeConceptDecision, and Asset. ProductionPlan, ProductionShot, GenerationJob, FinalCreative, Publication, Experiment, and Insight remain extension types for their future owning contexts.
+Implemented node types are Brand, Product, ProductKnowledgeSnapshot, AgentDefinition, AgentVersion, AgentRun, ResearchSource, EvidenceSnapshot, ResearchSnapshot, ResearchFinding, CreativeConceptSet, CreativeConcept, CreativeConceptDecision, Asset, ProductionPlan, ProductionShot, GenerationSegment, and GenerationJob. FinalCreative, Publication, Experiment, and Insight remain extension types for their future owning contexts.
 
 Relationships make the Product snapshot → Researcher run → Research snapshot/findings/evidence → Creative Strategist run → Concept set/concept/assets/decision chain navigable. ResearchFinding IDs are deterministic UUIDv5 identities derived from immutable ResearchSnapshot ID and finding key. Product claim support points to the exact ProductKnowledgeSnapshot; it is not represented as Research authority.
 
@@ -47,19 +47,35 @@ The current development credential is the same explicit local authenticated iden
 
 The server never receives the vault path. The bridge resolves every target beneath the configured root and rejects absolute paths, `..`, and symlink escape. Atomic local cursor state lives at `.creative-marketer/state.json`; it contains node paths/titles and no token. Tombstones move managed notes to `.creative-marketer/archive/` rather than destroying user content.
 
-Vault folders are `Products/`, `Agents/`, `Runs/`, `Research/`, `Research/Findings/`, `Research/Evidence/`, `Creative/`, and `Assets/`; `Production/` and `Insights/` are reserved until their domains exist. Root maps of content are `Creative Marketer.md`, `Agents.md`, `Products.md`, `Research.md`, and `Creative.md`.
+Vault folders are `Products/`, `Agents/`, `Runs/`, `Research/`, `Research/Findings/`, `Research/Evidence/`, `Creative/`, `Assets/`, `Production/`, `Production/Shots/`, `Production/Segments/`, and `Production/Jobs/`; `Insights/` remains reserved until its domain exists. Root maps of content are `Creative Marketer.md`, `Agents.md`, `Products.md`, `Research.md`, `Creative.md`, and `Production.md`.
 
 Every managed artifact note has YAML Properties, an explicit generated region, and a persistent `## My Notes` section. Resync replaces generated content and managed Properties while retaining everything under `My Notes`. Arbitrary user Markdown is not uploaded or parsed. Filenames are type plus the full SHA-256 of stable type/ID identity, so display-name changes cannot break links.
 
-`NEXT_PUBLIC_OBSIDIAN_VAULT_NAME` optionally enables Product Workspace `Open in Obsidian`. The browser computes the same deterministic Product filename and emits `obsidian://open`; only a vault display name and known projected path enter the URI. The URI is navigation, never authorization.
+`NEXT_PUBLIC_OBSIDIAN_VAULT_NAME` optionally enables Product Workspace `Open in Obsidian`. The browser computes deterministic filenames for every supported stable node identity and emits `obsidian://open`; only a vault display name and known projected path enter the URI. The URI is navigation, never authorization.
 
 ## Privacy
 
 Projection construction uses explicit field allowlists plus a recursive final credential-shaped value/key filter. It excludes secrets, authorization/cookie headers, OAuth tokens, object keys and signed URLs, raw provider responses, provider response IDs, prompts/system instructions, hidden reasoning, raw HTML, and raw web objects. Evidence exports only sanitized structured extracted blocks, never raw HTML. Markdown escapes HTML/control syntax and protects generated markers. Forced RLS and explicit tenant predicates provide defense in depth; a tenant cannot project another tenant even with exact UUID knowledge.
 
+## Resident watch and navigation
+
+`make obsidian-watch` performs an initial sync and then polls the cursor API. It applies every note
+batch before atomically advancing `.creative-marketer/state.json`, so a crash replays rather than
+loses a change. A Vault-local atomic lock rejects a second process. Network/API failures use bounded
+exponential backoff; restart continues from the last committed cursor. `## My Notes`, traversal and
+symlink protections, tombstone archiving, and the one-way authority rule are identical to manual
+sync. `make obsidian-setup` verifies the API and Vault and creates only bridge-managed local state.
+
+The Product Workspace exposes stable-identity links for Products, ResearchSnapshots,
+CreativeConcepts, AgentRuns, ProductionPlans/Shots/Segments/Jobs, and Assets when
+`NEXT_PUBLIC_OBSIDIAN_VAULT_NAME` is configured. Python and TypeScript golden vectors pin the same
+type-directory and SHA-256 filename contract; display titles never determine paths.
+
 ## Known limitations
 
-The local bridge is a manual CLI, not a daemon or packaged Obsidian plugin. Cursor records are retained without compaction in this phase. Full rebuild reconciles canonical state but does not recreate historical revision numbers. Vault conflicts across two simultaneously running bridge processes are not coordinated. Deep links currently appear only for Products. These constraints do not weaken one-way authority.
+The bridge is a local resident CLI rather than a packaged Obsidian plugin. Cursor records are
+retained without compaction in this phase. Full rebuild reconciles canonical state but does not
+recreate historical revision numbers. These constraints do not weaken one-way authority.
 ## Production projection
 
 ProductionPlan, ProductionShot, GenerationSegment, and GenerationJob extend the projection. Safe

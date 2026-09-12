@@ -49,6 +49,7 @@ from creative_marketer.observability.logging import configure_structured_logging
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
 from creative_marketer.production.application import initial_media_router, initial_producer_route
+from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
 from creative_marketer.research.application import ResearchService
 from creative_marketer_api.authentication_routes import create_authentication_router
@@ -252,6 +253,14 @@ def create_app(
             ),
             resolved_settings.app_env,
             resolved_identity_audit,
+            frozenset(
+                kind
+                for kind, is_fake in (
+                    (MediaKind.IMAGE, resolved_settings.media_image_provider == "fake"),
+                    (MediaKind.VIDEO, resolved_settings.media_video_provider == "fake"),
+                )
+                if is_fake
+            ),
         )
     )
     application.include_router(

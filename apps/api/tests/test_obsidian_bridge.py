@@ -55,6 +55,17 @@ def test_stable_filenames_and_safe_deep_links() -> None:
         obsidian_open_uri("bad\nvault", "product", identity)
 
 
+def test_production_deep_link_golden_vectors_match_frontend() -> None:
+    identity = "00000000-0000-0000-0000-000000000001"
+    assert relative_note_path("production_plan", identity).as_posix() == (
+        "Production/production-plan--"
+        "5c81f666cc720c0fe27d45f159f68c12b7bb592484ba772e44eaa3b6231107b2.md"
+    )
+    assert relative_note_path("asset", identity).as_posix() == (
+        "Assets/asset--4b60dacb33a2049ec4da0d7d23f06760c66731b5463ee5eb140647ae5fd298fa.md"
+    )
+
+
 def test_markdown_frontmatter_wikilinks_and_escaping() -> None:
     product = projected_node(title="Product [[escape]] <script>")
     brand = projected_node("brand", title="Brand")
@@ -297,3 +308,74 @@ def test_bridge_cli_runs_full_sync(
     bridge_cli.main()
     assert observed == {"full": True}
     assert json.loads(capsys.readouterr().out) == {"written": 2, "archived": 1}
+
+
+def test_setup_and_watch_reconnect_lock_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    instance = bridge(tmp_path)
+    paths: list[str] = []
+
+    def request(path: str):
+        paths.append(path)
+        return {
+            "nodes": [],
+            "next_cursor": "ready",
+        }
+
+    instance._request = request
+    assert instance.validate_setup()["vault"] == str(tmp_path)
+    assert paths == ["/health/live", "/v1/knowledge/projection"]
+
+    attempts = 0
+
+    def sync(*, full=False):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary API outage")
+        return {"written": 0, "archived": 0}
+
+    sleeps: list[float] = []
+    instance.sync = sync
+    monkeypatch.setattr("time.sleep", sleeps.append)
+    instance.watch(interval_seconds=1, max_cycles=1)
+    assert attempts == 2 and sleeps == [1]
+    assert not instance.lock_path.exists()
+
+    instance.lock_path.mkdir()
+    with pytest.raises(RuntimeError, match="already owns"):
+        instance.watch(interval_seconds=1, max_cycles=1)
+    instance.lock_path.rmdir()
+    with pytest.raises(ValueError, match="between 1 and 60"):
+        instance.watch(interval_seconds=0, max_cycles=1)
+
+
+@pytest.mark.parametrize("flag,method", [("--watch", "watch"), ("--setup", "validate_setup")])
+def test_bridge_cli_watch_and_setup(monkeypatch, flag, method) -> None:
+    observed = []
+
+    class Config:
+        @classmethod
+        def from_environment(cls):
+            return object()
+
+    class Bridge:
+        def __init__(self, _config):
+            pass
+
+        def watch(self, *, interval_seconds):
+            observed.append(("watch", interval_seconds))
+
+        def validate_setup(self):
+            observed.append(("validate_setup", None))
+            return {"ok": "true"}
+
+        def sync(self, *, full):
+            raise AssertionError(full)
+
+    monkeypatch.setattr(bridge_cli, "ObsidianBridgeConfig", Config)
+    monkeypatch.setattr(bridge_cli, "ObsidianBridge", Bridge)
+    monkeypatch.setattr("sys.argv", ["creative-marketer-obsidian", flag])
+    bridge_cli.main()
+    assert observed[0][0] == method

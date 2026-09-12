@@ -324,3 +324,8 @@ Production turns an approved CreativeConcept into an immutable provider-neutral 
 governed media jobs. It references Product/Research/Creative facts and Catalog Asset ports; Catalog
 never imports Production. Provider adapters and Temporal composition remain infrastructure. See
 `docs/19_PRODUCER_AND_MEDIA_GENERATION.md` and ADR-030.
+
+The activated independent media worker is a composition adapter, not a new bounded context. It
+retains the modular-monolith dependency direction: Temporal coordinates IDs, Production owns the
+authoritative execution port, Tool Execution governs effects, and Catalog owns imported Assets.
+See ADR-031.

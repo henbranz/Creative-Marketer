@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-sync obsidian-rebuild phase0-gate architecture-security build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke production-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -63,6 +63,12 @@ producer-bootstrap:
 media-tools-bootstrap:
 	cd apps/api && uv run python scripts/bootstrap_media_tools.py
 
+production-worker:
+	cd apps/api && uv run python -m creative_marketer_api.production_worker
+
+demo-bootstrap:
+	cd apps/api && uv run python scripts/bootstrap_demo.py
+
 producer-astra-live-smoke:
 	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
 	@test -n "$${OPENAI_API_KEY:-}" || (echo "OPENAI_API_KEY is required" && exit 2)
@@ -98,6 +104,12 @@ obsidian-sync:
 
 obsidian-rebuild:
 	cd apps/api && uv run python -m creative_marketer_api.obsidian_bridge --full
+
+obsidian-watch:
+	cd apps/api && uv run python -m creative_marketer_api.obsidian_bridge --watch
+
+obsidian-setup:
+	cd apps/api && uv run python -m creative_marketer_api.obsidian_bridge --setup
 
 phase0-gate: lint format-check typecheck
 	docker compose up -d postgres object-storage
