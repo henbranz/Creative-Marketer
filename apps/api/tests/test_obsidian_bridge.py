@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,method-assign,assignment"
 
 import json
+import urllib.request
 from pathlib import Path
 from uuid import uuid4
 
@@ -47,11 +48,21 @@ def test_stable_filenames_and_safe_deep_links() -> None:
     assert uri.startswith("obsidian://open?") and "My+Vault" in uri
     with pytest.raises(ValueError):
         stable_filename("unknown", identity)
+    with pytest.raises(ValueError):
+        stable_filename("product", "  ")
+    with pytest.raises(ValueError):
+        obsidian_open_uri("bad\nvault", "product", identity)
 
 
 def test_markdown_frontmatter_wikilinks_and_escaping() -> None:
     product = projected_node(title="Product [[escape]] <script>")
     brand = projected_node("brand", title="Brand")
+    product["properties"] = {
+        "description": "Visible",
+        "tags": ["one", {"nested": "two"}],
+        "metadata": {"safe": "value", "markup": "<script>"},
+        "empty": None,
+    }
     product["relationships"] = [
         {
             "relationship_type": "belongs_to_brand",
@@ -59,12 +70,88 @@ def test_markdown_frontmatter_wikilinks_and_escaping() -> None:
             "target_canonical_id": brand["canonical_id"],
         }
     ]
-    text = render_note(product, titles={f"brand:{brand['canonical_id']}": "Brand"}, incoming=[])
+    text = render_note(
+        product,
+        titles={f"brand:{brand['canonical_id']}": "Brand"},
+        incoming=[
+            {
+                "source_node_type": "brand",
+                "source_canonical_id": brand["canonical_id"],
+                "relationship_type": "linked_from",
+            }
+        ],
+    )
     assert text.startswith('---\ncm_type: "product"')
     assert "[[Products/brand--" in text
     assert "&lt;script&gt;" in text and "<script>" not in text
     assert MY_NOTES in text
+    assert "## Incoming Relationships" in text
+    assert "\\u003cscript\\u003e" in text
     assert markdown_escape("# [unsafe]") == "\\# \\[unsafe\\]"
+
+
+def test_environment_configuration_and_http_projection_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for name in ("OBSIDIAN_VAULT_PATH", "CM_API_BASE_URL", "CM_TENANT_ID", "CM_API_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(ValueError, match="missing bridge configuration"):
+        ObsidianBridgeConfig.from_environment()
+
+    monkeypatch.setenv("OBSIDIAN_VAULT_PATH", str(tmp_path))
+    monkeypatch.setenv("CM_API_BASE_URL", "ftp://invalid.example")
+    monkeypatch.setenv("CM_TENANT_ID", str(uuid4()))
+    monkeypatch.setenv("CM_API_TOKEN", "local-token")
+    with pytest.raises(ValueError, match="absolute HTTP"):
+        ObsidianBridgeConfig.from_environment()
+
+    monkeypatch.setenv("CM_API_BASE_URL", "https://api.example.test/")
+    config = ObsidianBridgeConfig.from_environment()
+    assert config.api_base_url == "https://api.example.test"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return b'{"nodes": []}'
+
+    observed = {}
+
+    def fake_urlopen(request: urllib.request.Request, *, timeout: int):
+        observed["url"] = request.full_url
+        observed["auth"] = request.headers["Authorization"]
+        observed["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert ObsidianBridge(config)._request("/v1/knowledge/projection") == {"nodes": []}
+    assert observed == {
+        "url": "https://api.example.test/v1/knowledge/projection",
+        "auth": "Bearer local-token",
+        "timeout": 30,
+    }
+
+
+def test_http_projection_request_rejects_non_object(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _limit):
+            return b"[]"
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(ValueError, match="non-object"):
+        bridge(tmp_path)._request("/v1/knowledge/projection")
 
 
 def test_user_notes_survive_replacement() -> None:
@@ -124,6 +211,38 @@ def test_incremental_deletion_archives_managed_note(tmp_path: Path) -> None:
         / relative_note_path("product", value["canonical_id"])
     )
     assert result == {"written": 0, "archived": 1} and archived.exists()
+
+
+def test_incremental_upserts_page_until_cursor_is_exhausted(tmp_path: Path) -> None:
+    first, second = projected_node(title="First"), projected_node(title="Second")
+    instance = bridge(tmp_path)
+    responses = iter(
+        (
+            {"nodes": [first], "next_cursor": "one"},
+            {
+                "changes": [{"revision": 2, "node": second, "deleted_node": None}],
+                "next_cursor": "two",
+                "has_more": True,
+            },
+            {
+                "changes": [],
+                "next_cursor": "three",
+                "has_more": False,
+            },
+        )
+    )
+    requested: list[str] = []
+
+    def request(path: str):
+        requested.append(path)
+        return next(responses)
+
+    instance._request = request
+    instance.sync(full=True)
+    assert instance.sync() == {"written": 1, "archived": 0}
+    assert len(requested) == 3 and "cursor=two" in requested[-1]
+    assert (tmp_path / relative_note_path("product", second["canonical_id"])).exists()
+    assert json.loads(instance.state_path.read_text())["cursor"] == "three"
 
 
 def test_path_traversal_and_symlink_escape_are_rejected(tmp_path: Path) -> None:

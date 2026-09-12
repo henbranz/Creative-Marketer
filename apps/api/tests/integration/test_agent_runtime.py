@@ -336,13 +336,20 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             )
         assert creative_context is not None
         raw = creative_output(creative_context)
+        assert invocation.capability_context is not None
+        available_assets = invocation.capability_context["available_assets"]
+        assert isinstance(available_assets, list) and available_assets
+        projected_asset = available_assets[0]
+        assert isinstance(projected_asset, dict)
+        assert projected_asset["asset_id"] == str(ready_asset.id)
+        assert "generation_input" in projected_asset["allowed_uses"]
         finding_key = creative_context.research_findings[0]["key"]
         for concept in raw["concepts"]:
             concept["supporting_research_refs"][0]["finding_key"] = finding_key
         raw["concepts"][0]["required_assets"] = [
             {
                 "kind": "EXISTING_ASSET",
-                "asset_id": str(ready_asset.id),
+                "asset_id": projected_asset["asset_id"],
                 "intended_role": "product hero",
             }
         ]
