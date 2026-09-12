@@ -80,7 +80,15 @@ generation_segments = _table(
 plan_decisions = _table(
     "plan_decisions",
     Column("production_plan_id", UUID(as_uuid=True), nullable=False),
+    Column("plan_digest", String(71), nullable=False),
     Column("state", String(32), nullable=False),
+    Column("decided_by", UUID(as_uuid=True), nullable=False),
+    Column("video_route_version", String(128), nullable=False),
+    Column("image_route_version", String(128), nullable=False),
+    Column("video_pricing_version", String(128), nullable=False),
+    Column("image_pricing_version", String(128), nullable=False),
+    Column("estimated_max_cost", Numeric(20, 6), nullable=False),
+    Column("currency", String(3), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 generation_jobs = _table(
