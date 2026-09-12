@@ -1,5 +1,6 @@
-# mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,var-annotated"
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,var-annotated,index"
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
@@ -16,14 +17,19 @@ from creative_marketer.identity.application.authentication import (
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.production.application import initial_media_router, validate_production_plan
 from creative_marketer.production.domain import (
+    GenerationJobStatus,
     ProductionDecisionConflict,
+    ProductionNotFound,
     ProductionPermissionDenied,
     ProductionPlanDecisionState,
+    ProductionPricingChanged,
 )
 from creative_marketer.production.execution import (
     ExecutableGeneration,
     ImageGenerateToolExecutor,
+    VideoImportToolExecutor,
     VideoStartToolExecutor,
+    VideoStatusToolExecutor,
 )
 from creative_marketer.production.infrastructure import (
     FakeImageProvider,
@@ -31,12 +37,18 @@ from creative_marketer.production.infrastructure import (
 )
 from creative_marketer.production.media import (
     ImageGenerationRequest,
+    InvalidMediaResult,
+    MediaProviderError,
     MediaProviderOutcomeUnknown,
     ProviderGenerationState,
     VideoGenerationRequest,
 )
 from creative_marketer.production.service import ProductionPlanRecord, ProductionService
-from creative_marketer.tool_execution.domain import OutcomeUnknown, ToolExecutionContext
+from creative_marketer.tool_execution.domain import (
+    OutcomeUnknown,
+    PreEffectFailure,
+    ToolExecutionContext,
+)
 
 from .test_production import context as planning_context
 from .test_production import valid_output
@@ -175,6 +187,15 @@ async def test_deterministic_media_fakes_cover_success_failure_and_unknown() -> 
     unknown = FakeImageProvider(outcome="unknown")
     with pytest.raises(MediaProviderOutcomeUnknown):
         await unknown.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
+    for outcome in ("malformed", "oversized"):
+        provider = FakeImageProvider(outcome=outcome)
+        if outcome == "oversized":
+            with pytest.raises(InvalidMediaResult):
+                await provider.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
+        else:
+            assert (
+                await provider.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
+            ).content == b"invalid"
     video = FakeSeedanceMediaProvider()
     started = await video.start(VideoGenerationRequest("animate", 12, "720p", "9:16", True))
     queued = await video.status(started.provider_operation_ref)
@@ -188,6 +209,10 @@ async def test_deterministic_media_fakes_cover_success_failure_and_unknown() -> 
     with pytest.raises(MediaProviderOutcomeUnknown):
         await ambiguous.start(VideoGenerationRequest("animate", 12, "720p", "9:16", True))
     assert ambiguous.start_count == 1
+    with pytest.raises(MediaProviderError):
+        await video.status("unknown-task")
+    with pytest.raises(InvalidMediaResult):
+        await video.download("https://unknown.invalid/video")
 
 
 class Authority:
@@ -282,3 +307,116 @@ async def test_media_tool_executors_import_and_never_retry_ambiguous_start() -> 
         )
     assert provider.start_count == 1
     assert video_authority.states == [("started", None), ("unknown", None)]
+
+
+@pytest.mark.asyncio
+async def test_media_tool_executor_terminal_and_failure_paths() -> None:
+    service, repository, _uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image_job, video_job = repository.jobs
+    tool = tool_context(image_job.tenant_id)
+    image_input = NormalizedToolInput.from_trusted_value({"generation_job_id": str(image_job.id)})
+    for outcome, expected in (("unknown", OutcomeUnknown), ("failure", PreEffectFailure)):
+        authority = Authority(ExecutableGeneration(image_job, {}, ()))
+        with pytest.raises(expected):
+            await ImageGenerateToolExecutor(
+                authority, FakeImageProvider(outcome=outcome), Importer()
+            ).execute(tool, image_input)
+        assert authority.states[-1][0] in {"unknown", "failed"}
+    with pytest.raises(ValueError):
+        await ImageGenerateToolExecutor(
+            Authority(ExecutableGeneration(image_job, {}, ())), FakeImageProvider(), Importer()
+        ).execute(tool, NormalizedToolInput.from_trusted_value({"unexpected": "value"}))
+
+    video_input = NormalizedToolInput.from_trusted_value({"generation_job_id": str(video_job.id)})
+    video_spec = {"resolution": "720p", "aspect_ratio": "9:16", "generate_audio": True}
+    failed_start = Authority(ExecutableGeneration(video_job, video_spec, (), 12))
+    with pytest.raises(PreEffectFailure):
+        await VideoStartToolExecutor(
+            failed_start, FakeSeedanceMediaProvider(start_outcome="failure")
+        ).execute(tool_context(video_job.tenant_id), video_input)
+    assert failed_start.states[-1][0] == "failed"
+
+    started_authority = Authority(ExecutableGeneration(video_job, video_spec, (), 12))
+    started = await VideoStartToolExecutor(started_authority, FakeSeedanceMediaProvider()).execute(
+        tool_context(video_job.tenant_id), video_input
+    )
+    assert started.output["status"] == GenerationJobStatus.PROCESSING.value
+
+    missing_operation = Authority(ExecutableGeneration(video_job, {}, (), 12))
+    with pytest.raises(PreEffectFailure):
+        await VideoStatusToolExecutor(missing_operation, FakeSeedanceMediaProvider()).execute(
+            tool_context(video_job.tenant_id), video_input
+        )
+    with pytest.raises(PreEffectFailure):
+        await VideoImportToolExecutor(
+            missing_operation, FakeSeedanceMediaProvider(), Importer()
+        ).execute(tool_context(video_job.tenant_id), video_input)
+
+    bound_job = replace(video_job, provider_operation_ref="fake-seedance-task")
+    for state, expected_status, expected_write in (
+        (ProviderGenerationState.FAILED, GenerationJobStatus.FAILED, "failed"),
+        (ProviderGenerationState.SUCCEEDED, GenerationJobStatus.IMPORTING, "importing"),
+        (ProviderGenerationState.RUNNING, GenerationJobStatus.PROCESSING, "processing"),
+    ):
+        authority = Authority(ExecutableGeneration(bound_job, {}, (), 12))
+        result = await VideoStatusToolExecutor(
+            authority, FakeSeedanceMediaProvider(statuses=[state])
+        ).execute(tool_context(video_job.tenant_id), video_input)
+        assert result.output["status"] == expected_status.value
+        assert authority.states[-1][0] == expected_write
+
+    not_ready = Authority(ExecutableGeneration(bound_job, {}, (), 12))
+    with pytest.raises(PreEffectFailure):
+        await VideoImportToolExecutor(
+            not_ready,
+            FakeSeedanceMediaProvider(statuses=[ProviderGenerationState.RUNNING]),
+            Importer(),
+        ).execute(tool_context(video_job.tenant_id), video_input)
+    imported = Authority(ExecutableGeneration(bound_job, {}, (), 12))
+    imported_result = await VideoImportToolExecutor(
+        imported,
+        FakeSeedanceMediaProvider(statuses=[ProviderGenerationState.SUCCEEDED]),
+        Importer(),
+    ).execute(tool_context(video_job.tenant_id), video_input)
+    assert imported_result.output["status"] == GenerationJobStatus.SUCCEEDED.value
+    assert imported.states[-1][0] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_production_service_not_found_rejection_and_pricing_drift() -> None:
+    service, repository, _uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    missing = uuid4()
+    with pytest.raises(ProductionNotFound):
+        await service.get_plan(context, missing)
+    with pytest.raises(ProductionNotFound):
+        await service.list_jobs(context, missing)
+    with pytest.raises(ProductionNotFound):
+        await service.get_job(context, missing)
+    with pytest.raises(ProductionNotFound):
+        await service.decide(context, missing, ProductionPlanDecisionState.REJECTED)
+
+    rejected = await service.decide(
+        context, repository.record.plan.id, ProductionPlanDecisionState.REJECTED
+    )
+    assert rejected.decision is not None and repository.jobs == ()
+    service, repository, _uow = service_fixture()
+    repository.record = replace(
+        repository.record,
+        plan=replace(
+            repository.record.plan,
+            cost=replace(repository.record.plan.cost, video_pricing_version="retired"),
+        ),
+    )
+    with pytest.raises(ProductionPricingChanged):
+        await service.decide(
+            context,
+            repository.record.plan.id,
+            ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+        )

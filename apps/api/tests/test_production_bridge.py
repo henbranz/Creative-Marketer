@@ -1,4 +1,8 @@
+# mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,unused-ignore"
+
+from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,8 +16,10 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.production.domain import MediaKind
 from creative_marketer.workflow_orchestration.contracts import MediaProductionWorkflowInput
 from creative_marketer.workflow_orchestration.production_bridge import (
+    DatabaseProductionJobSetResolver,
     StartMediaProductionWorkflow,
 )
 
@@ -121,3 +127,47 @@ async def test_production_bridge_rejects_event_identity_mismatch() -> None:
     with pytest.raises(ValueError, match="identity mismatch"):
         await StartMediaProductionWorkflow(starter, resolver)(event, object())  # type: ignore[arg-type]
     assert not starter.requests
+    with pytest.raises(ValueError, match="unsupported"):
+        await StartMediaProductionWorkflow(starter, resolver)(
+            replace(event, event_type="unrelated.event.v1"),
+            object(),  # type: ignore[arg-type]
+        )
+
+
+class ResolverUow:
+    def __init__(self, record, jobs=()):
+        self.production = SimpleNamespace(get_plan=self.get_plan, list_jobs=self.list_jobs)
+        self.record, self.jobs = record, jobs
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def get_plan(self, _plan_id):
+        return self.record
+
+    async def list_jobs(self, _plan_id):
+        return self.jobs
+
+
+@pytest.mark.asyncio
+async def test_database_job_set_resolver_requires_approved_nonempty_jobs() -> None:
+    tenant_id, plan_id = uuid4(), uuid4()
+    image = SimpleNamespace(id=uuid4(), kind=MediaKind.IMAGE)
+    video = SimpleNamespace(id=uuid4(), kind=MediaKind.VIDEO)
+    record = SimpleNamespace(decision=object())
+    uow = ResolverUow(record, (image, video))
+    resolver = DatabaseProductionJobSetResolver(lambda _tenant: uow)  # type: ignore[arg-type]
+    assert await resolver.resolve(tenant_id, plan_id) == ((image.id,), (video.id,))
+
+    for unavailable in (ResolverUow(None), ResolverUow(SimpleNamespace(decision=None))):
+        with pytest.raises(ValueError, match="unavailable"):
+            await DatabaseProductionJobSetResolver(
+                lambda _tenant, value=unavailable: value  # type: ignore[arg-type, misc]
+            ).resolve(tenant_id, plan_id)
+    with pytest.raises(ValueError, match="no generation jobs"):
+        await DatabaseProductionJobSetResolver(
+            lambda _tenant: ResolverUow(record)  # type: ignore[arg-type]
+        ).resolve(tenant_id, plan_id)

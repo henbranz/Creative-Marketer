@@ -1,7 +1,9 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
 
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from httpx import Request, Response
@@ -9,11 +11,15 @@ from openai import APIConnectionError, APITimeoutError, RateLimitError
 
 from creative_marketer.agent_runtime.domain import (
     InvalidModelOutput,
+    ModelImageInputRef,
     ModelInvocation,
     ModelProviderError,
     ModelRateLimited,
     ModelRefusal,
     ModelTimeout,
+)
+from creative_marketer.infrastructure.model_providers.asset_images import (
+    DatabaseObjectStoreImageMaterializer,
 )
 from creative_marketer.infrastructure.model_providers.execution_process_only import (
     ExecutionProcessOnlyModelProvider,
@@ -153,3 +159,75 @@ async def test_openai_adapter_rejects_incomplete_output_blocks_and_missing_text(
 async def test_api_process_model_provider_cannot_invoke_models() -> None:
     with pytest.raises(ModelProviderError, match="worker process"):
         await ExecutionProcessOnlyModelProvider().generate_structured(invocation())
+
+
+class MaterializerSession:
+    def __init__(self, row):
+        self.row = row
+        self.calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    def begin(self):
+        return self
+
+    async def execute(self, _statement, _parameters=None):
+        self.calls += 1
+        return SimpleNamespace(first=lambda: self.row if self.calls == 2 else None)
+
+
+class MaterializerStore:
+    def __init__(self, content: bytes):
+        self.content = content
+
+    async def stream(self, *, key: str) -> AsyncIterator[bytes]:
+        assert key == "private/object.png"
+        yield self.content[:4]
+        yield self.content[4:]
+
+
+@pytest.mark.asyncio
+async def test_database_image_materializer_revalidates_policy_digest_and_size() -> None:
+    tenant_id, asset_id = uuid4(), uuid4()
+    digest = "sha256:" + "a" * 64
+    reference = ModelImageInputRef(tenant_id, asset_id, digest)
+    valid = SimpleNamespace(
+        _mapping={
+            "status": "ready",
+            "kind": "image",
+            "rights_status": "confirmed",
+            "allowed_uses": ["generation_input"],
+            "digest": digest,
+            "object_key": "private/object.png",
+            "detected_mime_type": "image/png",
+        }
+    )
+    session = MaterializerSession(valid)
+    materializer = DatabaseObjectStoreImageMaterializer(
+        lambda: session,
+        MaterializerStore(b"image-bytes"),
+    )
+    assert await materializer.materialize(reference) == (b"image-bytes", "image/png")
+
+    missing = MaterializerSession(None)
+    with pytest.raises(ValueError, match="unavailable"):
+        await DatabaseObjectStoreImageMaterializer(
+            lambda: missing,
+            MaterializerStore(b"x"),
+        ).materialize(reference)
+    invalid = SimpleNamespace(_mapping={**valid._mapping, "rights_status": "unknown"})
+    with pytest.raises(ValueError, match="integrity policy"):
+        await DatabaseObjectStoreImageMaterializer(
+            lambda: MaterializerSession(invalid),
+            MaterializerStore(b"x"),
+        ).materialize(reference)
+    with pytest.raises(ValueError, match="materialization bound"):
+        await DatabaseObjectStoreImageMaterializer(
+            lambda: MaterializerSession(valid),
+            MaterializerStore(b"too-large"),
+            maximum_bytes=2,
+        ).materialize(reference)

@@ -15,6 +15,9 @@ from creative_marketer.identity.application.errors import (
     Unauthenticated,
 )
 from creative_marketer.production.domain import (
+    GenerationJob,
+    GenerationJobStatus,
+    MediaKind,
     ProductionNotFound,
     ProductionPermissionDenied,
     ProductionPlanDecision,
@@ -52,7 +55,24 @@ class ProductionService:
     def __init__(self):
         _service, repository, _uow = service_fixture()
         self.record = repository.record
-        self.jobs = repository.jobs
+        self.jobs = (
+            GenerationJob(
+                self.record.plan.tenant_id,
+                self.record.plan.id,
+                "image_one",
+                MediaKind.IMAGE,
+                "production_image",
+                "image-route",
+                "openai",
+                "gpt-image-2",
+                self.record.plan.cost.image_pricing_version,
+                "sha256:" + "a" * 64,
+                self.record.plan.context.selected_assets[:1],
+                self.record.plan.cost.estimated_max_image_cost,
+                "USD",
+                status=GenerationJobStatus.READY,
+            ),
+        )
         self.error = None
 
     async def list_plans(self, _context, product_id):
@@ -115,11 +135,14 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
         plan.id, context
     )
     jobs = await endpoint(value, "/v1/production/plans/{plan_id}/jobs", "GET")(plan.id, context)
+    job = await endpoint(value, "/v1/production/jobs/{job_id}", "GET")(
+        production.jobs[0].id, context
+    )
     assert started.id == agent.run.id
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value
     assert rejected.status == ProductionPlanDecisionState.REJECTED.value
-    assert jobs == []
+    assert jobs[0].id == job.id == production.jobs[0].id
 
 
 @pytest.mark.asyncio
@@ -138,6 +161,8 @@ async def test_production_routes_map_errors() -> None:
     assert get_error.value.status_code == 404
     with pytest.raises(HTTPException):
         await endpoint(value, "/v1/production/plans/{plan_id}/jobs", "GET")(uuid4(), object())
+    with pytest.raises(HTTPException):
+        await endpoint(value, "/v1/production/jobs/{job_id}", "GET")(uuid4(), object())
     production.error = ProductionPermissionDenied("denied")
     with pytest.raises(HTTPException) as approval_error:
         await endpoint(value, "/v1/production/plans/{plan_id}/approve-generation", "POST")(

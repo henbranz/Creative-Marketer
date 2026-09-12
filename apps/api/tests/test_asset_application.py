@@ -17,17 +17,19 @@ from creative_marketer.catalog.asset_application import (
     DownloadGrant,
     ObjectMetadata,
     ObjectStoreUnavailable,
+    UnavailableObjectStore,
     UploadGrant,
 )
 from creative_marketer.catalog.asset_domain import (
     AllowedUse,
     Asset,
     AssetKind,
+    AssetOrigin,
     AssetRole,
     AssetStatus,
     RightsStatus,
 )
-from creative_marketer.catalog.domain import Brand, Product
+from creative_marketer.catalog.domain import Brand, CatalogValidationError, Product
 from creative_marketer.identity.application.authentication import (
     Actor,
     ActorKind,
@@ -115,6 +117,12 @@ class Store:
     content_type: str | None = "image/png"
     available: bool = True
     promoted: list[tuple[str, str]] = field(default_factory=list)
+    private_objects: list[tuple[str, str, bytes]] = field(default_factory=list)
+
+    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None:
+        if not self.available:
+            raise ObjectStoreUnavailable
+        self.private_objects.append((key, content_type, body))
 
     async def create_upload_grant(
         self, *, key: str, content_type: str, max_bytes: int
@@ -272,3 +280,87 @@ async def test_association_permissions_and_state_conflicts_fail_closed() -> None
     stale = replace(pending.validating(), updated_at=datetime.now(UTC) - timedelta(minutes=16))
     await uow.assets.add(stale)
     assert (await service.finalize(context, stale.id)).status is AssetStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_generated_media_is_validated_privately_ingested_and_evented() -> None:
+    context, brand, product, uow = setup()
+    store = Store()
+    service = AssetService(Factory(uow), store)  # type: ignore[arg-type]
+    generated = await service.ingest_generated(
+        context,
+        brand_id=brand.id,
+        product_id=product.id,
+        kind=AssetKind.IMAGE,
+        role=AssetRole.GENERATED_FRAME,
+        content=store.content,
+        media_type="image/png",
+        rights_status=RightsStatus.CONFIRMED,
+        allowed_uses=(AllowedUse.GENERATION_INPUT,),
+        original_filename="generated.png",
+    )
+    assert generated.origin is AssetOrigin.GENERATED
+    assert generated.status is AssetStatus.READY
+    assert generated.object_key and generated.object_key.startswith(
+        f"tenants/{context.tenant_id}/assets/{generated.id}/generated/"
+    )
+    assert store.private_objects == [(generated.object_key, "image/png", store.content)]
+    assert uow.outbox.values[-1].event_type == "catalog.asset.ready.v1"
+    assert uow.commits == 1
+
+    with pytest.raises(CatalogValidationError):
+        await service.ingest_generated(
+            context,
+            brand_id=brand.id,
+            product_id=product.id,
+            kind=AssetKind.IMAGE,
+            role=AssetRole.GENERATED_FRAME,
+            content=b"not-an-image",
+            media_type="image/png",
+            rights_status=RightsStatus.CONFIRMED,
+            allowed_uses=(AllowedUse.GENERATION_INPUT,),
+            original_filename="invalid.png",
+        )
+    with pytest.raises(CatalogPermissionDenied):
+        await service.ingest_generated(
+            replace(context, user_id=None),  # type: ignore[arg-type]
+            brand_id=brand.id,
+            product_id=product.id,
+            kind=AssetKind.IMAGE,
+            role=AssetRole.GENERATED_FRAME,
+            content=store.content,
+            media_type="image/png",
+            rights_status=RightsStatus.CONFIRMED,
+            allowed_uses=(AllowedUse.GENERATION_INPUT,),
+            original_filename="anonymous.png",
+        )
+    with pytest.raises(CatalogNotFound):
+        await service.ingest_generated(
+            context,
+            brand_id=brand.id,
+            product_id=uuid4(),
+            kind=AssetKind.IMAGE,
+            role=AssetRole.GENERATED_FRAME,
+            content=store.content,
+            media_type="image/png",
+            rights_status=RightsStatus.CONFIRMED,
+            allowed_uses=(AllowedUse.GENERATION_INPUT,),
+            original_filename="orphan.png",
+        )
+
+
+@pytest.mark.asyncio
+async def test_unavailable_object_store_fails_every_operation_closed() -> None:
+    store = UnavailableObjectStore()
+    operations = (
+        store.create_upload_grant(key="key", content_type="image/png", max_bytes=1),
+        store.create_download_grant(key="key"),
+        store.head(key="key"),
+        store.promote(source_key="source", destination_key="destination"),
+        store.put_private(key="key", content_type="image/png", body=b"x"),
+    )
+    for operation in operations:
+        with pytest.raises(ObjectStoreUnavailable):
+            await operation
+    with pytest.raises(ObjectStoreUnavailable):
+        await anext(store.stream(key="key"))

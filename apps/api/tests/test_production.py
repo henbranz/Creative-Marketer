@@ -3,11 +3,16 @@
 import json
 from dataclasses import replace
 from decimal import Decimal
+from io import BytesIO
 from types import SimpleNamespace
+from urllib.error import HTTPError, URLError
 from uuid import uuid4
 
+import httpx
 import pytest
+from openai import APIStatusError, APITimeoutError
 
+import creative_marketer.production.infrastructure.seedance as seedance_module
 from creative_marketer.agent_runtime.application import (
     AgentCapabilityRegistry,
     AgentCapabilityUnavailable,
@@ -25,6 +30,7 @@ from creative_marketer.creative.domain import (
 from creative_marketer.production.application import (
     ImageReservationPricing,
     MediaRouter,
+    ProductionBudgetGuard,
     SeedancePricing,
     build_production_context,
     initial_media_router,
@@ -35,24 +41,34 @@ from creative_marketer.production.application import (
     validate_production_plan,
 )
 from creative_marketer.production.domain import (
+    MAX_VISUAL_REFERENCES,
     AssetLineage,
+    FrozenAssetReference,
     GenerationJob,
     GenerationJobStatus,
     InvalidProductionPlan,
     MediaKind,
+    ProductionCost,
     ProductionCreativeRefreshRequired,
+    ProductionPermissionDenied,
     ProductionPlanDecision,
     ProductionPlanDecisionState,
+    ProductionPlanningRequest,
 )
 from creative_marketer.production.infrastructure.openai_images import OpenAIImageProvider
-from creative_marketer.production.infrastructure.seedance import SeedanceMediaProvider
+from creative_marketer.production.infrastructure.seedance import (
+    SeedanceMediaProvider,
+    UrllibJsonHttpTransport,
+)
 from creative_marketer.production.media import (
     ImageGenerationRequest,
     InvalidMediaResult,
     MaterializedReference,
+    MediaProviderError,
     MediaProviderOutcomeUnknown,
     ProviderGenerationState,
     VideoGenerationRequest,
+    assert_reference_limits,
     validate_image_result,
     validate_video_result,
 )
@@ -252,6 +268,9 @@ def test_routes_pricing_contracts_and_selection() -> None:
     assert router.resolve("production_image").model == "gpt-image-2"
     with pytest.raises(InvalidProductionPlan):
         MediaRouter(()).resolve("missing")
+    duplicate = initial_media_router().resolve("production_video")
+    with pytest.raises(ValueError, match="unique"):
+        MediaRouter((duplicate, duplicate))
     pricing = SeedancePricing()
     assert pricing.cost(output_duration_seconds=10, resolution="720p") == Decimal("4.620750")
     assert pricing.cost(
@@ -259,6 +278,8 @@ def test_routes_pricing_contracts_and_selection() -> None:
     ) == Decimal("1.845270")
     with pytest.raises(ValueError):
         pricing.cost(output_duration_seconds=3, resolution="720p")
+    with pytest.raises(ValueError, match="dimensions"):
+        pricing.cost(output_duration_seconds=4, resolution="1080p")
     assert ImageReservationPricing().reserve("HIGH") == Decimal("0.40")
     with pytest.raises(ValueError):
         ImageReservationPricing().reserve("AUTO")
@@ -279,6 +300,8 @@ def test_context_freshness_round_trip_and_valid_plan() -> None:
     payload["concept_scene_keys"] = ["scene_one"]
     payload["production_request"] = payload.pop("request")
     assert production_context_from_payload(payload, planning.context_digest) == planning
+    with pytest.raises(InvalidProductionPlan, match="malformed"):
+        production_context_from_payload({**payload, "selected_assets": "not-a-list"}, DIGEST)
     plan = validate_production_plan(
         valid_output(str(planning.selected_assets[0].asset_id)),
         tenant_id=uuid4(),
@@ -341,6 +364,53 @@ def test_plan_validation_fails_closed(mutation: str) -> None:
         )
 
 
+def test_existing_asset_strategy_binding_fails_closed() -> None:
+    planning = context()
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+    shot = output["scenes"][0]["shots"][0]  # type: ignore[index]
+    shot["source_strategy"] = "USE_EXISTING_ASSET"
+    shot["image_generation_spec"] = None
+    with pytest.raises(InvalidProductionPlan, match="authorized frozen Asset"):
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+    output["scenes"][0]["shots"][1]["existing_asset_id"] = str(  # type: ignore[index]
+        planning.selected_assets[0].asset_id
+    )
+    with pytest.raises(InvalidProductionPlan, match="only existing-asset"):
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+
+
+@pytest.mark.asyncio
+async def test_production_budget_guard_rejects_negative_and_denied_reservations() -> None:
+    class Ledger:
+        def __init__(self, allowed: bool) -> None:
+            self.allowed = allowed
+
+        async def reserve(self, *_args) -> bool:
+            return self.allowed
+
+        async def settle(self, *_args) -> None:
+            return None
+
+    for amount, allowed in ((Decimal("-1"), True), (Decimal("1"), False)):
+        with pytest.raises(ProductionPermissionDenied):
+            await ProductionBudgetGuard(Ledger(allowed)).reserve(uuid4(), uuid4(), amount, "USD")
+
+
 def test_generation_job_unknown_and_lineage() -> None:
     reference = context().selected_assets[0]
     job = GenerationJob(
@@ -372,6 +442,131 @@ def test_generation_job_unknown_and_lineage() -> None:
     )
     with pytest.raises(ValueError):
         AssetLineage(job.tenant_id, job.id, job.id, "DERIVED_FROM")
+
+
+def test_production_domain_invariants_fail_closed() -> None:
+    planning = context()
+    plan = validate_production_plan(
+        valid_output(str(planning.selected_assets[0].asset_id)),
+        tenant_id=uuid4(),
+        product_id=uuid4(),
+        agent_run_id=uuid4(),
+        context=planning,
+        concept_scene_keys=("scene_one",),
+    )
+    reference = planning.selected_assets[0]
+    with pytest.raises(ValueError):
+        FrozenAssetReference(uuid4(), "bad", "image", "logo", ())
+    with pytest.raises(ValueError):
+        ProductionPlanningRequest(aspect_ratio="1:1")
+    with pytest.raises(ValueError, match="duplicate"):
+        replace(planning, selected_assets=(reference, reference))
+    many_assets = tuple(
+        replace(reference, asset_id=uuid4()) for _ in range(MAX_VISUAL_REFERENCES + 1)
+    )
+    with pytest.raises(ValueError, match="bounded maximum"):
+        replace(planning, selected_assets=many_assets)
+    with pytest.raises(ValueError, match="digest"):
+        replace(planning, context_digest=DIGEST)
+
+    image_shot, video_shot = plan.scenes[0].shots
+    with pytest.raises(InvalidProductionPlan, match="identity"):
+        replace(image_shot, shot_key="INVALID")
+    with pytest.raises(InvalidProductionPlan, match="provider-neutral"):
+        replace(image_shot, specification={"provider": "openai"})
+    with pytest.raises(InvalidProductionPlan, match="scene key"):
+        replace(plan.scenes[0], scene_key="INVALID")
+    with pytest.raises(InvalidProductionPlan, match="duration and shots"):
+        replace(plan.scenes[0], shots=())
+    with pytest.raises(InvalidProductionPlan, match="another scene"):
+        replace(plan.scenes[0], shots=(replace(image_shot, scene_key="elsewhere"),))
+    with pytest.raises(InvalidProductionPlan, match="contiguous"):
+        replace(plan.scenes[0], shots=(replace(image_shot, ordinal=2),))
+
+    image_segment, video_segment = plan.generation_segments
+    with pytest.raises(InvalidProductionPlan, match="segment key"):
+        replace(image_segment, segment_key="INVALID")
+    with pytest.raises(InvalidProductionPlan, match="unique shots"):
+        replace(image_segment, shot_keys=("shot_one", "shot_one"))
+    with pytest.raises(InvalidProductionPlan, match="duration"):
+        replace(video_segment, duration_seconds=31)
+    with pytest.raises(InvalidProductionPlan, match="cannot have"):
+        replace(image_segment, duration_seconds=4)
+    with pytest.raises(InvalidProductionPlan, match="provider-neutral"):
+        replace(image_segment, generation_spec={"api_key": "secret"})
+    with pytest.raises(ValueError):
+        ProductionCost(Decimal("-1"), Decimal(0), "USD", "v", "i")
+    with pytest.raises(ValueError):
+        ProductionCost(Decimal(0), Decimal(0), "usd", "v", "i")
+
+    with pytest.raises(InvalidProductionPlan, match="requires scenes"):
+        replace(plan, scenes=())
+    with pytest.raises(InvalidProductionPlan, match="scene ordinals"):
+        replace(plan, scenes=(replace(plan.scenes[0], ordinal=2),))
+    with pytest.raises(InvalidProductionPlan, match="10 and 60"):
+        replace(plan, scenes=(replace(plan.scenes[0], duration_seconds=1),))
+    duplicate_shot_scene = replace(
+        plan.scenes[0], shots=(image_shot, replace(image_shot, ordinal=2))
+    )
+    with pytest.raises(InvalidProductionPlan, match="shot keys"):
+        replace(plan, scenes=(duplicate_shot_scene,))
+    with pytest.raises(InvalidProductionPlan, match="unique plan shots"):
+        replace(plan, generation_segments=(replace(image_segment, shot_keys=("missing",)),))
+    with pytest.raises(InvalidProductionPlan, match="source strategy"):
+        replace(
+            plan,
+            generation_segments=(
+                replace(
+                    image_segment,
+                    shot_keys=(video_shot.shot_key,),
+                    reference_asset_ids=(),
+                ),
+            ),
+        )
+    with pytest.raises(InvalidProductionPlan, match="plan digest"):
+        replace(plan, semantic_digest=DIGEST)
+
+    with pytest.raises(ValueError, match="cost binding"):
+        ProductionPlanDecision(
+            plan.tenant_id,
+            plan.id,
+            plan.semantic_digest,
+            ProductionPlanDecisionState.REJECTED,
+            uuid4(),
+            "v",
+            "i",
+            "vp",
+            "ip",
+            Decimal("-1"),
+            "USD",
+        )
+
+
+def test_generation_job_constructor_invariants() -> None:
+    reference = context().selected_assets[0]
+    values = {
+        "tenant_id": uuid4(),
+        "production_plan_id": uuid4(),
+        "segment_key": "segment",
+        "kind": MediaKind.IMAGE,
+        "media_profile": "production_image",
+        "route_version": "r",
+        "provider": "openai",
+        "model": "gpt-image-2",
+        "pricing_version": "p",
+        "generation_spec_digest": DIGEST,
+        "input_assets": (reference,),
+        "reserved_cost": Decimal("1"),
+        "currency": "USD",
+    }
+    with pytest.raises(ValueError, match="cannot be negative"):
+        GenerationJob(**{**values, "reserved_cost": Decimal("-1")})
+    with pytest.raises(ValueError, match="specification digest"):
+        GenerationJob(**{**values, "generation_spec_digest": "bad"})
+    with pytest.raises(ValueError, match="unknown outcome"):
+        GenerationJob(**values, status=GenerationJobStatus.OUTCOME_UNKNOWN)
+    with pytest.raises(ValueError, match="imported Asset"):
+        GenerationJob(**values, status=GenerationJobStatus.SUCCEEDED)
 
 
 class FakeTransport:
@@ -424,6 +619,96 @@ async def test_seedance_unknown_and_policy_rejections() -> None:
         await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False, (face,)))
 
 
+@pytest.mark.asyncio
+async def test_seedance_rejects_malformed_requests_and_provider_responses() -> None:
+    with pytest.raises(ValueError):
+        SeedanceMediaProvider("test-placeholder")
+    with pytest.raises(ValueError):
+        SeedanceMediaProvider("real-key-value", base_url="https://unverified.invalid")
+    assert isinstance(SeedanceMediaProvider("real-key-value").transport, UrllibJsonHttpTransport)
+    provider = SeedanceMediaProvider("real-key-value", transport=FakeTransport([]))
+    with pytest.raises(ValueError):
+        await provider.start(VideoGenerationRequest("x", 4, "1080p", "9:16", False))
+    with pytest.raises(ValueError):
+        await provider.start(
+            VideoGenerationRequest("x", 4, "480p", "9:16", False, execution_expires_after=1)
+        )
+    video = MaterializedReference("video/mp4", b"video", "source_video")
+    with pytest.raises(ValueError):
+        await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False, (video,)))
+    image = MaterializedReference("image/png", b"image", "reference_image")
+    inline = SeedanceMediaProvider(
+        "real-key-value", transport=FakeTransport([(200, b'{"id":"task-image"}')])
+    )
+    assert (
+        await inline.start(VideoGenerationRequest("x", 4, "480p", "9:16", False, (image,)))
+    ).provider_operation_ref == "task-image"
+
+    for status, body, error in (
+        (400, b"rejected", MediaProviderError),
+        (200, b"not-json", MediaProviderOutcomeUnknown),
+        (200, b'{"id":""}', MediaProviderOutcomeUnknown),
+    ):
+        failing = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(status, body)]))
+        with pytest.raises(error):
+            await failing.start(VideoGenerationRequest("x", 4, "480p", "9:16", False))
+
+    with pytest.raises(ValueError):
+        await provider.status("bad/reference")
+    for status, body in ((400, b""), (200, b"not-json"), (200, b'{"status":"unknown"}')):
+        failing = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(status, body)]))
+        with pytest.raises(MediaProviderError):
+            await failing.status("task-1")
+    missing_output = SeedanceMediaProvider(
+        "real-key-value",
+        transport=FakeTransport([(200, b'{"status":"succeeded","content":{}}')]),
+    )
+    with pytest.raises(MediaProviderError):
+        await missing_output.status("task-1")
+    with pytest.raises(ValueError):
+        await provider.download("http://insecure.invalid/video")
+    failed_download = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(404, b"")]))
+    with pytest.raises(MediaProviderError):
+        await failed_download.download("https://result.example/video")
+
+
+@pytest.mark.asyncio
+async def test_default_seedance_transport_success_and_network_uncertainty(monkeypatch) -> None:
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b"ok"
+
+    monkeypatch.setattr(seedance_module, "urlopen", lambda *_args, **_kwargs: Response())
+    assert await UrllibJsonHttpTransport().request("GET", "https://example.test", {}, None) == (
+        200,
+        b"ok",
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise URLError("offline")
+
+    monkeypatch.setattr(seedance_module, "urlopen", unavailable)
+    with pytest.raises(MediaProviderOutcomeUnknown):
+        await UrllibJsonHttpTransport().request("GET", "https://example.test", {}, None)
+
+    def rejected(*_args, **_kwargs):
+        raise HTTPError("https://example.test", 418, "rejected", hdrs=None, fp=BytesIO(b"rejected"))
+
+    monkeypatch.setattr(seedance_module, "urlopen", rejected)
+    assert await UrllibJsonHttpTransport().request("GET", "https://example.test", {}, None) == (
+        418,
+        b"rejected",
+    )
+
+
 class FakeImages:
     def __init__(self, response):
         self.response = response
@@ -461,10 +746,47 @@ async def test_openai_image_generate_and_edit() -> None:
         await provider.generate(ImageGenerationRequest("render", "auto", "auto"))
 
 
+@pytest.mark.asyncio
+async def test_openai_image_adapter_rejects_credentials_transport_and_malformed_output() -> None:
+    with pytest.raises(ValueError):
+        OpenAIImageProvider("fake-placeholder")
+
+    class RaisingImages:
+        def __init__(self, error):
+            self.error = error
+
+        async def generate(self, **_kwargs):
+            raise self.error
+
+    request = httpx.Request("POST", "https://api.openai.com/v1/images")
+    for error, expected in (
+        (APITimeoutError(request=request), MediaProviderOutcomeUnknown),
+        (
+            APIStatusError("rejected", response=httpx.Response(400, request=request), body=None),
+            MediaProviderError,
+        ),
+    ):
+        provider = OpenAIImageProvider(
+            "real-key-value",
+            client=SimpleNamespace(images=RaisingImages(error)),  # type: ignore[arg-type]
+        )
+        with pytest.raises(expected):
+            await provider.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
+    malformed = OpenAIImageProvider(
+        "real-key-value",
+        client=SimpleNamespace(images=FakeImages(SimpleNamespace(data=[]))),  # type: ignore[arg-type]
+    )
+    with pytest.raises(MediaProviderError):
+        await malformed.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
+
+
 def test_media_result_and_workflow_contract_guards() -> None:
     assert validate_image_result(b"\xff\xd8\xffdata") == "image/jpeg"
+    assert validate_image_result(b"RIFFxxxxWEBPdata") == "image/webp"
     with pytest.raises(InvalidMediaResult):
         validate_image_result(b"")
+    with pytest.raises(InvalidMediaResult):
+        validate_image_result(b"\x89PNG\r\n\x1a\nlarge", maximum_bytes=2)
     with pytest.raises(InvalidMediaResult):
         validate_video_result(b"not-video")
     request = MediaProductionWorkflowInput(
@@ -474,6 +796,13 @@ def test_media_result_and_workflow_contract_guards() -> None:
     with pytest.raises(ValueError):
         MediaProductionWorkflowInput(
             str(uuid4()), str(uuid4()), tuple(str(uuid4()) for _ in range(9)), (), str(uuid4())
+        )
+    with pytest.raises(ValueError):
+        assert_reference_limits(
+            (MaterializedReference("audio/mpeg", b"audio", "soundtrack"),),
+            images=0,
+            videos=0,
+            audio=0,
         )
     assert isinstance(default_capability_registry().resolve("producer"), ProducerCapability)
     with pytest.raises(AgentCapabilityUnavailable):
