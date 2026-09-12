@@ -140,3 +140,13 @@ ownership/scope derivation → deterministic permission evaluation → obligatio
 immutable ToolCall/approval binding → final locked authorization snapshot → idempotency attempt →
 executor → strict output validation → atomic outcome evidence. Missing budget or credential
 capability, unsupported obligations, stale versions, and unavailable exact executors fail closed.
+
+## Governed media tools
+
+Production registers four exact, immutable contracts: `media.image.generate`,
+`media.video.generate.start`, `media.video.generate.status`, and
+`media.video.generate.import`. Every contract accepts only a trusted `generation_job_id`; raw model
+prompts, routes, credentials, tenant IDs, and provider operation IDs are never caller authority.
+Image generation and video start/import are R2 external mutations with required idempotency;
+status is R1 read-only. Their executors are Tool Gateway bindings used by deterministic workflow
+code, never tools exposed to the Producer model.

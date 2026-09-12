@@ -221,3 +221,9 @@ Exactly-once inference is explicitly not claimed.
 The generic request event is resolved against authoritative AgentRun type. Existing Researcher
 workflow history remains unchanged; new Creative runs use the thin AgentExecutionWorkflow. Creative
 production approval is a durable product decision and does not initiate media generation or publish.
+## Media production
+
+`MediaProductionWorkflow` starts only after immutable plan approval commits. History contains only
+tenant/plan/job/correlation IDs and status. It executes images before dependent videos through
+Tool Gateway-backed activities, polls known Seedance task IDs durably, imports temporary results
+immediately, and never retries an ambiguous start. Deadline expiry never authorizes a new start.

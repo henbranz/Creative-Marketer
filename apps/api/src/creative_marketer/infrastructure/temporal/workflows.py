@@ -21,6 +21,8 @@ with workflow.unsafe.imports_passed_through():
         GenerationStartResult,
         GenerationState,
         GenerationWorkflowInput,
+        MediaProductionJobResult,
+        MediaProductionWorkflowInput,
         ResearcherActivityResult,
         ResearcherWorkflowInput,
         ToolActivityResult,
@@ -179,6 +181,64 @@ class MediaGenerationWorkflow:
         self._state = WorkflowState.EXPIRED
         return WorkflowResult(
             self._state, request.operation_id, reason_code="GENERATION_DEADLINE_EXCEEDED"
+        )
+
+
+@workflow.defn(name="MediaProductionWorkflow")
+class MediaProductionWorkflow:
+    """IDs-only coordinator; images complete before dependent video jobs are attempted."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(
+        self, request: MediaProductionWorkflowInput
+    ) -> tuple[MediaProductionJobResult, ...]:
+        self._state = WorkflowState.GENERATING
+        results: list[MediaProductionJobResult] = []
+        for job_id in request.image_job_ids:
+            result = await self._step(request, job_id)
+            results.append(result)
+            if result.status != "SUCCEEDED":
+                self._state = WorkflowState.FAILED
+                return tuple(results)
+        deadline = workflow.now() + timedelta(days=3)
+        for job_id in request.video_job_ids:
+            result = await self._step(request, job_id)
+            while result.status in {"PROCESSING", "IMPORTING"} and workflow.now() < deadline:
+                await workflow.sleep(timedelta(seconds=10))
+                result = await self._step(request, job_id)
+            results.append(result)
+            if result.status != "SUCCEEDED":
+                self._state = (
+                    WorkflowState.EXPIRED if workflow.now() >= deadline else WorkflowState.FAILED
+                )
+                return tuple(results)
+        self._state = WorkflowState.COMPLETED
+        return tuple(results)
+
+    @staticmethod
+    async def _step(request: MediaProductionWorkflowInput, job_id: str) -> MediaProductionJobResult:
+        return cast(
+            MediaProductionJobResult,
+            await workflow.execute_activity(
+                "workflow.execute_production_job",
+                args=[
+                    request.tenant_id,
+                    request.production_plan_id,
+                    job_id,
+                    request.correlation_id,
+                ],
+                result_type=MediaProductionJobResult,
+                start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=10),
+                retry_policy=GENERATION_RETRY_POLICY,
+            ),
         )
 
 

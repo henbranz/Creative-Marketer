@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -51,6 +52,10 @@ class Settings(BaseSettings):
     asset_download_ttl_seconds: int = Field(default=600, ge=300, le=900)
     model_provider_backend: Literal["disabled", "openai"] = "disabled"
     openai_api_key: SecretStr | None = None
+    media_image_provider: Literal["disabled", "openai"] = "disabled"
+    media_video_provider: Literal["disabled", "byteplus"] = "disabled"
+    byteplus_las_api_key: SecretStr | None = None
+    production_max_plan_cost_usd: Decimal = Field(default=Decimal("100"), gt=0)
     agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
     agent_recovery_tenant_id: UUID | None = None
@@ -72,6 +77,14 @@ class Settings(BaseSettings):
             key = self.openai_api_key.get_secret_value() if self.openai_api_key else None
             if key is not None and key.startswith(("disabled-", "test-", "fake-", "replace-")):
                 raise ValueError("OpenAI provider rejects placeholder credentials")
+        if self.media_image_provider == "openai" and self.openai_api_key is None:
+            raise ValueError("OpenAI image provider requires OPENAI_API_KEY")
+        if self.media_video_provider == "byteplus":
+            key = (
+                self.byteplus_las_api_key.get_secret_value() if self.byteplus_las_api_key else None
+            )
+            if not key or key.startswith(("disabled-", "test-", "fake-", "replace-")):
+                raise ValueError("BytePlus video provider requires a non-placeholder API key")
         if (
             self.model_provider_backend != "disabled"
             and self.app_env in {"staging", "production"}

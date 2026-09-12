@@ -391,3 +391,9 @@ route. It receives frozen Product/Asset metadata and structured Research finding
 never system instructions or raw web content. Cross-tenant references fail through application
 lookup, forced RLS, and composite foreign keys. Creative text is prohibited from Audit, event,
 telemetry, and Temporal payloads.
+## Production media controls
+
+Immediately before provider I/O, Production revalidates same-tenant READY Asset digest and rights,
+provider capability, pricing version, approval binding, permission, connector state, and budget.
+Ambiguous starts become `OUTCOME_UNKNOWN`. Provider locators, bytes, credentials, and generated
+prompts are excluded from workflow history, events, audit, logs, and knowledge projection.

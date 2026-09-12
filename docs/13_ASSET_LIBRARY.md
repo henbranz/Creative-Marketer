@@ -54,3 +54,13 @@ keys, grants, rights evidence text, or binary content. Audit uses the same Catal
 ProductKnowledgeSnapshot V2 includes at most 100 READY Product Assets in deterministic ID order.
 Each entry contains Asset ID, kind, role, verified MIME, size, digest, rights/uses, and parent ID.
 V1 remains readable and constructible; new workspace snapshots emit the V2 event contract.
+
+## Generated media and lineage
+
+Production outputs use the same private ObjectStore and READY Asset invariants as uploads, with
+`origin=generated` and explicit generated-shot/frame/production-reference roles. Provider bytes are
+bounded, signature-checked, hashed, and imported immediately; temporary provider URLs never become
+Asset identity. Rights are supplied by an explicit provider-policy classification and are not
+assumed unrestricted. `catalog.asset_lineage` is an immutable, forced-RLS, same-tenant many-parent
+relation supporting reference, frame, source, and derived-from provenance without giving Catalog
+authority over Production.

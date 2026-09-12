@@ -28,6 +28,7 @@ from creative_marketer.creative.application import (
     validate_creative_output,
 )
 from creative_marketer.creative.domain import (
+    ApprovedCreativeConcept,
     ChannelIntent,
     CreativeBriefIncomplete,
     CreativeError,
@@ -42,6 +43,15 @@ from creative_marketer.events.domain import DomainEvent, EventScopeKind, tenant_
 from creative_marketer.identity.application.authentication import ActorKind, ExecutionContext
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
+from creative_marketer.production.application import (
+    PRODUCTION_CONTRACT_KEY,
+    PRODUCTION_CONTRACT_VERSION,
+    build_production_context,
+    load_production_plan_schema,
+    production_context_from_payload,
+    validate_production_plan,
+)
+from creative_marketer.production.domain import ProductionPlanningContext, ProductionPlanningRequest
 from creative_marketer.research.domain import (
     EvidenceSnapshot,
     ResearchCategory,
@@ -62,6 +72,7 @@ from .domain import (
     ModelAttempt,
     ModelCapabilityUnavailable,
     ModelContext,
+    ModelImageInputRef,
     ModelInvocation,
     ModelInvocationResult,
     ModelPricing,
@@ -297,10 +308,84 @@ class CreativeStrategistCapability:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ProducerCapability:
+    """Astra product role: one structured planning inference and no executable tools."""
+
+    agent_type: str = "producer"
+    output_contract_key: str = PRODUCTION_CONTRACT_KEY
+    output_contract_version: int = PRODUCTION_CONTRACT_VERSION
+
+    def output_schema(self) -> Mapping[str, object]:
+        return load_production_plan_schema()
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation:
+        values = context.capability_context or {}
+        raw_assets = values.get("selected_assets", ())
+        assets = raw_assets if isinstance(raw_assets, (list, tuple)) else ()
+        return ModelInvocation(
+            route,
+            context.system_instructions,
+            {},
+            (),
+            self.output_schema(),
+            run.output_contract_key,
+            run.output_contract_version,
+            route.max_output_tokens,
+            route.reasoning_effort,
+            capability_context=context.capability_context,
+            output_task=context.output_task,
+            image_inputs=tuple(
+                ModelImageInputRef(run.tenant_id, UUID(str(item["asset_id"])), str(item["digest"]))
+                for item in assets
+                if isinstance(item, Mapping)
+            ),
+        )
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult:
+        values = context.capability_context
+        if values is None:
+            raise AgentRunNotReady("Producer capability context is unavailable")
+        planning = production_context_from_payload(values, run.input_context_digest)
+        scene_keys = values.get("concept_scene_keys", ())
+        if not isinstance(scene_keys, (list, tuple)):
+            raise AgentRunNotReady("Producer Creative scene references are unavailable")
+        plan = validate_production_plan(
+            output,
+            tenant_id=run.tenant_id,
+            product_id=run.product_id,
+            agent_run_id=run.id,
+            context=planning,
+            concept_scene_keys=tuple(str(item) for item in scene_keys),
+        )
+        return CapabilityResult(
+            value=plan,
+            event_type="production.plan.created.v1",
+            aggregate_type="production_plan",
+            aggregate_id=plan.id,
+            occurred_at=plan.created_at,
+            event_payload={
+                "production_plan_id": str(plan.id),
+                "agent_run_id": str(run.id),
+                "product_id": str(run.product_id),
+                "concept_id": str(plan.context.concept_id),
+                "semantic_digest": plan.semantic_digest,
+                "estimated_total_cost": str(plan.cost.estimated_total_cost),
+                "currency": plan.cost.currency,
+            },
+            metric_name="production.plan.count",
+            metric_value=1,
+        )
+
+
 def default_capability_registry() -> AgentCapabilityRegistry:
     handlers = cast(
         tuple[AgentCapabilityHandler, ...],
-        (ResearcherCapability(), CreativeStrategistCapability()),
+        (ResearcherCapability(), CreativeStrategistCapability(), ProducerCapability()),
     )
     return AgentCapabilityRegistry(handlers)
 
@@ -390,6 +475,15 @@ class CreativePreparation:
 
 
 @dataclass(frozen=True, slots=True)
+class ProducerPreparation:
+    producer: ResolvedResearcher
+    approved: ApprovedCreativeConcept
+    product_snapshot: ProductKnowledgeSnapshot
+    research_snapshot: ResearchSnapshot
+    asset_manifest: tuple[Mapping[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkloadIdentity:
     workload_id: str
     environment: str
@@ -424,6 +518,7 @@ class AgentRunRepository(Protocol):
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None: ...
     async def prepare_researcher(self, product_id: UUID) -> ResearcherPreparation | None: ...
     async def prepare_creative(self, product_id: UUID) -> CreativePreparation | None: ...
+    async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None: ...
     async def active_for_product(
         self, product_id: UUID, definition_id: UUID
     ) -> AgentRun | None: ...
@@ -690,6 +785,61 @@ def conservative_creative_input_token_bound(context: ModelContext) -> int:
         "context_sections": _plain_json(context.capability_context or {}),
         "output_task": context.output_task,
         "output_schema": load_creative_output_schema(),
+    }
+    return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def build_producer_model_context(
+    preparation: ProducerPreparation,
+    request: ProductionPlanningRequest,
+) -> tuple[ProductionPlanningContext, ModelContext]:
+    planning = build_production_context(
+        preparation.approved,
+        current_product_snapshot_id=preparation.product_snapshot.id,
+        current_product_snapshot_digest=preparation.product_snapshot.digest,
+        current_research_snapshot_id=preparation.research_snapshot.id,
+        current_research_snapshot_digest=preparation.research_snapshot.semantic_digest,
+        asset_manifest=preparation.asset_manifest,
+        request=request,
+    )
+    scenes = preparation.approved.concept.payload.get("scenes", ())
+    scene_items = scenes if isinstance(scenes, (list, tuple)) else ()
+    scene_keys = [
+        str(item["scene_key"])
+        for item in scene_items
+        if isinstance(item, Mapping) and "scene_key" in item
+    ]
+    provenance = planning.semantic_content()
+    sections: dict[str, object] = {
+        **provenance,
+        "production_request": provenance["request"],
+        "concept_scene_keys": scene_keys,
+        "approved_creative_concept": _compact_json(preparation.approved.concept.payload),
+        "product_knowledge_snapshot": _compact_json(preparation.product_snapshot.content),
+        "research_findings": [item.semantic() for item in preparation.research_snapshot.findings],
+        "research_gaps": list(preparation.research_snapshot.research_gaps),
+    }
+    sections.pop("request", None)
+    model = ModelContext(
+        preparation.producer.configuration.system_instructions,
+        {},
+        (),
+        planning.context_digest,
+        capability_context=sections,
+        output_task=(
+            "Return only production.production_plan.v1. Preserve every supplied CreativeConcept "
+            "scene in order. Plan media; never authorize or execute generation."
+        ),
+    )
+    return planning, model
+
+
+def conservative_producer_input_token_bound(context: ModelContext) -> int:
+    document = {
+        "system_instructions": context.system_instructions,
+        "context_sections": _plain_json(context.capability_context or {}),
+        "output_task": context.output_task,
+        "output_schema": load_production_plan_schema(),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -1037,6 +1187,200 @@ class AgentRunService:
             self.telemetry.count(
                 "agent_runs",
                 attributes={"agent.type": "creative_strategist", "result": "pending"},
+            )
+            return run
+
+    async def request_producer(
+        self,
+        context: ExecutionContext,
+        *,
+        concept_id: UUID,
+        request: ProductionPlanningRequest,
+        idempotency_key: str,
+    ) -> AgentRun:
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
+        if not idempotency_key.strip() or len(idempotency_key) > 128:
+            raise ValueError("idempotency key is required and bounded")
+        now = datetime.now(UTC)
+        async with self.uow_factory(context.tenant_id) as uow:
+            replay = await uow.runs.get_by_idempotency(idempotency_key)
+            if replay is not None:
+                if replay.agent_type != "producer" or not any(
+                    item.get("kind") == "approved_concept" and item.get("id") == str(concept_id)
+                    for item in replay.input_context_refs
+                ):
+                    raise AgentRunNotReady("idempotency key is bound to another request")
+                return replay
+            preparation = await uow.runs.prepare_producer(concept_id)
+            if preparation is None:
+                raise AgentRunNotReady(
+                    "approved current CreativeConcept context or active Producer is missing"
+                )
+            cfg = preparation.producer.configuration
+            if (
+                cfg.output_contract_key != PRODUCTION_CONTRACT_KEY
+                or cfg.output_contract_version != PRODUCTION_CONTRACT_VERSION
+                or cfg.model_policy.max_turns != 1
+                or not cfg.model_policy.structured_output_required
+                or cfg.model_policy.fallback_allowed
+                or set(cfg.model_policy.required_capabilities)
+                != {"text", "image_input", "reasoning", "structured_output"}
+                or cfg.allowed_tool_keys
+                or cfg.run_budget_policy.max_tool_calls != 0
+                or cfg.run_budget_policy.max_model_calls != 1
+                or cfg.memory_scopes
+                or set(cfg.read_scopes)
+                != {
+                    "catalog.asset_manifest",
+                    "catalog.product",
+                    "creative.approved_concept",
+                    "research.snapshot",
+                }
+                or set(cfg.write_scopes) != {"production.plan"}
+            ):
+                raise AgentRunNotReady("active Producer configuration violates v1 invariants")
+            route = self.router.resolve(
+                cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
+            )
+            self.providers.resolve(route.provider)
+            input_allowance = cfg.run_budget_policy.max_total_tokens - route.max_output_tokens
+            worst_cost = max(
+                route.pricing.cost(input_allowance, route.max_output_tokens),
+                route.pricing.cost(cfg.run_budget_policy.max_total_tokens, 0),
+            )
+            if (
+                route.pricing.currency != cfg.run_budget_policy.currency
+                or cfg.period_budget_policy.currency != cfg.run_budget_policy.currency
+                or input_allowance <= 0
+                or worst_cost > cfg.run_budget_policy.max_cost
+            ):
+                raise BudgetExceeded("Producer model route cannot fit the budget envelope")
+            active = await uow.runs.active_for_product(
+                preparation.approved.concept.product_id,
+                preparation.producer.requested_definition_id,
+            )
+            if active is not None:
+                return active
+            planning, model_context = build_producer_model_context(preparation, request)
+            if conservative_producer_input_token_bound(model_context) > input_allowance:
+                raise BudgetExceeded("bounded Producer context exceeds input token envelope")
+            refs: tuple[Mapping[str, object], ...] = (
+                {
+                    "kind": "approved_concept",
+                    "id": str(planning.concept_id),
+                    "digest": planning.concept_digest,
+                    "concept_set_id": str(planning.concept_set_id),
+                    "concept_set_digest": planning.concept_set_digest,
+                    "creative_decision_id": str(planning.creative_decision_id),
+                },
+                {
+                    "kind": "product_snapshot",
+                    "id": str(planning.product_snapshot_id),
+                    "digest": planning.product_snapshot_digest,
+                },
+                {
+                    "kind": "research_snapshot",
+                    "id": str(planning.research_snapshot_id),
+                    "digest": planning.research_snapshot_digest,
+                },
+                {
+                    "kind": "selected_assets",
+                    "assets": [item.primitive() for item in planning.selected_assets],
+                },
+                {
+                    "kind": "production_request",
+                    "target_format": request.target_format,
+                    "aspect_ratio": request.aspect_ratio,
+                },
+            )
+            run = AgentRun(
+                tenant_id=context.tenant_id,
+                requested_agent_definition_id=preparation.producer.requested_definition_id,
+                resolved_agent_definition_id=preparation.producer.resolved_definition_id,
+                agent_version_id=preparation.producer.version_id,
+                agent_version_number=preparation.producer.version_number,
+                agent_configuration_digest=preparation.producer.configuration_digest,
+                prompt_revision=cfg.prompt_revision,
+                product_id=preparation.approved.concept.product_id,
+                product_snapshot_id=planning.product_snapshot_id,
+                product_snapshot_digest=planning.product_snapshot_digest,
+                product_snapshot_schema_version=2,
+                research_context_digest=planning.research_snapshot_digest,
+                context_digest=planning.context_digest,
+                selected_evidence=(),
+                model_profile_key=cfg.model_policy.profile_key,
+                output_contract_key=PRODUCTION_CONTRACT_KEY,
+                output_contract_version=PRODUCTION_CONTRACT_VERSION,
+                correlation_id=context.correlation_id,
+                initiated_by_actor_kind=context.actor.kind.value,
+                initiated_by_actor_id=context.actor.id,
+                period_start=_period_start(now, cfg.period_budget_policy.period),
+                reserved_cost=cfg.run_budget_policy.max_cost,
+                currency=cfg.run_budget_policy.currency,
+                idempotency_key=idempotency_key,
+                agent_type="producer",
+                input_context_kind="production_planning.v1",
+                input_context_schema_version=1,
+                input_context_digest=planning.context_digest,
+                input_context_refs=refs,
+                max_total_tokens=cfg.run_budget_policy.max_total_tokens,
+                created_at=now,
+            )
+            await uow.runs.reserve_period_budget(
+                run_id=run.id,
+                definition_id=run.requested_agent_definition_id,
+                period_start=run.period_start,
+                max_runs=cfg.period_budget_policy.max_runs,
+                max_cost=cfg.period_budget_policy.max_cost,
+                reserve_cost=run.reserved_cost,
+                currency=run.currency,
+            )
+            if not await uow.runs.add(run):
+                raise AgentRunConflict("another Producer request won the race")
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="production.plan.requested",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="agent_run",
+                    resource_id=str(run.id),
+                    agent_definition_id=run.requested_agent_definition_id,
+                    agent_version_id=run.agent_version_id,
+                    agent_run_id=run.id,
+                    metadata=safe_metadata(
+                        {
+                            "product_id": str(run.product_id),
+                            "concept_id": str(concept_id),
+                            "context_digest": planning.context_digest,
+                            "selected_asset_count": len(planning.selected_assets),
+                            "model_profile": run.model_profile_key,
+                        }
+                    ),
+                )
+            )
+            await _event(
+                uow,
+                context,
+                "agent.run.requested.v1",
+                "agent_run",
+                run.id,
+                {
+                    "agent_run_id": str(run.id),
+                    "product_id": str(run.product_id),
+                    "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                    "agent_version_id": str(run.agent_version_id),
+                    "product_snapshot_digest": run.product_snapshot_digest,
+                    "research_context_digest": run.research_context_digest,
+                    "context_digest": run.context_digest,
+                },
+            )
+            await uow.commit()
+            self.telemetry.count(
+                "agent_runs", attributes={"agent.type": "producer", "result": "pending"}
             )
             return run
 

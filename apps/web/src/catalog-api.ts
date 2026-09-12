@@ -26,6 +26,44 @@ export type CreativeConceptSet =
 export type CreativeConcept = components["schemas"]["CreativeConceptResponse"];
 export type CreativeDecision =
   components["schemas"]["CreativeDecisionResponse"];
+export interface ProductionShot {
+  shot_key: string;
+  source_strategy:
+    | "USE_EXISTING_ASSET"
+    | "GENERATE_IMAGE"
+    | "GENERATE_VIDEO"
+    | "MANUAL_CAPTURE";
+}
+export interface ProductionScene {
+  scene_key: string;
+  ordinal: number;
+  shots: ProductionShot[];
+}
+export interface ProductionPlan {
+  id: string;
+  concept_id: string;
+  strategy: string;
+  status: string;
+  scenes: ProductionScene[];
+  generated_image_count: number;
+  video_segment_count: number;
+  existing_asset_count: number;
+  manual_shot_count: number;
+  planning_cost: string;
+  estimated_max_image_cost: string;
+  estimated_max_video_cost: string;
+  estimated_total_cost: string;
+  currency: string;
+}
+export interface ProductionJob {
+  id: string;
+  kind: "IMAGE" | "VIDEO";
+  status: string;
+  actual_cost: string;
+  unknown_cost: string;
+  currency: string;
+  output_asset_id: string | null;
+}
 
 export interface Session {
   readonly tenantId: string;
@@ -202,6 +240,38 @@ export const catalogApi = {
       `/v1/creative/concepts/${conceptId}/decision`,
       { method: "POST", body: JSON.stringify({ state }) },
     ),
+  listProductionPlans: (session: Session, productId: string) =>
+    request<ProductionPlan[]>(
+      session,
+      `/v1/products/${productId}/production/plans`,
+    ),
+  startProducer: (
+    session: Session,
+    conceptId: string,
+    idempotencyKey: string,
+  ) =>
+    request<AgentRun>(
+      session,
+      `/v1/creative/concepts/${conceptId}/production/runs`,
+      {
+        method: "POST",
+        body: JSON.stringify({ idempotency_key: idempotencyKey }),
+      },
+    ),
+  approveProductionPlan: (session: Session, planId: string) =>
+    request<ProductionPlan>(
+      session,
+      `/v1/production/plans/${planId}/approve-generation`,
+      {
+        method: "POST",
+      },
+    ),
+  rejectProductionPlan: (session: Session, planId: string) =>
+    request<ProductionPlan>(session, `/v1/production/plans/${planId}/reject`, {
+      method: "POST",
+    }),
+  listProductionJobs: (session: Session, planId: string) =>
+    request<ProductionJob[]>(session, `/v1/production/plans/${planId}/jobs`),
 };
 
 export async function uploadToGrant(

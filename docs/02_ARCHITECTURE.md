@@ -318,3 +318,9 @@ tenant-scoped canonical artifacts and emits provider-neutral nodes/edges. A disp
 cache and immutable revision ledger support full and incremental reads; neither is a semantic source
 of truth. The local Obsidian Bridge is an infrastructure adapter and the only component with vault
 filesystem access. See `docs/18_KNOWLEDGE_GRAPH_AND_OBSIDIAN.md` and ADR-029.
+## Phase 3 Production boundary
+
+Production turns an approved CreativeConcept into an immutable provider-neutral plan and coordinates
+governed media jobs. It references Product/Research/Creative facts and Catalog Asset ports; Catalog
+never imports Production. Provider adapters and Temporal composition remain infrastructure. See
+`docs/19_PRODUCER_AND_MEDIA_GENERATION.md` and ADR-030.

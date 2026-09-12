@@ -13,6 +13,9 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.production_uow import (
+    SqlAlchemyProductionUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.research_uow import (
     SqlAlchemyResearchUnitOfWorkFactory,
 )
@@ -29,6 +32,7 @@ __all__ = [
     "SqlAlchemyCreativeUnitOfWorkFactory",
     "SqlAlchemyGatewayUnitOfWorkFactory",
     "SqlAlchemyKnowledgeProjectionStore",
+    "SqlAlchemyProductionUnitOfWorkFactory",
     "SqlAlchemyResearchUnitOfWorkFactory",
     "SqlAlchemyUnitOfWorkFactory",
     "create_session_factory",

@@ -12,6 +12,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
     MediaGenerationWorkflow,
+    MediaProductionWorkflow,
     ResearcherWorkflow,
     ScheduledPublicationWorkflow,
 )
@@ -32,6 +33,7 @@ def create_worker(
             AgentExecutionWorkflow,
             ApprovalBlockingWorkflow,
             MediaGenerationWorkflow,
+            MediaProductionWorkflow,
             ScheduledPublicationWorkflow,
             ResearcherWorkflow,
         ],
@@ -40,6 +42,7 @@ def create_worker(
             activities.invoke_tool,
             activities.start_generation,
             activities.poll_generation,
+            activities.execute_production_job,
             activities.execute_researcher,
         ],
         graceful_shutdown_timeout=graceful_shutdown_timeout,

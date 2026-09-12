@@ -14,6 +14,7 @@ from creative_marketer.agent_runtime.application import (
     initial_creative_strategist_route,
     initial_researcher_route,
 )
+from creative_marketer.catalog.asset_application import UnavailableObjectStore
 from creative_marketer.events.application import (
     ConsumerRegistration,
     ConsumerRegistry,
@@ -28,7 +29,11 @@ from creative_marketer.infrastructure.database.event_consumer_uow import (
     SqlAlchemyConsumerUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.event_delivery import PostgresPublisherStore
-from creative_marketer.infrastructure.model_providers import OpenAIResponsesModelProvider
+from creative_marketer.infrastructure.model_providers import (
+    DatabaseObjectStoreImageMaterializer,
+    OpenAIResponsesModelProvider,
+)
+from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.temporal.activities import TemporalActivities
 from creative_marketer.infrastructure.temporal.client import (
     TemporalAgentExecutionWorkflowStarter,
@@ -42,6 +47,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
 )
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
 from creative_marketer.observability.ports import NullTelemetry
+from creative_marketer.production.application import initial_producer_route
 from creative_marketer.workflow_orchestration.agent_bridge import RouteAgentWorkflow
 from creative_marketer.workflow_orchestration.researcher_bridge import StartResearcherWorkflow
 from creative_marketer_api.config import Settings
@@ -119,16 +125,39 @@ async def run() -> None:
     if settings.model_provider_backend != "openai" or settings.openai_api_key is None:
         raise RuntimeError("Researcher worker requires MODEL_PROVIDER_BACKEND=openai")
     telemetry = NullTelemetry()
-    routes = (initial_researcher_route(), initial_creative_strategist_route())
-    runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(
-        create_session_factory(str(settings.database_url))
+    routes = (
+        initial_researcher_route(),
+        initial_creative_strategist_route(),
+        initial_producer_route(),
+    )
+    session_factory = create_session_factory(str(settings.database_url))
+    runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
+    object_store = (
+        S3ObjectStore(
+            endpoint_url=str(settings.object_storage_endpoint_url),
+            public_endpoint_url=str(settings.object_storage_public_endpoint_url),
+            region=settings.object_storage_region,
+            bucket=settings.object_storage_bucket,
+            access_key_id=settings.object_storage_access_key_id,
+            secret_access_key=settings.object_storage_secret_access_key.get_secret_value(),
+            upload_ttl_seconds=settings.asset_upload_ttl_seconds,
+            download_ttl_seconds=settings.asset_download_ttl_seconds,
+        )
+        if getattr(settings, "object_storage_backend", "disabled") == "s3"
+        else UnavailableObjectStore()
+    )
+    provider = (
+        OpenAIResponsesModelProvider(
+            settings.openai_api_key.get_secret_value(),
+            image_materializer=DatabaseObjectStoreImageMaterializer(session_factory, object_store),
+        )
+        if getattr(settings, "object_storage_backend", "disabled") == "s3"
+        else OpenAIResponsesModelProvider(settings.openai_api_key.get_secret_value())
     )
     runtime = AgentRunService(
         runtime_uow,
         ModelRouter(routes),
-        ModelProviderRegistry(
-            {"openai": OpenAIResponsesModelProvider(settings.openai_api_key.get_secret_value())}
-        ),
+        ModelProviderRegistry({"openai": provider}),
         ConfiguredWorkloadIdentityProvider(settings.agent_workload_id, settings.app_env),
         telemetry,
     )

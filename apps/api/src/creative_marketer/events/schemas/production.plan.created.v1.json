@@ -1,0 +1,15 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "x-event-type":"production.plan.created.v1",
+  "type":"object","additionalProperties":false,
+  "required":["production_plan_id","agent_run_id","product_id","concept_id","semantic_digest","estimated_total_cost","currency"],
+  "properties":{
+    "production_plan_id":{"type":"string","format":"uuid"},
+    "agent_run_id":{"type":"string","format":"uuid"},
+    "product_id":{"type":"string","format":"uuid"},
+    "concept_id":{"type":"string","format":"uuid"},
+    "semantic_digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "estimated_total_cost":{"type":"string","pattern":"^[0-9]+(?:\\.[0-9]{1,6})?$"},
+    "currency":{"type":"string","pattern":"^[A-Z]{3}$"}
+  }
+}

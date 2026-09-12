@@ -26,6 +26,10 @@ class KnowledgeNodeType(StrEnum):
     CREATIVE_CONCEPT = "creative_concept"
     CREATIVE_CONCEPT_DECISION = "creative_concept_decision"
     ASSET = "asset"
+    PRODUCTION_PLAN = "production_plan"
+    PRODUCTION_SHOT = "production_shot"
+    GENERATION_SEGMENT = "generation_segment"
+    GENERATION_JOB = "generation_job"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:creative-marketer:production.production_plan:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["strategy", "format", "scenes", "generation_segments", "required_assets"],
+  "properties": {
+    "strategy": {"type": "string", "minLength": 1, "maxLength": 3000},
+    "format": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "aspect_ratio"],
+      "properties": {
+        "kind": {"const": "SHORT_FORM_VERTICAL_VIDEO"},
+        "aspect_ratio": {"const": "9:16"}
+      }
+    },
+    "scenes": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/$defs/scene"}},
+    "generation_segments": {"type": "array", "maxItems": 12, "items": {"$ref": "#/$defs/segment"}},
+    "required_assets": {"type": "array", "maxItems": 30, "items": {"type": "string", "minLength": 1, "maxLength": 500}}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+    "key": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+    "nullableText": {"type": ["string", "null"], "maxLength": 2000},
+    "stringList": {"type": "array", "maxItems": 30, "items": {"type": "string", "minLength": 1, "maxLength": 500}},
+    "shot": {
+      "type": "object", "additionalProperties": false,
+      "required": ["shot_key", "scene_key", "ordinal", "visual_objective", "subject", "environment", "composition", "framing", "lens_intent", "camera_position", "camera_motion", "lighting", "action", "continuity_requirements", "product_preservation_constraints", "audio_intent", "source_strategy", "existing_asset_id", "image_generation_spec"],
+      "properties": {
+        "shot_key": {"$ref": "#/$defs/key"}, "scene_key": {"$ref": "#/$defs/key"},
+        "ordinal": {"type": "integer", "minimum": 1, "maximum": 50},
+        "visual_objective": {"$ref": "#/$defs/text"}, "subject": {"$ref": "#/$defs/text"},
+        "environment": {"$ref": "#/$defs/text"}, "composition": {"$ref": "#/$defs/text"},
+        "framing": {"$ref": "#/$defs/text"}, "lens_intent": {"$ref": "#/$defs/text"},
+        "camera_position": {"$ref": "#/$defs/text"}, "camera_motion": {"$ref": "#/$defs/text"},
+        "lighting": {"$ref": "#/$defs/text"}, "action": {"$ref": "#/$defs/text"},
+        "continuity_requirements": {"$ref": "#/$defs/stringList"},
+        "product_preservation_constraints": {"$ref": "#/$defs/stringList"},
+        "audio_intent": {"$ref": "#/$defs/nullableText"},
+        "source_strategy": {"enum": ["USE_EXISTING_ASSET", "GENERATE_IMAGE", "GENERATE_VIDEO", "MANUAL_CAPTURE"]},
+        "existing_asset_id": {"type": ["string", "null"], "format": "uuid"},
+        "image_generation_spec": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/imageSpec"}]}
+      }
+    },
+    "scene": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scene_key", "ordinal", "purpose", "duration_seconds", "message", "voiceover", "on_screen_text", "shots"],
+      "properties": {
+        "scene_key": {"$ref": "#/$defs/key"}, "ordinal": {"type": "integer", "minimum": 1, "maximum": 20},
+        "purpose": {"$ref": "#/$defs/text"}, "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 60},
+        "message": {"$ref": "#/$defs/text"}, "voiceover": {"$ref": "#/$defs/nullableText"},
+        "on_screen_text": {"$ref": "#/$defs/nullableText"},
+        "shots": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/$defs/shot"}}
+      }
+    },
+    "imageSpec": {
+      "type": "object", "additionalProperties": false,
+      "required": ["subject", "environment", "composition", "camera_framing", "lighting", "style", "product_preservation_constraints", "reference_asset_ids", "aspect_ratio", "quality_intent", "negative_constraints"],
+      "properties": {
+        "subject": {"$ref": "#/$defs/text"}, "environment": {"$ref": "#/$defs/text"},
+        "composition": {"$ref": "#/$defs/text"}, "camera_framing": {"$ref": "#/$defs/text"},
+        "lighting": {"$ref": "#/$defs/text"}, "style": {"$ref": "#/$defs/text"},
+        "product_preservation_constraints": {"$ref": "#/$defs/stringList"},
+        "reference_asset_ids": {"type": "array", "maxItems": 10, "items": {"type": "string", "format": "uuid"}, "uniqueItems": true},
+        "aspect_ratio": {"const": "9:16"}, "quality_intent": {"enum": ["MEDIUM", "HIGH"]},
+        "negative_constraints": {"$ref": "#/$defs/stringList"}
+      }
+    },
+    "segment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["segment_key", "shot_keys", "media_kind", "duration_seconds", "continuity", "reference_asset_ids", "generation_spec"],
+      "properties": {
+        "segment_key": {"$ref": "#/$defs/key"},
+        "shot_keys": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"$ref": "#/$defs/key"}, "uniqueItems": true},
+        "media_kind": {"enum": ["IMAGE", "VIDEO"]},
+        "duration_seconds": {"type": ["integer", "null"], "minimum": 4, "maximum": 30},
+        "continuity": {"$ref": "#/$defs/stringList"},
+        "reference_asset_ids": {"type": "array", "maxItems": 30, "items": {"type": "string", "format": "uuid"}, "uniqueItems": true},
+        "generation_spec": {
+          "type": "object", "additionalProperties": false,
+          "required": ["subject", "environment", "composition", "camera_motion", "lighting", "action", "product_preservation_constraints", "negative_constraints", "generate_audio", "resolution", "aspect_ratio"],
+          "properties": {
+            "subject": {"$ref": "#/$defs/text"}, "environment": {"$ref": "#/$defs/text"},
+            "composition": {"$ref": "#/$defs/text"}, "camera_motion": {"$ref": "#/$defs/text"},
+            "lighting": {"$ref": "#/$defs/text"}, "action": {"$ref": "#/$defs/text"},
+            "product_preservation_constraints": {"$ref": "#/$defs/stringList"},
+            "negative_constraints": {"$ref": "#/$defs/stringList"},
+            "generate_audio": {"type": "boolean"}, "resolution": {"enum": ["480p", "720p"]},
+            "aspect_ratio": {"const": "9:16"}
+          }
+        }
+      }
+    }
+  }
+}

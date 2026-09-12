@@ -19,9 +19,13 @@ from creative_marketer.catalog.application import (
 )
 from creative_marketer.catalog.asset_domain import (
     MAX_BYTES,
+    AllowedUse,
     Asset,
     AssetKind,
+    AssetOrigin,
+    AssetRole,
     AssetStatus,
+    RightsStatus,
     detect_mime,
     image_dimensions,
 )
@@ -60,6 +64,7 @@ class ObjectStore(Protocol):
     async def head(self, *, key: str) -> ObjectMetadata: ...
     def stream(self, *, key: str) -> AsyncIterator[bytes]: ...
     async def promote(self, *, source_key: str, destination_key: str) -> None: ...
+    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None: ...
 
 
 class UnavailableObjectStore:
@@ -122,6 +127,82 @@ async def _record(
 class AssetService:
     uow_factory: CatalogUnitOfWorkFactory
     object_store: ObjectStore
+
+    async def ingest_generated(
+        self,
+        context: ExecutionContext,
+        *,
+        brand_id: UUID,
+        product_id: UUID,
+        kind: AssetKind,
+        role: AssetRole,
+        content: bytes,
+        media_type: str,
+        rights_status: RightsStatus,
+        allowed_uses: tuple[AllowedUse, ...],
+        original_filename: str,
+    ) -> Asset:
+        """Validate and privately ingest provider output as an ordinary immutable Asset."""
+        require_catalog_mutation(context)
+        if context.user_id is None:
+            raise CatalogPermissionDenied("generated Asset ingestion requires an initiating user")
+        if not content or len(content) > MAX_BYTES[kind] or detect_mime(content[:64]) != media_type:
+            raise CatalogValidationError("generated media failed binary validation")
+        asset_id = uuid4()
+        digest = "sha256:" + sha256(content).hexdigest()
+        object_key = f"tenants/{context.tenant_id}/assets/{asset_id}/generated/{digest[7:]}"
+        await self.object_store.put_private(key=object_key, content_type=media_type, body=content)
+        width, height = image_dimensions(media_type, content[:64])
+        now = datetime.now(UTC)
+        asset = Asset(
+            tenant_id=context.tenant_id,
+            brand_id=brand_id,
+            product_id=product_id,
+            kind=kind,
+            role=role,
+            origin=AssetOrigin.GENERATED,
+            status=AssetStatus.READY,
+            original_filename=original_filename,
+            declared_mime_type=media_type,
+            detected_mime_type=media_type,
+            rights_status=rights_status,
+            allowed_uses=allowed_uses,
+            upload_object_key=object_key,
+            object_key=object_key,
+            byte_size=len(content),
+            digest=digest,
+            created_by=context.user_id,
+            id=asset_id,
+            width=width,
+            height=height,
+            created_at=now,
+            updated_at=now,
+        )
+        async with self.uow_factory(context) as uow:
+            product = await uow.products.get(product_id)
+            if product is None or product.brand_id != brand_id:
+                raise CatalogNotFound("product not found")
+            await uow.assets.add(asset)
+            await _record(uow, context, asset, "catalog.asset.generated_ready")
+            await _event(
+                uow,
+                context,
+                "catalog.asset.ready.v1",
+                "asset",
+                asset.id,
+                {
+                    "asset_id": str(asset.id),
+                    "brand_id": str(asset.brand_id),
+                    "product_id": str(asset.product_id),
+                    "kind": asset.kind.value,
+                    "role": asset.role.value,
+                    "mime_type": asset.detected_mime_type,
+                    "byte_size": asset.byte_size,
+                    "digest": asset.digest,
+                },
+            )
+            await uow.commit()
+        return asset
 
     async def create(self, context: ExecutionContext, asset: Asset) -> CreatedAsset:
         require_catalog_mutation(context)

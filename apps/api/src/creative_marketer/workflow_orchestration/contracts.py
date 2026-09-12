@@ -170,3 +170,32 @@ class AgentExecutionActivityResult:
 
 def agent_execution_workflow_id(value: AgentExecutionWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/agent-run/{value.agent_run_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class MediaProductionWorkflowInput:
+    tenant_id: str
+    production_plan_id: str
+    image_job_ids: tuple[str, ...]
+    video_job_ids: tuple[str, ...]
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.production_plan_id, "production_plan_id")
+        _uuid(self.correlation_id, "correlation_id")
+        for job_id in (*self.image_job_ids, *self.video_job_ids):
+            _uuid(job_id, "generation_job_id")
+        if len(self.image_job_ids) > 8 or len(self.video_job_ids) > 4:
+            raise ValueError("production job set exceeds bounded plan limits")
+
+
+@dataclass(frozen=True, slots=True)
+class MediaProductionJobResult:
+    generation_job_id: str
+    status: str
+    failure_code: str | None = None
+
+
+def media_production_workflow_id(value: MediaProductionWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/production-plan/{value.production_plan_id}"

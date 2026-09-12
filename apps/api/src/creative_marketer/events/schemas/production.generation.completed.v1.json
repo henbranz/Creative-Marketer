@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "x-event-type":"production.generation.completed.v1",
+  "type":"object","additionalProperties":false,
+  "required":["production_plan_id","generation_job_id","kind","output_asset_id","actual_cost","currency"],
+  "properties":{
+    "production_plan_id":{"type":"string","format":"uuid"},
+    "generation_job_id":{"type":"string","format":"uuid"},
+    "kind":{"enum":["IMAGE","VIDEO"]},
+    "output_asset_id":{"type":"string","format":"uuid"},
+    "actual_cost":{"type":"string","pattern":"^[0-9]+(?:\\.[0-9]{1,6})?$"},
+    "currency":{"type":"string","pattern":"^[A-Z]{3}$"}
+  }
+}

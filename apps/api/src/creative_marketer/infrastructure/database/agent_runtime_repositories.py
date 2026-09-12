@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from sqlalchemy import and_, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -17,9 +17,11 @@ from creative_marketer.agent_governance.domain import (
 )
 from creative_marketer.agent_runtime.application import (
     CreativePreparation,
+    ProducerPreparation,
     ResearcherPreparation,
     ResolvedResearcher,
     build_creative_model_context,
+    build_producer_model_context,
 )
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
@@ -46,8 +48,12 @@ from creative_marketer.agent_runtime.domain import (
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
 from creative_marketer.creative.domain import (
+    ApprovedCreativeConcept,
     ChannelIntent,
+    CreativeConcept,
+    CreativeConceptDecision,
     CreativeConceptSet,
+    CreativeDecisionState,
     CreativeStrategyContext,
     CreativeStrategyRequest,
     product_claim_refs,
@@ -65,10 +71,24 @@ from creative_marketer.infrastructure.database.agent_runtime_schema import (
     model_cost_reconciliations,
     research_snapshots,
 )
-from creative_marketer.infrastructure.database.catalog_schema import product_knowledge_snapshots
-from creative_marketer.infrastructure.database.creative_schema import concept_sets, concepts
+from creative_marketer.infrastructure.database.catalog_schema import (
+    assets,
+    product_knowledge_snapshots,
+)
+from creative_marketer.infrastructure.database.creative_schema import (
+    concept_decisions,
+    concept_sets,
+    concepts,
+)
+from creative_marketer.infrastructure.database.production_schema import (
+    generation_segments,
+    production_plans,
+    production_scenes,
+    production_shots,
+)
 from creative_marketer.infrastructure.database.research_repositories import _evidence
 from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
+from creative_marketer.production.domain import ProductionPlan, ProductionPlanningRequest
 from creative_marketer.research.domain import (
     ResearchCategory,
     ResearchContextManifest,
@@ -497,6 +517,210 @@ class SqlAlchemyAgentRunRepository:
         )
         return CreativePreparation(strategist, product, research, freshness, completeness)
 
+    async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None:
+        concept_row = (
+            await self._session.execute(select(concepts).where(concepts.c.id == concept_id))
+        ).first()
+        if concept_row is None:
+            return None
+        c = concept_row._mapping
+        set_row = (
+            await self._session.execute(
+                select(concept_sets).where(concept_sets.c.id == c["concept_set_id"])
+            )
+        ).first()
+        decision_row = (
+            await self._session.execute(
+                select(concept_decisions)
+                .where(concept_decisions.c.concept_id == concept_id)
+                .order_by(concept_decisions.c.created_at.desc(), concept_decisions.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if set_row is None or decision_row is None:
+            return None
+        d = decision_row._mapping
+        if d["state"] != CreativeDecisionState.APPROVED_FOR_PRODUCTION.value:
+            return None
+        cs = set_row._mapping
+        concept_rows = (
+            await self._session.execute(
+                select(concepts)
+                .where(concepts.c.concept_set_id == cs["id"])
+                .order_by(concepts.c.ordinal)
+            )
+        ).all()
+        concept_values = tuple(
+            CreativeConcept(
+                row._mapping["tenant_id"],
+                row._mapping["product_id"],
+                row._mapping["concept_set_id"],
+                row._mapping["concept_key"],
+                row._mapping["ordinal"],
+                row._mapping["concept_payload"],
+                row._mapping["semantic_digest"],
+                row._mapping["id"],
+                row._mapping["created_at"],
+            )
+            for row in concept_rows
+        )
+        concept = next(item for item in concept_values if item.id == concept_id)
+        concept_set = CreativeConceptSet(
+            cs["tenant_id"],
+            cs["product_id"],
+            cs["agent_run_id"],
+            cs["product_snapshot_id"],
+            cs["product_snapshot_digest"],
+            cs["research_snapshot_id"],
+            cs["research_snapshot_digest"],
+            cs["input_context_digest"],
+            concept_values,
+            cs["semantic_digest"],
+            id=cs["id"],
+            schema_version=cs["schema_version"],
+            created_at=cs["created_at"],
+        )
+        decision = CreativeConceptDecision(
+            d["tenant_id"],
+            d["product_id"],
+            d["concept_id"],
+            CreativeDecisionState(d["state"]),
+            d["decided_by"],
+            d["reason_code"],
+            d["note"],
+            d["id"],
+            d["created_at"],
+        )
+
+        definition_rows = (
+            await self._session.execute(
+                select(agent_definitions)
+                .where(
+                    agent_definitions.c.tenant_id.is_not(None),
+                    agent_definitions.c.agent_type == "producer",
+                    agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                )
+                .order_by(agent_definitions.c.created_at)
+                .limit(2)
+            )
+        ).all()
+        if len(definition_rows) != 1:
+            return None
+        requested = definition_rows[0]._mapping
+        resolved_id = requested["id"]
+        activation = (
+            await self._session.execute(
+                select(agent_activations).where(agent_activations.c.definition_id == resolved_id)
+            )
+        ).first()
+        if activation is None and requested["platform_template_id"] is not None:
+            resolved_id = requested["platform_template_id"]
+            template = (
+                await self._session.execute(
+                    select(agent_definitions).where(
+                        agent_definitions.c.id == resolved_id,
+                        agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                    )
+                )
+            ).first()
+            if template is None:
+                return None
+            activation = (
+                await self._session.execute(
+                    select(agent_activations).where(
+                        agent_activations.c.definition_id == resolved_id
+                    )
+                )
+            ).first()
+        if activation is None:
+            return None
+        version_row = (
+            await self._session.execute(
+                select(agent_versions).where(
+                    agent_versions.c.id == activation._mapping["active_version_id"]
+                )
+            )
+        ).first()
+        product_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots)
+                .where(
+                    product_knowledge_snapshots.c.product_id == c["product_id"],
+                    product_knowledge_snapshots.c.schema_version == 2,
+                )
+                .order_by(
+                    product_knowledge_snapshots.c.created_at.desc(),
+                    product_knowledge_snapshots.c.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        research_row = (
+            await self._session.execute(
+                select(research_snapshots)
+                .where(research_snapshots.c.product_id == c["product_id"])
+                .order_by(research_snapshots.c.created_at.desc(), research_snapshots.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if version_row is None or product_row is None or research_row is None:
+            return None
+        p = product_row._mapping
+        research = _snapshot(research_row)
+        if (
+            p["id"] != concept_set.product_snapshot_id
+            or p["digest"] != concept_set.product_snapshot_digest
+            or research.id != concept_set.research_snapshot_id
+            or research.semantic_digest != concept_set.research_snapshot_digest
+            or await self.snapshot_freshness(research) != "current"
+        ):
+            return None
+        product = ProductKnowledgeSnapshot(
+            id=p["id"],
+            tenant_id=p["tenant_id"],
+            product_id=p["product_id"],
+            schema_version=p["schema_version"],
+            source_revision=p["source_revision"],
+            content=p["content"],
+            digest=p["digest"],
+            created_by=p["created_by"],
+            created_at=p["created_at"],
+        )
+        asset_rows = (
+            await self._session.execute(
+                select(assets).where(assets.c.product_id == c["product_id"])
+            )
+        ).all()
+        manifest = tuple(
+            {
+                "asset_id": str(row._mapping["id"]),
+                "kind": row._mapping["kind"],
+                "role": row._mapping["role"],
+                "status": row._mapping["status"],
+                "rights_status": row._mapping["rights_status"],
+                "allowed_uses": list(row._mapping["allowed_uses"]),
+                "digest": row._mapping["digest"],
+            }
+            for row in asset_rows
+            if row._mapping["digest"] is not None
+        )
+        v = version_row._mapping
+        producer = ResolvedResearcher(
+            requested["id"],
+            resolved_id,
+            v["id"],
+            v["version_number"],
+            v["configuration_digest"],
+            _configuration(v),
+        )
+        return ProducerPreparation(
+            producer,
+            ApprovedCreativeConcept(concept, concept_set, decision),
+            product,
+            research,
+            manifest,
+        )
+
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None:
         row = (
             await self._session.execute(
@@ -809,6 +1033,149 @@ class SqlAlchemyAgentRunRepository:
         s = snapshot_row._mapping
         if s["digest"] != run.product_snapshot_digest:
             raise ValueError("bound Product snapshot digest mismatch")
+        if run.agent_type == "producer":
+            concept_ref = next(
+                (item for item in run.input_context_refs if item.get("kind") == "approved_concept"),
+                None,
+            )
+            research_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "research_snapshot"
+                ),
+                None,
+            )
+            assets_ref = next(
+                (item for item in run.input_context_refs if item.get("kind") == "selected_assets"),
+                None,
+            )
+            request_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "production_request"
+                ),
+                None,
+            )
+            if None in (concept_ref, research_ref, assets_ref, request_ref):
+                raise ValueError("Producer run context references are incomplete")
+            assert concept_ref is not None and research_ref is not None
+            assert assets_ref is not None and request_ref is not None
+            concept_row = (
+                await self._session.execute(
+                    select(concepts).where(concepts.c.id == UUID(str(concept_ref["id"])))
+                )
+            ).one()
+            c = concept_row._mapping
+            set_row = (
+                await self._session.execute(
+                    select(concept_sets).where(
+                        concept_sets.c.id == UUID(str(concept_ref["concept_set_id"]))
+                    )
+                )
+            ).one()
+            cs = set_row._mapping
+            all_concept_rows = (
+                await self._session.execute(
+                    select(concepts)
+                    .where(concepts.c.concept_set_id == cs["id"])
+                    .order_by(concepts.c.ordinal)
+                )
+            ).all()
+            concept_values = tuple(
+                CreativeConcept(
+                    row._mapping["tenant_id"],
+                    row._mapping["product_id"],
+                    row._mapping["concept_set_id"],
+                    row._mapping["concept_key"],
+                    row._mapping["ordinal"],
+                    row._mapping["concept_payload"],
+                    row._mapping["semantic_digest"],
+                    row._mapping["id"],
+                    row._mapping["created_at"],
+                )
+                for row in all_concept_rows
+            )
+            concept = next(item for item in concept_values if item.id == c["id"])
+            concept_set = CreativeConceptSet(
+                cs["tenant_id"],
+                cs["product_id"],
+                cs["agent_run_id"],
+                cs["product_snapshot_id"],
+                cs["product_snapshot_digest"],
+                cs["research_snapshot_id"],
+                cs["research_snapshot_digest"],
+                cs["input_context_digest"],
+                concept_values,
+                cs["semantic_digest"],
+                id=cs["id"],
+                schema_version=cs["schema_version"],
+                created_at=cs["created_at"],
+            )
+            decision_row = (
+                await self._session.execute(
+                    select(concept_decisions).where(
+                        concept_decisions.c.id == UUID(str(concept_ref["creative_decision_id"]))
+                    )
+                )
+            ).one()
+            d = decision_row._mapping
+            decision = CreativeConceptDecision(
+                d["tenant_id"],
+                d["product_id"],
+                d["concept_id"],
+                CreativeDecisionState(d["state"]),
+                d["decided_by"],
+                d["reason_code"],
+                d["note"],
+                d["id"],
+                d["created_at"],
+            )
+            research = await self.get_snapshot(UUID(str(research_ref["id"])))
+            if (
+                concept.semantic_digest != concept_ref["digest"]
+                or concept_set.semantic_digest != concept_ref["concept_set_digest"]
+                or research is None
+                or research.semantic_digest != research_ref["digest"]
+            ):
+                raise ValueError("bound Producer provenance digest mismatch")
+            product = ProductKnowledgeSnapshot(
+                id=s["id"],
+                tenant_id=s["tenant_id"],
+                product_id=s["product_id"],
+                schema_version=s["schema_version"],
+                source_revision=s["source_revision"],
+                content=s["content"],
+                digest=s["digest"],
+                created_by=s["created_by"],
+                created_at=s["created_at"],
+            )
+            raw_assets = assets_ref.get("assets", ())
+            manifest = tuple(raw_assets) if isinstance(raw_assets, (list, tuple)) else ()
+            producer_preparation = ProducerPreparation(
+                ResolvedResearcher(
+                    run.requested_agent_definition_id,
+                    run.resolved_agent_definition_id,
+                    run.agent_version_id,
+                    run.agent_version_number,
+                    run.agent_configuration_digest,
+                    _configuration(v),
+                ),
+                ApprovedCreativeConcept(concept, concept_set, decision),
+                product,
+                research,
+                tuple(dict(item) for item in manifest if isinstance(item, Mapping)),
+            )
+            planning, model = build_producer_model_context(
+                producer_preparation,
+                ProductionPlanningRequest(
+                    str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
+                ),
+            )
+            if planning.context_digest != run.input_context_digest:
+                raise ValueError("bound Producer context digest mismatch")
+            return model
         if run.agent_type == "creative_strategist":
             research_ref = next(
                 (
@@ -991,14 +1358,15 @@ class SqlAlchemyAgentRunRepository:
         attempt_id: UUID,
         workload_id: str,
     ) -> AgentRun:
-        if not isinstance(snapshot, (ResearchSnapshot, CreativeConceptSet)):
+        if not isinstance(snapshot, (ResearchSnapshot, CreativeConceptSet, ProductionPlan)):
             raise ValueError("unsupported capability result type")
         now = datetime.now(UTC)
-        result_ref = (
-            f"creative-concept-set://{snapshot.id}"
-            if isinstance(snapshot, CreativeConceptSet)
-            else f"research-snapshot://{snapshot.id}"
-        )
+        if isinstance(snapshot, ProductionPlan):
+            result_ref = f"production-plan://{snapshot.id}"
+        elif isinstance(snapshot, CreativeConceptSet):
+            result_ref = f"creative-concept-set://{snapshot.id}"
+        else:
+            result_ref = f"research-snapshot://{snapshot.id}"
         owned_run = await self._session.scalar(
             select(agent_runs.c.id)
             .where(
@@ -1025,7 +1393,100 @@ class SqlAlchemyAgentRunRepository:
         ).scalar_one_or_none()
         if attempt_row is None:
             raise AgentRunRecoveryConflict("stale model attempt cannot persist success")
-        if isinstance(snapshot, CreativeConceptSet):
+        if isinstance(snapshot, ProductionPlan):
+            await self._session.execute(
+                insert(production_plans).values(
+                    id=snapshot.id,
+                    tenant_id=snapshot.tenant_id,
+                    product_id=snapshot.product_id,
+                    agent_run_id=snapshot.agent_run_id,
+                    concept_id=snapshot.context.concept_id,
+                    concept_digest=snapshot.context.concept_digest,
+                    concept_set_id=snapshot.context.concept_set_id,
+                    concept_set_digest=snapshot.context.concept_set_digest,
+                    product_snapshot_id=snapshot.context.product_snapshot_id,
+                    product_snapshot_digest=snapshot.context.product_snapshot_digest,
+                    research_snapshot_id=snapshot.context.research_snapshot_id,
+                    research_snapshot_digest=snapshot.context.research_snapshot_digest,
+                    creative_decision_id=snapshot.context.creative_decision_id,
+                    context_digest=snapshot.context.context_digest,
+                    schema_version=snapshot.schema_version,
+                    strategy=snapshot.strategy,
+                    required_assets=list(snapshot.required_assets),
+                    semantic_digest=snapshot.semantic_digest,
+                    estimated_max_video_cost=snapshot.cost.estimated_max_video_cost,
+                    estimated_max_image_cost=snapshot.cost.estimated_max_image_cost,
+                    currency=snapshot.cost.currency,
+                    video_pricing_version=snapshot.cost.video_pricing_version,
+                    image_pricing_version=snapshot.cost.image_pricing_version,
+                    created_at=snapshot.created_at,
+                )
+            )
+            scene_ids = {
+                scene.scene_key: uuid5(NAMESPACE_URL, f"{snapshot.id}:scene:{scene.scene_key}")
+                for scene in snapshot.scenes
+            }
+            await self._session.execute(
+                insert(production_scenes),
+                [
+                    {
+                        "id": scene_ids[scene.scene_key],
+                        "tenant_id": snapshot.tenant_id,
+                        "production_plan_id": snapshot.id,
+                        "scene_key": scene.scene_key,
+                        "ordinal": scene.ordinal,
+                        "duration_seconds": scene.duration_seconds,
+                        "content": {
+                            "purpose": scene.purpose,
+                            "message": scene.message,
+                            "voiceover": scene.voiceover,
+                            "on_screen_text": scene.on_screen_text,
+                        },
+                        "created_at": snapshot.created_at,
+                    }
+                    for scene in snapshot.scenes
+                ],
+            )
+            await self._session.execute(
+                insert(production_shots),
+                [
+                    {
+                        "id": uuid5(NAMESPACE_URL, f"{snapshot.id}:shot:{shot.shot_key}"),
+                        "tenant_id": snapshot.tenant_id,
+                        "production_plan_id": snapshot.id,
+                        "production_scene_id": scene_ids[scene.scene_key],
+                        "shot_key": shot.shot_key,
+                        "ordinal": shot.ordinal,
+                        "source_strategy": shot.source_strategy.value,
+                        "specification": dict(shot.specification),
+                        "created_at": snapshot.created_at,
+                    }
+                    for scene in snapshot.scenes
+                    for shot in scene.shots
+                ],
+            )
+            await self._session.execute(
+                insert(generation_segments),
+                [
+                    {
+                        "id": uuid5(NAMESPACE_URL, f"{snapshot.id}:segment:{item.segment_key}"),
+                        "tenant_id": snapshot.tenant_id,
+                        "production_plan_id": snapshot.id,
+                        "segment_key": item.segment_key,
+                        "ordinal": ordinal,
+                        "media_kind": item.media_kind.value,
+                        "duration_seconds": item.duration_seconds,
+                        "shot_keys": list(item.shot_keys),
+                        "continuity": list(item.continuity),
+                        "reference_assets": [str(value) for value in item.reference_asset_ids],
+                        "generation_spec": dict(item.generation_spec),
+                        "generation_spec_digest": canonical_digest(dict(item.generation_spec)),
+                        "created_at": snapshot.created_at,
+                    }
+                    for ordinal, item in enumerate(snapshot.generation_segments, 1)
+                ],
+            )
+        elif isinstance(snapshot, CreativeConceptSet):
             await self._session.execute(
                 insert(concept_sets).values(
                     id=snapshot.id,

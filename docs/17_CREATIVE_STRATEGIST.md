@@ -74,6 +74,8 @@ concurrent decisions and the last committed decision is current. Production appr
 reference-only event. It means the concept may become a ProductionPlan input; it does not authorize
 provider spend, media generation, or publishing.
 
-The future Producer should consume `ApprovedCreativeConcept`, translate provider-neutral scenes and
-Asset requirements into a versioned ProductionPlan, re-check context freshness and compliance, then
-use independently governed Tool Gateway approvals for side effects.
+The Producer now consumes `ApprovedCreativeConcept`, translates provider-neutral scenes and Asset
+requirements into an immutable ProductionPlan, and rechecks context freshness before inference.
+This handoff grants planning authority only. A separate append-only ProductionPlan approval binds
+media routes, pricing, currency, and maximum cost; deterministic workflow code must still pass every
+paid side effect through Tool Gateway.

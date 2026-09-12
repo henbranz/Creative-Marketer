@@ -201,3 +201,9 @@ delivery.
 opaque result reference. `research.snapshot.created.v1` reports only snapshot/run/Product IDs and
 provenance digests. Evidence text, Product text, findings, prompts, credentials, and raw provider
 responses are forbidden from all three contracts.
+## Production facts
+
+Production publishes `production.plan.created.v1`, `production.plan.approved_for_generation.v1`,
+and `production.generation.completed.v1`. Payloads contain IDs, digests, version evidence, media
+kind, and decimal cost strings—never plan text, generation specs/prompts, provider operation refs,
+or result URLs.

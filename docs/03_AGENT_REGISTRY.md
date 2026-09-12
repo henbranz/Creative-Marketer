@@ -314,3 +314,11 @@ the logical profile through independently versioned operational routing.
 The development bootstrap registers `creative_strategist` with the `creative_balanced` logical
 profile, strict `creative.creative_concept_set` V1 output, one turn/model call, zero Tools, no memory,
 and Product/Research/Asset-manifest read scopes only.
+
+## Producer V1
+
+The `producer` definition selects the logical `production_deep` profile, strict
+`production.production_plan` V1 output, one model call, zero model-facing Tools, no memory, and
+read-only Product/Research/approved-Concept/Asset-manifest scopes. Its Astra name is a product role,
+not a provider model identifier. Operational routing currently resolves that role to the verified
+`gpt-5.6-sol` model independently of the immutable AgentVersion.

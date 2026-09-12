@@ -20,6 +20,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    MediaProductionJobResult,
     ResearcherActivityResult,
     ResearcherWorkflowInput,
     ToolActivityResult,
@@ -41,6 +42,14 @@ class GenerationApplicationService(Protocol):
     async def poll(
         self, request: GenerationWorkflowInput, provider_job_ref: str
     ) -> GenerationPollResult: ...
+
+
+class ProductionJobExecutor(Protocol):
+    """Application service that resolves state then invokes only governed Tool Gateway tools."""
+
+    async def execute(
+        self, tenant_id: UUID, plan_id: UUID, job_id: UUID
+    ) -> MediaProductionJobResult: ...
 
 
 @dataclass(slots=True)
@@ -90,6 +99,7 @@ class TemporalActivities:
     generation_service: GenerationApplicationService
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
     agent_runtime: AgentRunService | None = None
+    production_jobs: ProductionJobExecutor | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -183,6 +193,20 @@ class TemporalActivities:
                 non_retryable=True,
             )
         return result
+
+    @activity.defn(name="workflow.execute_production_job")
+    async def execute_production_job(
+        self, tenant_id: str, plan_id: str, job_id: str, correlation_id: str
+    ) -> MediaProductionJobResult:
+        if self.production_jobs is None:
+            raise ApplicationError(
+                "Production job executor is not composed",
+                type="PRODUCTION_EXECUTOR_UNAVAILABLE",
+                non_retryable=True,
+            )
+        # Correlation is carried for tracing only and never supplies authority.
+        UUID(correlation_id)
+        return await self.production_jobs.execute(UUID(tenant_id), UUID(plan_id), UUID(job_id))
 
     async def _generation_call(
         self,

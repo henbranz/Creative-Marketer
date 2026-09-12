@@ -597,3 +597,9 @@ rejected by a database trigger. Audit records have a nullable indexed `tool_call
 snapshots. `creative.concepts` gives each immutable generated concept a stable identity and bounded
 validated payload. `creative.concept_decisions` stores append-only human workflow decisions. All use
 forced RLS, composite tenant relationships, and mutation guards.
+## Phase 3 Production data
+
+The `production` schema holds immutable plans, scenes, shots, segments and decisions; controlled
+generation jobs; and append-only spend entries. Relations are tenant-keyed with forced RLS and
+same-tenant composite foreign keys. `catalog.asset_lineage` is an immutable neutral many-to-many
+relation between Assets. See ADR-030.

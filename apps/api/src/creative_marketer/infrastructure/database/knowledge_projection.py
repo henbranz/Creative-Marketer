@@ -33,6 +33,14 @@ from creative_marketer.infrastructure.database.knowledge_schema import (
     projection_changes,
     projection_nodes,
 )
+from creative_marketer.infrastructure.database.production_schema import (
+    asset_lineage,
+    generation_jobs,
+    generation_segments,
+    plan_decisions,
+    production_plans,
+    production_shots,
+)
 from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
 from creative_marketer.knowledge.domain import (
     KnowledgeChange,
@@ -121,6 +129,22 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 "decisions": select(concept_decisions).where(
                     concept_decisions.c.tenant_id == tenant
                 ),
+                "production_plans": select(production_plans).where(
+                    production_plans.c.tenant_id == tenant
+                ),
+                "production_shots": select(production_shots).where(
+                    production_shots.c.tenant_id == tenant
+                ),
+                "generation_segments": select(generation_segments).where(
+                    generation_segments.c.tenant_id == tenant
+                ),
+                "plan_decisions": select(plan_decisions).where(
+                    plan_decisions.c.tenant_id == tenant
+                ),
+                "generation_jobs": select(generation_jobs).where(
+                    generation_jobs.c.tenant_id == tenant
+                ),
+                "asset_lineage": select(asset_lineage).where(asset_lineage.c.tenant_id == tenant),
             }
             for key, statement in statements.items():
                 result = (await session.execute(statement)).mappings()
@@ -154,6 +178,142 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     row["created_at"],
                     row["updated_at"],
                     {"slug": row["slug"], "website_url": row["website_url"]},
+                )
+            )
+        decisions_by_plan: dict[object, list[Mapping[str, Any]]] = {}
+        for decision in rows.get("plan_decisions", []):
+            decisions_by_plan.setdefault(decision["production_plan_id"], []).append(decision)
+        for row in rows.get("production_plans", []):
+            latest = max(
+                decisions_by_plan.get(row["id"], []),
+                key=lambda item: item["created_at"],
+                default=None,
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PRODUCTION_PLAN,
+                    str(row["id"]),
+                    f"Production Plan {str(row['id'])[:8]}",
+                    latest["state"] if latest else "UNREVIEWED",
+                    row["created_at"],
+                    latest["created_at"] if latest else row["created_at"],
+                    {
+                        "strategy": row["strategy"],
+                        "estimated_max_video_cost": str(row["estimated_max_video_cost"]),
+                        "estimated_max_image_cost": str(row["estimated_max_image_cost"]),
+                        "currency": row["currency"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.CREATIVE_CONCEPT,
+                            row["concept_id"],
+                            "planned_from_concept",
+                        ),
+                        _rel(KnowledgeNodeType.AGENT_RUN, row["agent_run_id"], "produced_by_run"),
+                        _rel(
+                            KnowledgeNodeType.PRODUCT, row["product_id"], "production_for_product"
+                        ),
+                    ),
+                    row["semantic_digest"],
+                )
+            )
+        segments_by_plan: dict[object, list[Mapping[str, Any]]] = {}
+        for segment in rows.get("generation_segments", []):
+            segments_by_plan.setdefault(segment["production_plan_id"], []).append(segment)
+            relationships = [
+                _rel(
+                    KnowledgeNodeType.PRODUCTION_PLAN,
+                    segment["production_plan_id"],
+                    "segment_of_plan",
+                )
+            ]
+            relationships.extend(
+                _rel(
+                    KnowledgeNodeType.PRODUCTION_SHOT,
+                    f"{segment['production_plan_id']}:{key}",
+                    "executes_shot",
+                )
+                for key in segment["shot_keys"]
+            )
+            relationships.extend(
+                _rel(
+                    KnowledgeNodeType.ASSET,
+                    value["asset_id"] if isinstance(value, dict) else value,
+                    "uses_reference_asset",
+                )
+                for value in segment["reference_assets"]
+                if (isinstance(value, str) or (isinstance(value, dict) and value.get("asset_id")))
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.GENERATION_SEGMENT,
+                    str(segment["id"]),
+                    segment["segment_key"],
+                    "immutable",
+                    segment["created_at"],
+                    segment["created_at"],
+                    {
+                        "media_kind": segment["media_kind"],
+                        "duration_seconds": segment["duration_seconds"],
+                    },
+                    tuple(relationships),
+                    segment["generation_spec_digest"],
+                )
+            )
+        for shot in rows.get("production_shots", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PRODUCTION_SHOT,
+                    f"{shot['production_plan_id']}:{shot['shot_key']}",
+                    shot["shot_key"],
+                    shot["source_strategy"],
+                    shot["created_at"],
+                    shot["created_at"],
+                    {
+                        "source_strategy": shot["source_strategy"],
+                        "specification": shot["specification"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.PRODUCTION_PLAN,
+                            shot["production_plan_id"],
+                            "shot_of_plan",
+                        ),
+                    ),
+                )
+            )
+        for job in rows.get("generation_jobs", []):
+            relationships = [
+                _rel(KnowledgeNodeType.PRODUCTION_PLAN, job["production_plan_id"], "job_for_plan"),
+                _rel(
+                    KnowledgeNodeType.GENERATION_SEGMENT,
+                    job["generation_segment_id"],
+                    "executes_segment",
+                ),
+            ]
+            if job["output_asset_id"]:
+                relationships.append(
+                    _rel(KnowledgeNodeType.ASSET, job["output_asset_id"], "produced_asset")
+                )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.GENERATION_JOB,
+                    str(job["id"]),
+                    f"{job['kind'].title()} Generation {str(job['id'])[:8]}",
+                    job["status"],
+                    job["created_at"],
+                    job["updated_at"],
+                    {
+                        "kind": job["kind"],
+                        "provider": job["provider"],
+                        "model": job["model"],
+                        "route_version": job["route_version"],
+                        "pricing_version": job["pricing_version"],
+                        "actual_cost": str(job["actual_cost"]),
+                        "unknown_cost": str(job["unknown_cost"]),
+                        "currency": job["currency"],
+                    },
+                    tuple(relationships),
                 )
             )
         for row in rows["products"]:
@@ -198,6 +358,38 @@ class SqlAlchemyCanonicalKnowledgeReader:
             if row["product_id"]:
                 relationships.append(
                     _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "belongs_to_product")
+                )
+            for lineage in rows.get("asset_lineage", []):
+                if lineage["child_asset_id"] == row["id"]:
+                    relationships.append(
+                        _rel(
+                            KnowledgeNodeType.ASSET,
+                            lineage["parent_asset_id"],
+                            lineage["relationship_type"].casefold(),
+                        )
+                    )
+            generating_job = next(
+                (
+                    job
+                    for job in rows.get("generation_jobs", [])
+                    if job["output_asset_id"] == row["id"]
+                ),
+                None,
+            )
+            if generating_job is not None:
+                relationships.extend(
+                    (
+                        _rel(
+                            KnowledgeNodeType.GENERATION_JOB,
+                            generating_job["id"],
+                            "generated_by_job",
+                        ),
+                        _rel(
+                            KnowledgeNodeType.PRODUCTION_PLAN,
+                            generating_job["production_plan_id"],
+                            "generated_for_plan",
+                        ),
+                    )
                 )
             nodes.append(
                 KnowledgeNode(

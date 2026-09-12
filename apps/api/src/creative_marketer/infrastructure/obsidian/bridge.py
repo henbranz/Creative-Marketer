@@ -27,6 +27,10 @@ TYPE_DIRECTORIES = {
     "creative_concept": "Creative",
     "creative_concept_decision": "Creative",
     "asset": "Assets",
+    "production_plan": "Production",
+    "production_shot": "Production/Shots",
+    "generation_segment": "Production/Segments",
+    "generation_job": "Production/Jobs",
 }
 
 
@@ -285,6 +289,12 @@ class ObsidianBridge:
                 "creative_concept_set",
                 "creative_concept",
                 "creative_concept_decision",
+            },
+            "Production.md": {
+                "production_plan",
+                "production_shot",
+                "generation_segment",
+                "generation_job",
             },
         }
         all_entries = list(state["nodes"].values())

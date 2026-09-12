@@ -205,6 +205,19 @@ class EvidenceBlockRef:
 
 
 @dataclass(frozen=True, slots=True)
+class ModelImageInputRef:
+    """Opaque immutable Asset locator; only infrastructure may materialize its bytes."""
+
+    tenant_id: UUID
+    asset_id: UUID
+    digest: str
+
+    def __post_init__(self) -> None:
+        if not DIGEST.fullmatch(self.digest):
+            raise ValueError("model image input requires an immutable Asset digest")
+
+
+@dataclass(frozen=True, slots=True)
 class ModelContext:
     system_instructions: str
     product_context: Mapping[str, object]
@@ -239,6 +252,7 @@ class ModelInvocation:
     reasoning_effort: str
     capability_context: Mapping[str, object] | None = None
     output_task: str = "Produce the ResearchSnapshot and cite exact supplied references."
+    image_inputs: tuple[ModelImageInputRef, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

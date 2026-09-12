@@ -60,3 +60,9 @@ Projection construction uses explicit field allowlists plus a recursive final cr
 ## Known limitations
 
 The local bridge is a manual CLI, not a daemon or packaged Obsidian plugin. Cursor records are retained without compaction in this phase. Full rebuild reconciles canonical state but does not recreate historical revision numbers. Vault conflicts across two simultaneously running bridge processes are not coordinated. Deep links currently appear only for Products. These constraints do not weaken one-way authority.
+## Production projection
+
+ProductionPlan, ProductionShot, GenerationSegment, and GenerationJob extend the projection. Safe
+read joins expose ResearchFinding → CreativeConcept → ProductionPlan → ProductionShot →
+GenerationSegment → GenerationJob → generated Asset, including neutral Asset lineage. Provider
+prompts, operation refs, raw responses, object keys, and signed URLs remain forbidden.

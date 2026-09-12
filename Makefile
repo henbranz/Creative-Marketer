@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap researcher-live-smoke agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-sync obsidian-rebuild phase0-gate architecture-security build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-sync obsidian-rebuild phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -56,6 +56,27 @@ temporal-test:
 
 researcher-bootstrap:
 	cd apps/api && uv run python scripts/bootstrap_researcher.py
+
+producer-bootstrap:
+	cd apps/api && uv run python scripts/bootstrap_producer.py
+
+media-tools-bootstrap:
+	cd apps/api && uv run python scripts/bootstrap_media_tools.py
+
+producer-astra-live-smoke:
+	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
+	@test -n "$${OPENAI_API_KEY:-}" || (echo "OPENAI_API_KEY is required" && exit 2)
+	@echo "Live Producer smoke must be launched through an approved Concept API request."
+
+production-image-live-smoke:
+	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
+	@test -n "$${OPENAI_API_KEY:-}" || (echo "OPENAI_API_KEY is required" && exit 2)
+	@echo "Live image generation must be launched through an approved ProductionPlan."
+
+production-seedance-live-smoke:
+	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
+	@test -n "$${BYTEPLUS_LAS_API_KEY:-}" || (echo "BYTEPLUS_LAS_API_KEY is required" && exit 2)
+	@echo "Live Seedance generation must be launched through an approved ProductionPlan."
 
 researcher-live-smoke:
 	cd apps/api && uv run python scripts/researcher_live_smoke.py

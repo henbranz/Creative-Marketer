@@ -1,0 +1,17 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "x-event-type":"production.plan.approved_for_generation.v1",
+  "type":"object","additionalProperties":false,
+  "required":["production_plan_id","decision_id","plan_digest","video_route_version","image_route_version","video_pricing_version","image_pricing_version","estimated_max_cost","currency"],
+  "properties":{
+    "production_plan_id":{"type":"string","format":"uuid"},
+    "decision_id":{"type":"string","format":"uuid"},
+    "plan_digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+    "video_route_version":{"type":"string","maxLength":128},
+    "image_route_version":{"type":"string","maxLength":128},
+    "video_pricing_version":{"type":"string","maxLength":128},
+    "image_pricing_version":{"type":"string","maxLength":128},
+    "estimated_max_cost":{"type":"string","pattern":"^[0-9]+(?:\\.[0-9]{1,6})?$"},
+    "currency":{"type":"string","pattern":"^[A-Z]{3}$"}
+  }
+}

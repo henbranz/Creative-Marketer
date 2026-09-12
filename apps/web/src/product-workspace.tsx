@@ -14,6 +14,8 @@ import {
   listText,
   obsidianOpenUrl,
   type Product,
+  type ProductionJob,
+  type ProductionPlan,
   type ResearchEvidence,
   type ResearchFetch,
   type ResearchSource,
@@ -1234,6 +1236,175 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function ProductionPanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [plans, setPlans] = useState<ProductionPlan[]>([]);
+  const [jobs, setJobs] = useState<ProductionJob[]>([]);
+  const [concept, setConcept] = useState<CreativeConcept | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback(async () => {
+    const [nextPlans, conceptSets] = await Promise.all([
+      catalogApi.listProductionPlans(session, workspace.product.id),
+      catalogApi.listCreativeConceptSets(session, workspace.product.id),
+    ]);
+    setPlans(nextPlans);
+    setConcept(
+      conceptSets
+        .flatMap((item) => item.concepts)
+        .find((item) => item.decision_state === "APPROVED_FOR_PRODUCTION") ??
+        null,
+    );
+    setJobs(
+      nextPlans[0]
+        ? await catalogApi.listProductionJobs(session, nextPlans[0].id)
+        : [],
+    );
+  }, [session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void refresh().catch(() => setError("Production could not be loaded.")),
+    );
+  }, [refresh]);
+  const plan = plans[0];
+  const act = async (operation: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await operation();
+      await refresh();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Production action failed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="creative-workspace">
+      <section className="creative-hero">
+        <div>
+          <p className="eyebrow">Governed media production</p>
+          <h2>Production</h2>
+          <p>
+            Astra plans. You approve exact cost and media work before providers
+            run.
+          </p>
+        </div>
+        <div className="creative-readiness">
+          <span>Approved Concept: {concept ? "Ready" : "Required"}</span>
+          <span>Creative context: {concept ? "Current" : "Unavailable"}</span>
+          <span>Producer: {concept ? "Ready" : "Waiting"}</span>
+          {workspace.product.can_edit && concept && !plan && (
+            <button
+              className="primary"
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  catalogApi.startProducer(
+                    session,
+                    concept.id,
+                    crypto.randomUUID(),
+                  ),
+                )
+              }
+            >
+              Create Production Plan
+            </button>
+          )}
+        </div>
+      </section>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {plan ? (
+        <section className="concept-detail">
+          <p className="eyebrow">{plan.status.replaceAll("_", " ")}</p>
+          <h3>Production plan</h3>
+          <p>{plan.strategy}</p>
+          {plan.scenes.map((scene) => (
+            <div key={scene.scene_key} className="concept-scene">
+              <strong>Scene {scene.ordinal}</strong>
+              <ul>
+                {scene.shots.map((shot) => (
+                  <li key={shot.shot_key}>
+                    {shot.shot_key.replaceAll("_", " ")} —{" "}
+                    {shot.source_strategy.replaceAll("_", " ").toLowerCase()}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <div className="creative-readiness">
+            <span>
+              Astra planning: {plan.planning_cost} {plan.currency}
+            </span>
+            <span>
+              Images: {plan.estimated_max_image_cost} {plan.currency}
+            </span>
+            <span>
+              Seedance: {plan.estimated_max_video_cost} {plan.currency}
+            </span>
+            <strong>
+              Total generation budget: {plan.estimated_total_cost}{" "}
+              {plan.currency}
+            </strong>
+          </div>
+          {workspace.product.can_edit && plan.status === "UNREVIEWED" && (
+            <div className="concept-actions">
+              <button
+                className="primary"
+                disabled={busy}
+                onClick={() =>
+                  void act(() =>
+                    catalogApi.approveProductionPlan(session, plan.id),
+                  )
+                }
+              >
+                Approve &amp; Generate
+              </button>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  void act(() =>
+                    catalogApi.rejectProductionPlan(session, plan.id),
+                  )
+                }
+              >
+                Reject
+              </button>
+            </div>
+          )}
+          <h3>Generation progress</h3>
+          {jobs.length ? (
+            <ul>
+              {jobs.map((job) => (
+                <li key={job.id}>
+                  {job.kind === "IMAGE" ? "Image" : "Video"}:{" "}
+                  {job.status.replaceAll("_", " ").toLowerCase()} —{" "}
+                  {job.actual_cost} {job.currency}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No media jobs started.</p>
+          )}
+        </section>
+      ) : (
+        <section className="empty-panel">
+          <h2>No production plan yet</h2>
+          <p>Approve a current creative concept to unlock Astra Producer.</p>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function PillList({
   values,
   empty = "Not provided",
@@ -1929,6 +2100,8 @@ export function ProductWorkspaceApp() {
                     <ResearchPanel workspace={workspace} />
                   ) : tab === "Creatives" ? (
                     <CreativesPanel workspace={workspace} />
+                  ) : tab === "Production" ? (
+                    <ProductionPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

@@ -122,3 +122,9 @@ AgentRun now freezes generic `agent_type` and input-context kind/version/digest/
 Researcher is backfilled as `researcher.v1`; its evidence selection and ResearchSnapshot semantics
 are unchanged. Explicit trusted capability handlers own context/output semantics while common runtime
 owns route, budget, attempt, provider, recovery, Audit, Outbox, and telemetry behavior.
+
+Producer is the third installed capability. It reuses the same one-call lifecycle and recovery
+mechanism, but validates `production.production_plan.v1` against frozen approved-Creative context.
+Its bounded image references are opaque tenant/Asset/digest locators; only the OpenAI infrastructure
+adapter can materialize private bytes after rechecking current READY state, rights, allowed use, and
+digest. No object key or signed URL enters ModelContext or AgentRun persistence.

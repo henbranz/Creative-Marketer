@@ -25,6 +25,7 @@ class AssetStatus(StrEnum):
 
 class AssetOrigin(StrEnum):
     USER_UPLOAD = "user_upload"
+    GENERATED = "generated"
 
 
 class AssetRole(StrEnum):
@@ -34,6 +35,10 @@ class AssetRole(StrEnum):
     LOGO = "logo"
     BRAND_GUIDELINE = "brand_guideline"
     PACKAGING = "packaging"
+    BRAND_REFERENCE = "brand_reference"
+    PRODUCTION_REFERENCE = "production_reference"
+    GENERATED_SHOT = "generated_shot"
+    GENERATED_FRAME = "generated_frame"
     OTHER = "other"
 
 

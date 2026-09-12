@@ -26,6 +26,7 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyCreativeUnitOfWorkFactory,
+    SqlAlchemyProductionUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
@@ -47,12 +48,15 @@ from creative_marketer.observability.configuration import (
 from creative_marketer.observability.logging import configure_structured_logging, correlation_scope
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
+from creative_marketer.production.application import initial_media_router, initial_producer_route
+from creative_marketer.production.service import ProductionService
 from creative_marketer.research.application import ResearchService
 from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.knowledge_routes import create_knowledge_router
+from creative_marketer_api.production_routes import create_production_router
 from creative_marketer_api.research_routes import create_research_router
 
 
@@ -163,6 +167,7 @@ def create_app(
     research_uow = SqlAlchemyResearchUnitOfWorkFactory(session_factory)
     agent_runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
     creative_uow = SqlAlchemyCreativeUnitOfWorkFactory(session_factory)
+    production_uow = SqlAlchemyProductionUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -197,7 +202,13 @@ def create_app(
     )
     agent_service = AgentRunService(
         agent_runtime_uow,
-        ModelRouter((initial_researcher_route(), initial_creative_strategist_route())),
+        ModelRouter(
+            (
+                initial_researcher_route(),
+                initial_creative_strategist_route(),
+                initial_producer_route(),
+            )
+        ),
         ModelProviderRegistry(
             {"openai": ExecutionProcessOnlyModelProvider()}
             if resolved_settings.model_provider_backend == "openai"
@@ -225,6 +236,20 @@ def create_app(
             identity_uow,
             agent_service,
             CreativeService(creative_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_production_router(
+            authenticator,
+            identity_uow,
+            agent_service,
+            ProductionService(
+                production_uow,
+                initial_media_router(),
+                resolved_settings.production_max_plan_cost_usd,
+            ),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

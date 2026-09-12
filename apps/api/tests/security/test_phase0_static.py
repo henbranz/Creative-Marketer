@@ -335,6 +335,15 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "production.generation.completed.v1": (
+            "sha256:d3e73260489015012226018034537a3a074741c6123dd25f669cf0a29780f363"
+        ),
+        "production.plan.approved_for_generation.v1": (
+            "sha256:9bfa5b25953d892c27d13b20c674b698dceff35a5a7a4b200b0a397d8d3c88a4"
+        ),
+        "production.plan.created.v1": (
+            "sha256:435455a4d3667bf054ce6b7d5044337fb8621940ac67699403a1afec5b6d1f0d"
+        ),
         "agent.run.completed.v1": (
             "sha256:5906a1595455b3880a932a36609bd49df47c8c347917864fb245df76b00bcbc3"
         ),
@@ -416,6 +425,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260912_0018"]
+    assert script.get_heads() == ["20260912_0019"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)
