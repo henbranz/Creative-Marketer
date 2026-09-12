@@ -44,6 +44,20 @@ def _identity_columns() -> list[sa.Column[object]]:
 def upgrade() -> None:
     op.execute("CREATE SCHEMA production")
     op.execute(f"GRANT USAGE ON SCHEMA production TO {RUNTIME}, {MIGRATOR}")
+    op.drop_constraint(
+        "ck_agent_runs_selected_evidence",
+        "agent_runs",
+        schema="agent_runtime",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_agent_runs_selected_evidence",
+        "agent_runs",
+        "jsonb_typeof(selected_evidence) = 'array' AND "
+        "((agent_type = 'researcher' AND jsonb_array_length(selected_evidence) BETWEEN 1 AND 120) "
+        "OR (agent_type IN ('creative_strategist','producer') AND jsonb_array_length(selected_evidence) = 0))",
+        schema="agent_runtime",
+    )
     op.drop_constraint("ck_assets_role", "assets", schema="catalog", type_="check")
     op.create_check_constraint(
         "ck_assets_role",
@@ -378,13 +392,27 @@ def downgrade() -> None:
         op.get_bind()
         .execute(
             sa.text(
-                "SELECT (SELECT count(*) FROM production.production_plans)+(SELECT count(*) FROM production.generation_jobs)+(SELECT count(*) FROM production.media_budget_usage)+(SELECT count(*) FROM catalog.asset_lineage)"
+                "SELECT (SELECT count(*) FROM production.production_plans)+(SELECT count(*) FROM production.generation_jobs)+(SELECT count(*) FROM production.media_budget_usage)+(SELECT count(*) FROM catalog.asset_lineage)+(SELECT count(*) FROM agent_runtime.agent_runs WHERE agent_type = 'producer')"
             )
         )
         .scalar_one()
     )
     if evidence:
         raise RuntimeError("refusing lossy Production downgrade while media provenance exists")
+    op.drop_constraint(
+        "ck_agent_runs_selected_evidence",
+        "agent_runs",
+        schema="agent_runtime",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_agent_runs_selected_evidence",
+        "agent_runs",
+        "jsonb_typeof(selected_evidence) = 'array' AND "
+        "((agent_type = 'researcher' AND jsonb_array_length(selected_evidence) BETWEEN 1 AND 120) "
+        "OR (agent_type = 'creative_strategist' AND jsonb_array_length(selected_evidence) = 0))",
+        schema="agent_runtime",
+    )
     op.execute("DROP FUNCTION catalog.protect_asset_lineage() CASCADE")
     op.drop_table("asset_lineage", schema="catalog")
     for table in (
