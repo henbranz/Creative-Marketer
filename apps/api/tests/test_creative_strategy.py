@@ -1,5 +1,7 @@
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -7,6 +9,8 @@ import pytest
 
 from creative_marketer.agent_runtime.domain import canonical_digest
 from creative_marketer.creative.application import (
+    CreativeService,
+    build_creative_context,
     load_creative_output_schema,
     validate_creative_output,
 )
@@ -16,6 +20,8 @@ from creative_marketer.creative.domain import (
     CreativeConceptDecision,
     CreativeConceptSet,
     CreativeDecisionState,
+    CreativeNotFound,
+    CreativePermissionDenied,
     CreativeStrategyContext,
     CreativeStrategyRequest,
     InvalidCreativeAssetReference,
@@ -25,6 +31,7 @@ from creative_marketer.creative.domain import (
     ProductClaimRef,
     ProhibitedCreativeClaim,
 )
+from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 
 
 def context() -> CreativeStrategyContext:
@@ -220,6 +227,20 @@ def test_existing_asset_rights_shape_fails_closed() -> None:
         validate(raw, value)
 
 
+def test_schema_valid_wrong_concept_count_is_rejected() -> None:
+    value, raw = context(), None
+    raw = output(value)
+    extra = deepcopy(raw["concepts"][-1])
+    extra.update(concept_key="concept_3", title="Concept 3")
+    extra["hook"].update(
+        spoken_or_voiceover="Hook 3", on_screen_text="Look 3", visual_open="Open 3"
+    )
+    extra["scenes"][0]["visual_direction"] = "Distinct visual 3"
+    raw["concepts"].append(extra)
+    with pytest.raises(InvalidCreativeOutput, match="wrong concept count"):
+        validate(raw, value)
+
+
 def test_creative_value_objects_reject_invalid_identity_and_handoff() -> None:
     value = context()
     result = validate(output(value), value)
@@ -263,3 +284,48 @@ def test_creative_value_objects_reject_invalid_identity_and_handoff() -> None:
     )
     with pytest.raises(ValueError):
         ApprovedCreativeConcept(concept, result, rejected)
+
+
+@pytest.mark.asyncio
+async def test_creative_service_fails_closed_for_missing_values_and_non_admins() -> None:
+    class Repository:
+        async def get_set(self, _set_id: object) -> None:
+            return None
+
+        async def get_concept(self, _concept_id: object, *, for_update: bool = False) -> None:
+            return None
+
+    class UnitOfWork:
+        creative = Repository()
+
+        async def __aenter__(self) -> "UnitOfWork":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    service = CreativeService(lambda _tenant_id: UnitOfWork())  # type: ignore[arg-type]
+    member: Any = SimpleNamespace(
+        tenant_id=uuid4(),
+        membership_status=MembershipStatus.ACTIVE,
+        membership_role=MembershipRole.MEMBER,
+        user_id=uuid4(),
+    )
+    with pytest.raises(CreativeNotFound):
+        await service.get_set(member, uuid4())
+    with pytest.raises(CreativeNotFound):
+        await service.get_concept(member, uuid4())
+    with pytest.raises(CreativePermissionDenied):
+        await service.decide(member, uuid4(), CreativeDecisionState.REJECTED)
+    member.membership_role = MembershipRole.OWNER
+    with pytest.raises(CreativeNotFound):
+        await service.decide(member, uuid4(), CreativeDecisionState.REJECTED)
+
+
+def test_creative_context_requires_product_snapshot_v2() -> None:
+    with pytest.raises(InvalidCreativeOutput):
+        build_creative_context(
+            SimpleNamespace(schema_version=1),  # type: ignore[arg-type]
+            None,  # type: ignore[arg-type]
+            CreativeStrategyRequest(),
+        )

@@ -15,12 +15,16 @@ from creative_marketer.agent_governance.domain import (
     RunBudgetPolicy,
 )
 from creative_marketer.agent_runtime.application import (
+    AgentCapabilityRegistry,
+    AgentCapabilityUnavailable,
     AgentRunRecoveryService,
     AgentRunService,
     CreativePreparation,
+    CreativeStrategistCapability,
     ModelProviderRegistry,
     ModelRouter,
     RecoveryOperator,
+    ResearcherCapability,
     ResearcherPreparation,
     ResolvedResearcher,
     WorkloadIdentity,
@@ -39,6 +43,7 @@ from creative_marketer.agent_runtime.domain import (
     BudgetExceeded,
     ModelAttempt,
     ModelAttemptStatus,
+    ModelContext,
     ModelInvocationResult,
     ModelRateLimited,
     ModelRefusal,
@@ -78,7 +83,7 @@ from creative_marketer.research.domain import (
     ResearchEvidenceReference,
     research_sha256_v1,
 )
-from tests.test_agent_runtime_domain import output, route
+from tests.test_agent_runtime_domain import output, route, run
 from tests.test_creative_strategy import output as creative_output
 
 
@@ -234,6 +239,30 @@ def creative_preparation(
         freshness,
         100,
     )
+
+
+def test_capability_registry_and_creative_validation_fail_closed() -> None:
+    researcher = ResearcherCapability()
+    with pytest.raises(ValueError):
+        AgentCapabilityRegistry((researcher, researcher))
+    registry = AgentCapabilityRegistry((researcher, CreativeStrategistCapability()))
+    with pytest.raises(AgentCapabilityUnavailable):
+        registry.resolve("unknown")
+
+    capability = CreativeStrategistCapability()
+    value = replace(
+        run(),
+        agent_type="creative_strategist",
+        output_contract_key="creative.creative_concept_set",
+        input_context_refs=(),
+    )
+    empty = ModelContext("instructions", {}, (), "sha256:" + "a" * 64, capability_context={})
+    object.__setattr__(empty, "capability_context", None)
+    with pytest.raises(AgentRunNotReady, match="unavailable"):
+        capability.validate_result({}, value, empty)
+    incomplete = replace(empty, capability_context={})
+    with pytest.raises(AgentRunNotReady, match="incomplete"):
+        capability.validate_result({}, value, incomplete)
 
 
 class MemoryRepository:

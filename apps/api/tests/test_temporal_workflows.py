@@ -743,3 +743,7 @@ async def test_generic_agent_activity_fails_closed_when_runtime_is_absent_or_fai
     )
     with pytest.raises(ApplicationError, match="execution failed"):
         await failing.execute_agent(request)
+
+    researcher_request = ResearcherWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    with pytest.raises(ApplicationError, match="not composed"):
+        await unavailable.execute_researcher(researcher_request)

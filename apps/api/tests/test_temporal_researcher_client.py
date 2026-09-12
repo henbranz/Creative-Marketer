@@ -8,13 +8,21 @@ from temporalio.client import WorkflowExecutionStatus
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from creative_marketer.infrastructure.temporal.client import (
+    TemporalAgentExecutionWorkflowStarter,
     TemporalResearcherWorkflowStarter,
 )
-from creative_marketer.workflow_orchestration.contracts import ResearcherWorkflowInput
+from creative_marketer.workflow_orchestration.contracts import (
+    AgentExecutionWorkflowInput,
+    ResearcherWorkflowInput,
+)
 
 
 def request() -> ResearcherWorkflowInput:
     return ResearcherWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+
+
+def agent_request() -> AgentExecutionWorkflowInput:
+    return AgentExecutionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
 
 
 @pytest.mark.asyncio
@@ -73,3 +81,48 @@ async def test_duplicate_researcher_start_rejects_unexpected_state() -> None:
 
     with pytest.raises(WorkflowAlreadyStartedError):
         await TemporalResearcherWorkflowStarter(Client()).start_researcher(request())
+
+
+@pytest.mark.asyncio
+async def test_generic_agent_starter_uses_deterministic_id_and_queue() -> None:
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        async def start_workflow(self, workflow, value, **kwargs):
+            self.calls.append((workflow, value, kwargs))
+
+    client, value = Client(), agent_request()
+    await TemporalAgentExecutionWorkflowStarter(client, "agent-queue").start_agent(value)
+    assert client.calls[0][1] is value
+    assert client.calls[0][2]["id"].endswith(value.agent_run_id)
+    assert client.calls[0][2]["task_queue"] == "agent-queue"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,accepted",
+    [
+        (WorkflowExecutionStatus.RUNNING, True),
+        (WorkflowExecutionStatus.COMPLETED, True),
+        (WorkflowExecutionStatus.FAILED, True),
+        (WorkflowExecutionStatus.CANCELED, False),
+    ],
+)
+async def test_duplicate_generic_agent_start_accepts_only_known_states(status, accepted) -> None:
+    class Handle:
+        async def describe(self):
+            return SimpleNamespace(status=status)
+
+    class Client:
+        async def start_workflow(self, *_args, **_kwargs):
+            raise WorkflowAlreadyStartedError("workflow", "AgentExecutionWorkflow")
+
+        def get_workflow_handle(self, _workflow_id):
+            return Handle()
+
+    if accepted:
+        await TemporalAgentExecutionWorkflowStarter(Client()).start_agent(agent_request())
+    else:
+        with pytest.raises(WorkflowAlreadyStartedError):
+            await TemporalAgentExecutionWorkflowStarter(Client()).start_agent(agent_request())
