@@ -242,17 +242,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     agent_registry_factory,
 ) -> None:
     context, brand, product = await product_setup(admin_engine, catalog_factory)
-    ready_asset = (
-        asset(context, brand, product)
-        .validating()
-        .ready(
-            object_key=f"tenants/{context.tenant_id}/assets/ready.png",
-            detected_mime_type="image/png",
-            byte_size=64,
-            digest="sha256:" + "b" * 64,
-            width=10,
-            height=10,
-        )
+    pending_asset = asset(context, brand, product)
+    ready_asset = pending_asset.validating().ready(
+        object_key=(f"tenants/{context.tenant_id}/assets/{pending_asset.id}/objects/ready.png"),
+        detected_mime_type="image/png",
+        byte_size=64,
+        digest="sha256:" + "b" * 64,
+        width=10,
+        height=10,
     )
     async with catalog_factory(context) as catalog_uow:
         await catalog_uow.assets.add(ready_asset)
