@@ -621,6 +621,21 @@ def _plain_json(value: object) -> object:
     return value
 
 
+def _compact_json(value: object) -> object:
+    """Remove absent snapshot fields from provider context without changing provenance."""
+
+    if isinstance(value, Mapping):
+        compacted = {str(key): _compact_json(child) for key, child in value.items()}
+        return {
+            key: child
+            for key, child in compacted.items()
+            if child is not None and child != "" and child != [] and child != {}
+        }
+    if isinstance(value, (tuple, list)):
+        return [_compact_json(child) for child in value]
+    return value
+
+
 def conservative_input_token_bound(context: ModelContext) -> int:
     """UTF-8 bytes upper-bound tokenizer input without provider-specific dependencies."""
 
@@ -643,7 +658,7 @@ def build_creative_model_context(
         preparation.product_snapshot, preparation.research_snapshot, request
     )
     sections: dict[str, object] = {
-        "product_brand_data": dict(creative.product_context),
+        "product_brand_data": _compact_json(creative.product_context),
         "available_assets": [dict(item) for item in creative.asset_manifest],
         "research_findings": [dict(item) for item in creative.research_findings],
         "research_gaps": list(creative.research_gaps),

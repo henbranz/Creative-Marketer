@@ -170,7 +170,7 @@ def creative_configuration() -> AgentVersionConfiguration:
         model_policy=ModelPolicy(
             "creative_balanced", ("text", "reasoning", "structured_output"), 1
         ),
-        run_budget_policy=RunBudgetPolicy(1, 0, 15000, Decimal("0.20"), "USD"),
+        run_budget_policy=RunBudgetPolicy(1, 0, 16000, Decimal("0.20"), "USD"),
         period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 10, Decimal("2.00"), "USD"),
         read_scopes=("catalog.product", "research.snapshot", "catalog.asset_manifest"),
         write_scopes=("creative.concept_set",),
@@ -189,7 +189,7 @@ def creative_preparation(
     content = {
         "brand_profile": {"allowed_claims": [], "prohibited_claims": []},
         "profile": {"allowed_claims": ["Made from recycled steel"]},
-        "brief": {"required_disclaimers": ["Results vary"]},
+        "brief": {"required_disclaimers": ["Results vary"], "secondary_audiences": []},
         "assets": [],
     }
     product = ProductKnowledgeSnapshot(
@@ -746,6 +746,7 @@ async def test_creative_capability_reuses_runtime_and_freezes_exact_context() ->
         assert creative_context is not None
         assert invocation.untrusted_evidence == ()
         assert invocation.capability_context is not None
+        assert "secondary_audiences" not in str(invocation.capability_context)
         raw = creative_output(creative_context)
         for concept in raw["concepts"]:
             concept["supporting_research_refs"][0]["finding_key"] = (
