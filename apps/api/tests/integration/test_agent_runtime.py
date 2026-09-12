@@ -262,7 +262,10 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         ProductProfile(
             context.tenant_id,
             product.id,
-            description="A repairable daily bottle. sk-AgentRunSecret000000",
+            description=(
+                "A repairable daily bottle. "
+                "https://assets.example.test/reference?signature=AgentRunSecret000000"
+            ),
             features=("Double wall",),
             benefits=("Cold all day",),
             target_audiences=(audience,),
