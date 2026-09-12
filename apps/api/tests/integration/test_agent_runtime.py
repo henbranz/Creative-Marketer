@@ -474,7 +474,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
 
     producer = await CreateTenantAgentDefinition(agent_registry_factory)(
-        context, agent_key="astra-producer", agent_type="producer"
+        context, agent_key="astra_producer", agent_type="producer"
     )
     producer_version = await CreateAgentVersion(agent_registry_factory)(
         context, producer.id, producer_configuration()
