@@ -66,12 +66,7 @@ def producer_configuration() -> AgentVersionConfiguration:
         ),
         write_scopes=("production.plan",),
         memory_scopes=(),
-        allowed_tool_keys=(
-            "media.image.generate",
-            "media.video.generate.start",
-            "media.video.generate.status",
-            "media.video.generate.import",
-        ),
+        allowed_tool_keys=(),
         denied_tool_keys=(),
         approval_policy_key="production.plan_review",
         output_contract_key="production.production_plan",

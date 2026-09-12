@@ -69,13 +69,6 @@ class Settings(BaseSettings):
             raise ValueError("development identity is forbidden outside development and test")
         if self.otel_mode == "otlp" and self.otel_exporter_otlp_endpoint is None:
             raise ValueError("OTEL_EXPORTER_OTLP_ENDPOINT is required in otlp mode")
-        if self.object_storage_backend == "s3" and self.app_env in {"staging", "production"}:
-            if self.object_storage_endpoint_url.host in {"localhost", "127.0.0.1"}:
-                raise ValueError("deployed S3 storage cannot use a loopback endpoint")
-            if self.object_storage_access_key_id.startswith("disabled-"):
-                raise ValueError("deployed S3 storage requires injected credentials")
-        if self.object_storage_backend == "s3" and not self.cors_origins:
-            raise ValueError("S3 storage requires at least one explicit CORS origin")
         if self.model_provider_backend == "openai":
             key = self.openai_api_key.get_secret_value() if self.openai_api_key else None
             if key is not None and key.startswith(("disabled-", "test-", "fake-", "replace-")):
@@ -109,6 +102,13 @@ class Settings(BaseSettings):
             )
         ):
             raise ValueError("deployed media workers require deployment-issued workload identity")
+        if self.object_storage_backend == "s3" and self.app_env in {"staging", "production"}:
+            if self.object_storage_endpoint_url.host in {"localhost", "127.0.0.1"}:
+                raise ValueError("deployed S3 storage cannot use a loopback endpoint")
+            if self.object_storage_access_key_id.startswith("disabled-"):
+                raise ValueError("deployed S3 storage requires injected credentials")
+        if self.object_storage_backend == "s3" and not self.cors_origins:
+            raise ValueError("S3 storage requires at least one explicit CORS origin")
         if (
             self.model_provider_backend != "disabled"
             and self.app_env in {"staging", "production"}

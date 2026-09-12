@@ -101,6 +101,7 @@ from creative_marketer.permission_governance.domain import (
 )
 from creative_marketer.production.application import initial_producer_route
 from creative_marketer.production.domain import ProductionPlanningRequest
+from creative_marketer.production.tool_contracts import media_tool_contracts
 from creative_marketer.research.application import FetchedPage, ResearchService
 from creative_marketer.research.domain import ResearchCategory
 from creative_marketer.tool_governance.application import ResolveActiveTool
@@ -618,7 +619,7 @@ async def run() -> None:
     policy = ToolPermissionVersionConfiguration(
         PermissionEffect.GRANT, ("production.media",), ("development",)
     )
-    for key in producer_configuration().allowed_tool_keys:
+    for key in (contract.tool_key for contract in media_tool_contracts()):
         tool = await ResolveActiveTool(tool_factory)(key)
         async with permission_factory(context.tenant_context()) as uow:
             existing_permission = await uow.permissions.get_for_subject(
