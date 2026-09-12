@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -517,7 +518,21 @@ async def test_generated_asset_import_uses_authoritative_catalog_context() -> No
             assert values["content"]
             return SimpleNamespace(id=uuid4())
 
-    importer = ApplicationGeneratedAssetImporter(Assets(), object(), local_demo=True)
+    class Session:
+        def __init__(self) -> None:
+            self.execute = AsyncMock()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+        def begin(self):
+            return self
+
+    session = Session()
+    importer = ApplicationGeneratedAssetImporter(Assets(), lambda: session, local_demo=True)
     execution = ExecutableGeneration(
         replace(image_job, input_assets=()),
         {},
@@ -527,6 +542,9 @@ async def test_generated_asset_import_uses_authoritative_catalog_context() -> No
         product_id=repository.record.plan.product_id,
     )
     assert await importer.import_result(execution, b"\x89PNG\r\n\x1a\nbytes", "image/png")
+    with_reference = replace(execution, job=image_job)
+    assert await importer.import_result(with_reference, b"\x89PNG\r\n\x1a\nbytes", "image/png")
+    assert session.execute.await_count == len(image_job.input_assets) + 1
     with pytest.raises(ValueError, match="lacks authoritative"):
         await importer.import_result(
             ExecutableGeneration(image_job, {}, ()), b"\x89PNG\r\n\x1a\nbytes", "image/png"
