@@ -27,6 +27,7 @@ export type CreativeConcept = components["schemas"]["CreativeConceptResponse"];
 export type CreativeDecision =
   components["schemas"]["CreativeDecisionResponse"];
 export interface ProductionShot {
+  id: string;
   shot_key: string;
   ordinal: number;
   source_strategy:
@@ -89,6 +90,78 @@ export interface ProductionJob {
   failure_code: string | null;
   local_demo_provider: boolean;
   updated_at: string;
+}
+export interface AssemblyReadiness {
+  status: string;
+  ready: boolean;
+  sources: { shot_key: string; status: string }[];
+}
+export interface AssemblyItem {
+  item_key: string;
+  ordinal: number;
+  source_kind: string;
+  source_asset_id: string;
+  source_media_kind: string;
+  production_shot_ids: string[];
+  production_shot_keys: string[];
+  generation_segment_id: string | null;
+  timeline_start_ms: number;
+  timeline_duration_ms: number;
+  fit_mode: string;
+  audio_behavior: string;
+  transition_in: string;
+  transition_out: string;
+}
+export interface AssemblyJob {
+  id: string;
+  assembly_plan_id: string;
+  status: string;
+  failure_code: string | null;
+  output_asset_id: string | null;
+  final_creative_id: string | null;
+  renderer: string | null;
+  renderer_version: string | null;
+  updated_at: string;
+}
+export interface AssemblyPlan {
+  id: string;
+  production_plan_id: string;
+  semantic_digest: string;
+  render_profile_key: string;
+  render_profile_version: number;
+  timeline_duration_ms: number;
+  items: AssemblyItem[];
+  captions: { text: string; start_ms: number; end_ms: number; kind: string }[];
+  overlays: {
+    text: string;
+    start_ms: number;
+    end_ms: number;
+    position: string;
+    style_token: string;
+  }[];
+  job: AssemblyJob;
+  created_at: string;
+}
+export interface FinalCreative {
+  id: string;
+  product_id: string;
+  assembly_plan_id: string;
+  production_plan_id: string;
+  creative_concept_id: string;
+  output_asset_id: string;
+  semantic_digest: string;
+  duration_ms: number;
+  width: number;
+  height: number;
+  fps: number;
+  has_audio: boolean;
+  source_count: number;
+  render_profile_key: string;
+  render_profile_version: number;
+  renderer: string;
+  renderer_version: string;
+  decision_state: string | null;
+  created_at: string;
 }
 
 export interface Session {
@@ -300,6 +373,45 @@ export const catalogApi = {
     }),
   listProductionJobs: (session: Session, planId: string) =>
     request<ProductionJob[]>(session, `/v1/production/plans/${planId}/jobs`),
+  getAssemblyReadiness: (session: Session, planId: string) =>
+    request<AssemblyReadiness>(
+      session,
+      `/v1/production/plans/${planId}/assembly-readiness`,
+    ),
+  bindManualSource: (session: Session, shotId: string, assetId: string) =>
+    request<AssemblyReadiness>(
+      session,
+      `/v1/production/shots/${shotId}/manual-source`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ asset_id: assetId }),
+      },
+    ),
+  createAssemblyPlan: (session: Session, planId: string) =>
+    request<AssemblyPlan>(
+      session,
+      `/v1/production/plans/${planId}/assembly-plans`,
+      { method: "POST" },
+    ),
+  listAssemblyPlans: (session: Session, planId: string) =>
+    request<AssemblyPlan[]>(
+      session,
+      `/v1/production/plans/${planId}/assembly-plans`,
+    ),
+  getAssemblyJob: (session: Session, jobId: string) =>
+    request<AssemblyJob>(session, `/v1/assembly/jobs/${jobId}`),
+  getFinalCreative: (session: Session, finalId: string) =>
+    request<FinalCreative>(session, `/v1/final-creatives/${finalId}`),
+  approveFinalCreative: (session: Session, finalId: string) =>
+    request<FinalCreative>(
+      session,
+      `/v1/final-creatives/${finalId}/approve-publishing`,
+      { method: "POST" },
+    ),
+  rejectFinalCreative: (session: Session, finalId: string) =>
+    request<FinalCreative>(session, `/v1/final-creatives/${finalId}/reject`, {
+      method: "POST",
+    }),
 };
 
 export async function uploadToGrant(
@@ -369,6 +481,10 @@ export async function obsidianOpenUrl(
     production_shot: "Production/Shots",
     generation_segment: "Production/Segments",
     generation_job: "Production/Jobs",
+    assembly_plan: "Production/Assembly",
+    assembly_job: "Production/Assembly",
+    final_creative: "Production/Finals",
+    final_creative_decision: "Production/Finals",
   };
   const directory = directories[nodeType];
   if (!directory || !canonicalId.trim())

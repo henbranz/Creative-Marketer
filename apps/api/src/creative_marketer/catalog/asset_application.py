@@ -2,7 +2,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from typing import Protocol
+from typing import BinaryIO, Protocol
 from uuid import UUID, uuid4
 
 from creative_marketer.audit.builders import tenant_audit
@@ -64,7 +64,7 @@ class ObjectStore(Protocol):
     async def head(self, *, key: str) -> ObjectMetadata: ...
     def stream(self, *, key: str) -> AsyncIterator[bytes]: ...
     async def promote(self, *, source_key: str, destination_key: str) -> None: ...
-    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None: ...
+    async def put_private(self, *, key: str, content_type: str, body: bytes | BinaryIO) -> None: ...
 
 
 class UnavailableObjectStore:
@@ -86,7 +86,7 @@ class UnavailableObjectStore:
     async def promote(self, *, source_key: str, destination_key: str) -> None:
         raise ObjectStoreUnavailable("object storage is not configured")
 
-    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None:
+    async def put_private(self, *, key: str, content_type: str, body: bytes | BinaryIO) -> None:
         raise ObjectStoreUnavailable("object storage is not configured")
 
 
@@ -136,23 +136,45 @@ class AssetService:
         product_id: UUID,
         kind: AssetKind,
         role: AssetRole,
-        content: bytes,
+        content: bytes | BinaryIO,
         media_type: str,
         rights_status: RightsStatus,
         allowed_uses: tuple[AllowedUse, ...],
         original_filename: str,
+        width: int | None = None,
+        height: int | None = None,
+        duration_ms: int | None = None,
     ) -> Asset:
         """Validate and privately ingest provider output as an ordinary immutable Asset."""
         require_catalog_mutation(context)
         if context.user_id is None:
             raise CatalogPermissionDenied("generated Asset ingestion requires an initiating user")
-        if not content or len(content) > MAX_BYTES[kind] or detect_mime(content[:64]) != media_type:
+        if isinstance(content, bytes):
+            prefix = content[:64]
+            byte_size = len(content)
+            digest_value = sha256(content).hexdigest()
+        else:
+            content.seek(0)
+            prefix = content.read(64)
+            content.seek(0)
+            hasher = sha256()
+            byte_size = 0
+            while chunk := content.read(1024 * 1024):
+                byte_size += len(chunk)
+                if byte_size > MAX_BYTES[kind]:
+                    raise CatalogValidationError("generated media failed binary validation")
+                hasher.update(chunk)
+            digest_value = hasher.hexdigest()
+            content.seek(0)
+        if not prefix or byte_size > MAX_BYTES[kind] or detect_mime(prefix) != media_type:
             raise CatalogValidationError("generated media failed binary validation")
         asset_id = uuid4()
-        digest = "sha256:" + sha256(content).hexdigest()
-        object_key = f"tenants/{context.tenant_id}/assets/{asset_id}/generated/{digest[7:]}"
+        digest = "sha256:" + digest_value
+        key_prefix = f"tenants/{context.tenant_id}/assets/{asset_id}"
+        upload_key = f"{key_prefix}/uploads/generated-{digest[7:]}"
+        object_key = f"{key_prefix}/objects/{digest[7:]}"
         await self.object_store.put_private(key=object_key, content_type=media_type, body=content)
-        width, height = image_dimensions(media_type, content[:64])
+        detected_width, detected_height = image_dimensions(media_type, prefix)
         now = datetime.now(UTC)
         asset = Asset(
             tenant_id=context.tenant_id,
@@ -167,14 +189,15 @@ class AssetService:
             detected_mime_type=media_type,
             rights_status=rights_status,
             allowed_uses=allowed_uses,
-            upload_object_key=object_key,
+            upload_object_key=upload_key,
             object_key=object_key,
-            byte_size=len(content),
+            byte_size=byte_size,
             digest=digest,
             created_by=context.user_id,
             id=asset_id,
-            width=width,
-            height=height,
+            width=width if width is not None else detected_width,
+            height=height if height is not None else detected_height,
+            duration_ms=duration_ms,
             created_at=now,
             updated_at=now,
         )
@@ -187,7 +210,7 @@ class AssetService:
             await _event(
                 uow,
                 context,
-                "catalog.asset.ready.v1",
+                "catalog.asset.ready.v2",
                 "asset",
                 asset.id,
                 {
@@ -200,6 +223,7 @@ class AssetService:
                     "byte_size": asset.byte_size,
                     "digest": asset.digest,
                 },
+                schema_version=2,
             )
             await uow.commit()
         return asset

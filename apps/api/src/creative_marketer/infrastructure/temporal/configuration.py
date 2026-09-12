@@ -3,6 +3,7 @@ from datetime import timedelta
 from temporalio.common import RetryPolicy
 
 WORKFLOW_TASK_QUEUE = "creative-marketer-workflows"
+ASSEMBLY_TASK_QUEUE = "creative-marketer-assembly"
 
 STATE_ACTIVITY_TIMEOUT = timedelta(seconds=15)
 TOOL_ACTIVITY_TIMEOUT = timedelta(seconds=60)

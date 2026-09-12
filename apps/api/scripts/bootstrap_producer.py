@@ -52,7 +52,7 @@ def producer_configuration() -> AgentVersionConfiguration:
             "Never predict performance, authorize spend, invoke tools, name providers, or reveal "
             "hidden reasoning. Return only production.production_plan.v1."
         ),
-        prompt_revision="astra_producer.v1",
+        prompt_revision="astra_producer_v1",
         model_policy=ModelPolicy(
             "production_deep", ("image_input", "reasoning", "structured_output", "text"), 1
         ),

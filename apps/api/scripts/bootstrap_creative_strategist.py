@@ -54,11 +54,11 @@ def creative_strategist_configuration() -> AgentVersionConfiguration:
             "Do not fabricate performance outcomes, invoke tools, generate media, or reveal "
             "hidden reasoning. Return only the required structured contract."
         ),
-        prompt_revision="creative-strategist.v1",
+        prompt_revision="creative_strategist_v1",
         model_policy=ModelPolicy(
             "creative_balanced", ("reasoning", "structured_output", "text"), 1
         ),
-        run_budget_policy=RunBudgetPolicy(1, 0, 16_000, Decimal("0.20"), "USD"),
+        run_budget_policy=RunBudgetPolicy(1, 0, 32_000, Decimal("0.20"), "USD"),
         period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 20, Decimal("4.00"), "USD"),
         read_scopes=("catalog.product", "research.snapshot", "catalog.asset_manifest"),
         write_scopes=("creative.concept_set",),

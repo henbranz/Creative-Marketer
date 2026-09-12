@@ -49,6 +49,7 @@ class ProducerRunStart(Contract):
 
 
 class ProductionShotResponse(Contract):
+    id: UUID
     shot_key: str
     ordinal: int
     source_strategy: SourceStrategy
@@ -134,6 +135,7 @@ def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
                 on_screen_text=scene.on_screen_text,
                 shots=[
                     ProductionShotResponse(
+                        id=uuid5(NAMESPACE_URL, f"{plan.id}:shot:{shot.shot_key}"),
                         shot_key=shot.shot_key,
                         ordinal=shot.ordinal,
                         source_strategy=shot.source_strategy,

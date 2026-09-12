@@ -18,6 +18,13 @@ from creative_marketer.infrastructure.database.agent_runtime_schema import (
     agent_runs,
     research_snapshots,
 )
+from creative_marketer.infrastructure.database.assembly_schema import (
+    assembly_items,
+    assembly_jobs,
+    assembly_plans,
+    final_creative_decisions,
+    final_creatives,
+)
 from creative_marketer.infrastructure.database.catalog_schema import (
     assets,
     brands,
@@ -145,6 +152,19 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     generation_jobs.c.tenant_id == tenant
                 ),
                 "asset_lineage": select(asset_lineage).where(asset_lineage.c.tenant_id == tenant),
+                "assembly_plans": select(assembly_plans).where(
+                    assembly_plans.c.tenant_id == tenant
+                ),
+                "assembly_items": select(assembly_items).where(
+                    assembly_items.c.tenant_id == tenant
+                ),
+                "assembly_jobs": select(assembly_jobs).where(assembly_jobs.c.tenant_id == tenant),
+                "final_creatives": select(final_creatives).where(
+                    final_creatives.c.tenant_id == tenant
+                ),
+                "final_creative_decisions": select(final_creative_decisions).where(
+                    final_creative_decisions.c.tenant_id == tenant
+                ),
             }
             for key, statement in statements.items():
                 result = (await session.execute(statement)).mappings()
@@ -314,6 +334,137 @@ class SqlAlchemyCanonicalKnowledgeReader:
                         "currency": job["currency"],
                     },
                     tuple(relationships),
+                )
+            )
+        assembly_items_by_plan: dict[object, list[Mapping[str, Any]]] = {}
+        for item in rows.get("assembly_items", []):
+            assembly_items_by_plan.setdefault(item["assembly_plan_id"], []).append(item)
+        for row in rows.get("assembly_plans", []):
+            items = sorted(
+                assembly_items_by_plan.get(row["id"], []), key=lambda item: item["ordinal"]
+            )
+            relationships = [
+                _rel(KnowledgeNodeType.PRODUCTION_PLAN, row["production_plan_id"], "assembles_plan")
+            ]
+            relationships.extend(
+                _rel(KnowledgeNodeType.ASSET, item["source_asset_id"], "uses_source_asset")
+                for item in items
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.ASSEMBLY_PLAN,
+                    str(row["id"]),
+                    f"Assembly Plan {str(row['id'])[:8]}",
+                    "immutable",
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "timeline_duration_ms": row["timeline_duration_ms"],
+                        "render_profile": row["render_profile_key"],
+                        "render_profile_version": row["render_profile_version"],
+                        "timeline": [
+                            {
+                                "item_key": item["item_key"],
+                                "source_kind": item["source_kind"],
+                                "shot_keys": item["production_shot_keys"],
+                                "start_ms": item["timeline_start_ms"],
+                                "duration_ms": item["timeline_duration_ms"],
+                                "audio_policy": item["audio_behavior"],
+                            }
+                            for item in items
+                        ],
+                    },
+                    tuple(relationships),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("assembly_jobs", []):
+            relationships = [
+                _rel(KnowledgeNodeType.ASSEMBLY_PLAN, row["assembly_plan_id"], "executes_assembly")
+            ]
+            if row["output_asset_id"]:
+                relationships.append(
+                    _rel(KnowledgeNodeType.ASSET, row["output_asset_id"], "produced_asset")
+                )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.ASSEMBLY_JOB,
+                    str(row["id"]),
+                    f"Assembly Job {str(row['id'])[:8]}",
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    {
+                        "renderer": row["renderer"],
+                        "renderer_version": row["renderer_version"],
+                        "failure_code": row["failure_code"],
+                    },
+                    tuple(relationships),
+                )
+            )
+        decisions_by_final: dict[object, list[Mapping[str, Any]]] = {}
+        for row in rows.get("final_creative_decisions", []):
+            decisions_by_final.setdefault(row["final_creative_id"], []).append(row)
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.FINAL_CREATIVE_DECISION,
+                    str(row["id"]),
+                    row["state"].replace("_", " ").title(),
+                    row["state"],
+                    row["created_at"],
+                    row["created_at"],
+                    {},
+                    (
+                        _rel(
+                            KnowledgeNodeType.FINAL_CREATIVE,
+                            row["final_creative_id"],
+                            "decision_for_final_creative",
+                        ),
+                    ),
+                )
+            )
+        for row in rows.get("final_creatives", []):
+            latest = max(
+                decisions_by_final.get(row["id"], []),
+                key=lambda item: item["created_at"],
+                default=None,
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.FINAL_CREATIVE,
+                    str(row["id"]),
+                    f"Final Creative {str(row['id'])[:8]}",
+                    latest["state"] if latest else "AWAITING_REVIEW",
+                    row["created_at"],
+                    latest["created_at"] if latest else row["created_at"],
+                    {
+                        "duration_ms": row["duration_ms"],
+                        "resolution": f"{row['width']}x{row['height']}",
+                        "fps": row["fps"],
+                        "has_audio": row["has_audio"],
+                        "source_count": row["source_count"],
+                        "render_profile": row["render_profile_key"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.ASSEMBLY_PLAN,
+                            row["assembly_plan_id"],
+                            "created_from_assembly",
+                        ),
+                        _rel(
+                            KnowledgeNodeType.PRODUCTION_PLAN,
+                            row["production_plan_id"],
+                            "created_from_production",
+                        ),
+                        _rel(
+                            KnowledgeNodeType.CREATIVE_CONCEPT,
+                            row["creative_concept_id"],
+                            "created_from_concept",
+                        ),
+                        _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "final_for_product"),
+                        _rel(KnowledgeNodeType.ASSET, row["output_asset_id"], "final_asset"),
+                    ),
+                    row["semantic_digest"],
                 )
             )
         for row in rows["products"]:

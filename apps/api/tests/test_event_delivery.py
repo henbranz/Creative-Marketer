@@ -152,6 +152,7 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
     assert set(registry.event_types) == {
         "catalog.asset.archived.v1",
         "catalog.asset.ready.v1",
+        "catalog.asset.ready.v2",
         "catalog.brand.created.v1",
         "catalog.product.created.v1",
         "catalog.product.updated.v1",
@@ -176,6 +177,9 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         "production.plan.created.v1",
         "production.plan.approved_for_generation.v1",
         "production.generation.completed.v1",
+        "assembly.plan.created.v1",
+        "assembly.final_creative.created.v1",
+        "assembly.final_creative.approved_for_publishing.v1",
     }
     (tmp_path / "bad.json").write_text(
         '{"$schema":"https://json-schema.org/draft/2020-12/schema",'

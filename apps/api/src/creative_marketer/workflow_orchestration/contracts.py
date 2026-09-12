@@ -199,3 +199,29 @@ class MediaProductionJobResult:
 
 def media_production_workflow_id(value: MediaProductionWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/production-plan/{value.production_plan_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class FinalCreativeAssemblyWorkflowInput:
+    tenant_id: str
+    assembly_plan_id: str
+    assembly_job_id: str
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.assembly_plan_id, "assembly_plan_id")
+        _uuid(self.assembly_job_id, "assembly_job_id")
+        _uuid(self.correlation_id, "correlation_id")
+
+
+@dataclass(frozen=True, slots=True)
+class FinalCreativeAssemblyResult:
+    assembly_job_id: str
+    final_creative_id: str | None
+    status: str
+    failure_code: str | None = None
+
+
+def final_creative_assembly_workflow_id(value: FinalCreativeAssemblyWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/assembly-plan/{value.assembly_plan_id}"

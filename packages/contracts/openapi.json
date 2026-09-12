@@ -272,6 +272,293 @@
         "title": "AgentRunStart",
         "type": "object"
       },
+      "AssemblyItemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "audio_behavior": {
+            "title": "Audio Behavior",
+            "type": "string"
+          },
+          "fit_mode": {
+            "title": "Fit Mode",
+            "type": "string"
+          },
+          "generation_segment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Segment Id"
+          },
+          "item_key": {
+            "title": "Item Key",
+            "type": "string"
+          },
+          "ordinal": {
+            "title": "Ordinal",
+            "type": "integer"
+          },
+          "production_shot_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Production Shot Ids",
+            "type": "array"
+          },
+          "production_shot_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Production Shot Keys",
+            "type": "array"
+          },
+          "source_asset_id": {
+            "format": "uuid",
+            "title": "Source Asset Id",
+            "type": "string"
+          },
+          "source_kind": {
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_media_kind": {
+            "title": "Source Media Kind",
+            "type": "string"
+          },
+          "timeline_duration_ms": {
+            "title": "Timeline Duration Ms",
+            "type": "integer"
+          },
+          "timeline_start_ms": {
+            "title": "Timeline Start Ms",
+            "type": "integer"
+          },
+          "transition_in": {
+            "title": "Transition In",
+            "type": "string"
+          },
+          "transition_out": {
+            "title": "Transition Out",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_key",
+          "ordinal",
+          "source_kind",
+          "source_asset_id",
+          "source_media_kind",
+          "production_shot_ids",
+          "production_shot_keys",
+          "generation_segment_id",
+          "timeline_start_ms",
+          "timeline_duration_ms",
+          "fit_mode",
+          "audio_behavior",
+          "transition_in",
+          "transition_out"
+        ],
+        "title": "AssemblyItemResponse",
+        "type": "object"
+      },
+      "AssemblyJobResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "assembly_plan_id": {
+            "format": "uuid",
+            "title": "Assembly Plan Id",
+            "type": "string"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Creative Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "output_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Asset Id"
+          },
+          "renderer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Renderer"
+          },
+          "renderer_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Renderer Version"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "assembly_plan_id",
+          "status",
+          "failure_code",
+          "output_asset_id",
+          "final_creative_id",
+          "renderer",
+          "renderer_version",
+          "updated_at"
+        ],
+        "title": "AssemblyJobResponse",
+        "type": "object"
+      },
+      "AssemblyPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "captions": {
+            "items": {
+              "$ref": "#/components/schemas/CaptionResponse"
+            },
+            "title": "Captions",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AssemblyItemResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "job": {
+            "$ref": "#/components/schemas/AssemblyJobResponse"
+          },
+          "overlays": {
+            "items": {
+              "$ref": "#/components/schemas/OverlayResponse"
+            },
+            "title": "Overlays",
+            "type": "array"
+          },
+          "production_plan_id": {
+            "format": "uuid",
+            "title": "Production Plan Id",
+            "type": "string"
+          },
+          "render_profile_key": {
+            "title": "Render Profile Key",
+            "type": "string"
+          },
+          "render_profile_version": {
+            "title": "Render Profile Version",
+            "type": "integer"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          },
+          "timeline_duration_ms": {
+            "title": "Timeline Duration Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "production_plan_id",
+          "semantic_digest",
+          "render_profile_key",
+          "render_profile_version",
+          "timeline_duration_ms",
+          "items",
+          "captions",
+          "overlays",
+          "job",
+          "created_at"
+        ],
+        "title": "AssemblyPlanResponse",
+        "type": "object"
+      },
+      "AssemblyReadinessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ReadinessItemResponse"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": ["status", "ready", "sources"],
+        "title": "AssemblyReadinessResponse",
+        "type": "object"
+      },
       "AssetCreate": {
         "additionalProperties": false,
         "properties": {
@@ -1335,6 +1622,30 @@
         "title": "BriefResponse",
         "type": "object"
       },
+      "CaptionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": ["text", "start_ms", "end_ms", "kind"],
+        "title": "CaptionResponse",
+        "type": "object"
+      },
       "ChannelIntent": {
         "enum": [
           "ORGANIC_SHORT_FORM",
@@ -2031,6 +2342,124 @@
         "title": "FetchResponse",
         "type": "object"
       },
+      "FinalCreativeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "assembly_plan_id": {
+            "format": "uuid",
+            "title": "Assembly Plan Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "creative_concept_id": {
+            "format": "uuid",
+            "title": "Creative Concept Id",
+            "type": "string"
+          },
+          "decision_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision State"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "fps": {
+            "title": "Fps",
+            "type": "integer"
+          },
+          "has_audio": {
+            "title": "Has Audio",
+            "type": "boolean"
+          },
+          "height": {
+            "title": "Height",
+            "type": "integer"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "output_asset_id": {
+            "format": "uuid",
+            "title": "Output Asset Id",
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "production_plan_id": {
+            "format": "uuid",
+            "title": "Production Plan Id",
+            "type": "string"
+          },
+          "render_profile_key": {
+            "title": "Render Profile Key",
+            "type": "string"
+          },
+          "render_profile_version": {
+            "title": "Render Profile Version",
+            "type": "integer"
+          },
+          "renderer": {
+            "title": "Renderer",
+            "type": "string"
+          },
+          "renderer_version": {
+            "title": "Renderer Version",
+            "type": "string"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          },
+          "source_count": {
+            "title": "Source Count",
+            "type": "integer"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "assembly_plan_id",
+          "production_plan_id",
+          "creative_concept_id",
+          "output_asset_id",
+          "semantic_digest",
+          "duration_ms",
+          "width",
+          "height",
+          "fps",
+          "has_audio",
+          "source_count",
+          "render_profile_key",
+          "render_profile_version",
+          "renderer",
+          "renderer_version",
+          "decision_state",
+          "created_at"
+        ],
+        "title": "FinalCreativeResponse",
+        "type": "object"
+      },
       "FullProjectionResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2203,10 +2632,51 @@
         "title": "ManifestResponse",
         "type": "object"
       },
+      "ManualSourceWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          }
+        },
+        "required": ["asset_id"],
+        "title": "ManualSourceWrite",
+        "type": "object"
+      },
       "MediaKind": {
         "enum": ["IMAGE", "VIDEO"],
         "title": "MediaKind",
         "type": "string"
+      },
+      "OverlayResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "end_ms": {
+            "title": "End Ms",
+            "type": "integer"
+          },
+          "position": {
+            "title": "Position",
+            "type": "string"
+          },
+          "start_ms": {
+            "title": "Start Ms",
+            "type": "integer"
+          },
+          "style_token": {
+            "title": "Style Token",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": ["text", "start_ms", "end_ms", "position", "style_token"],
+        "title": "OverlayResponse",
+        "type": "object"
       },
       "ProducerRunStart": {
         "additionalProperties": false,
@@ -3154,6 +3624,11 @@
       "ProductionShotResponse": {
         "additionalProperties": false,
         "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
           "ordinal": {
             "title": "Ordinal",
             "type": "integer"
@@ -3171,7 +3646,13 @@
             "type": "object"
           }
         },
-        "required": ["shot_key", "ordinal", "source_strategy", "specification"],
+        "required": [
+          "id",
+          "shot_key",
+          "ordinal",
+          "source_strategy",
+          "specification"
+        ],
         "title": "ProductionShotResponse",
         "type": "object"
       },
@@ -3228,6 +3709,22 @@
         },
         "required": ["changes", "next_cursor", "has_more"],
         "title": "ProjectionChangesResponse",
+        "type": "object"
+      },
+      "ReadinessItemResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "shot_key": {
+            "title": "Shot Key",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": ["shot_key", "status"],
+        "title": "ReadinessItemResponse",
         "type": "object"
       },
       "RecommendedSourceResponse": {
@@ -3881,6 +4378,188 @@
         },
         "summary": "Get Agent Run",
         "tags": ["research"]
+      }
+    },
+    "/v1/assembly/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_v1_assembly_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyJobResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Job",
+        "tags": ["assembly"]
+      }
+    },
+    "/v1/assembly/plans/{plan_id}": {
+      "get": {
+        "operationId": "get_plan_v1_assembly_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Plan",
+        "tags": ["assembly"]
       }
     },
     "/v1/assets": {
@@ -5375,6 +6054,279 @@
         "tags": ["production"]
       }
     },
+    "/v1/final-creatives/{final_id}": {
+      "get": {
+        "operationId": "get_final_v1_final_creatives__final_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalCreativeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Final",
+        "tags": ["assembly"]
+      }
+    },
+    "/v1/final-creatives/{final_id}/approve-publishing": {
+      "post": {
+        "operationId": "approve_v1_final_creatives__final_id__approve_publishing_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalCreativeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve",
+        "tags": ["assembly"]
+      }
+    },
+    "/v1/final-creatives/{final_id}/reject": {
+      "post": {
+        "operationId": "reject_v1_final_creatives__final_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinalCreativeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject",
+        "tags": ["assembly"]
+      }
+    },
     "/v1/knowledge/projection": {
       "get": {
         "operationId": "full_projection_v1_knowledge_projection_get",
@@ -5886,6 +6838,281 @@
         "tags": ["production"]
       }
     },
+    "/v1/production/plans/{plan_id}/assembly-plans": {
+      "get": {
+        "operationId": "list_plans_v1_production_plans__plan_id__assembly_plans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssemblyPlanResponse"
+                  },
+                  "title": "Response List Plans V1 Production Plans  Plan Id  Assembly Plans Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Plans",
+        "tags": ["assembly"]
+      },
+      "post": {
+        "operationId": "create_plan_v1_production_plans__plan_id__assembly_plans_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Plan",
+        "tags": ["assembly"]
+      }
+    },
+    "/v1/production/plans/{plan_id}/assembly-readiness": {
+      "get": {
+        "operationId": "readiness_v1_production_plans__plan_id__assembly_readiness_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Plan Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Readiness",
+        "tags": ["assembly"]
+      }
+    },
     "/v1/production/plans/{plan_id}/jobs": {
       "get": {
         "operationId": "list_jobs_v1_production_plans__plan_id__jobs_get",
@@ -6070,6 +7297,107 @@
         },
         "summary": "Reject",
         "tags": ["production"]
+      }
+    },
+    "/v1/production/shots/{shot_id}/manual-source": {
+      "put": {
+        "operationId": "manual_source_v1_production_shots__shot_id__manual_source_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shot_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Shot Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualSourceWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Manual Source",
+        "tags": ["assembly"]
       }
     },
     "/v1/products/{product_id}": {

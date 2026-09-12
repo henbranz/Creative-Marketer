@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, BinaryIO
 
 from creative_marketer.catalog.asset_application import (
     DownloadGrant,
@@ -125,7 +125,7 @@ class S3ObjectStore:
         except Exception as error:
             raise ObjectStoreUnavailable("object promotion failed") from error
 
-    async def put_private(self, *, key: str, content_type: str, body: bytes) -> None:
+    async def put_private(self, *, key: str, content_type: str, body: bytes | BinaryIO) -> None:
         """Server-side write only; research raw captures never receive browser grants."""
         try:
             await asyncio.to_thread(

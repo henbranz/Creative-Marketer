@@ -72,6 +72,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/assembly/jobs/{job_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Job */
+    get: operations["get_job_v1_assembly_jobs__job_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/assembly/plans/{plan_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Plan */
+    get: operations["get_plan_v1_assembly_plans__plan_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/assets": {
     parameters: {
       query?: never;
@@ -296,6 +330,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/final-creatives/{final_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Final */
+    get: operations["get_final_v1_final_creatives__final_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/final-creatives/{final_id}/approve-publishing": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Approve */
+    post: operations["approve_v1_final_creatives__final_id__approve_publishing_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/final-creatives/{final_id}/reject": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reject */
+    post: operations["reject_v1_final_creatives__final_id__reject_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/knowledge/projection": {
     parameters: {
       query?: never;
@@ -398,6 +483,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/production/plans/{plan_id}/assembly-plans": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Plans */
+    get: operations["list_plans_v1_production_plans__plan_id__assembly_plans_get"];
+    put?: never;
+    /** Create Plan */
+    post: operations["create_plan_v1_production_plans__plan_id__assembly_plans_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/production/plans/{plan_id}/assembly-readiness": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Readiness */
+    get: operations["readiness_v1_production_plans__plan_id__assembly_readiness_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/production/plans/{plan_id}/jobs": {
     parameters: {
       query?: never;
@@ -426,6 +546,23 @@ export interface paths {
     put?: never;
     /** Reject */
     post: operations["reject_v1_production_plans__plan_id__reject_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/production/shots/{shot_id}/manual-source": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Manual Source */
+    put: operations["manual_source_v1_production_shots__shot_id__manual_source_put"];
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -897,6 +1034,112 @@ export interface components {
       /** Idempotency Key */
       idempotency_key: string;
     };
+    /** AssemblyItemResponse */
+    AssemblyItemResponse: {
+      /** Audio Behavior */
+      audio_behavior: string;
+      /** Fit Mode */
+      fit_mode: string;
+      /** Generation Segment Id */
+      generation_segment_id: string | null;
+      /** Item Key */
+      item_key: string;
+      /** Ordinal */
+      ordinal: number;
+      /** Production Shot Ids */
+      production_shot_ids: string[];
+      /** Production Shot Keys */
+      production_shot_keys: string[];
+      /**
+       * Source Asset Id
+       * Format: uuid
+       */
+      source_asset_id: string;
+      /** Source Kind */
+      source_kind: string;
+      /** Source Media Kind */
+      source_media_kind: string;
+      /** Timeline Duration Ms */
+      timeline_duration_ms: number;
+      /** Timeline Start Ms */
+      timeline_start_ms: number;
+      /** Transition In */
+      transition_in: string;
+      /** Transition Out */
+      transition_out: string;
+    };
+    /** AssemblyJobResponse */
+    AssemblyJobResponse: {
+      /**
+       * Assembly Plan Id
+       * Format: uuid
+       */
+      assembly_plan_id: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /** Final Creative Id */
+      final_creative_id: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Output Asset Id */
+      output_asset_id: string | null;
+      /** Renderer */
+      renderer: string | null;
+      /** Renderer Version */
+      renderer_version: string | null;
+      /** Status */
+      status: string;
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
+    /** AssemblyPlanResponse */
+    AssemblyPlanResponse: {
+      /** Captions */
+      captions: components["schemas"]["CaptionResponse"][];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Items */
+      items: components["schemas"]["AssemblyItemResponse"][];
+      job: components["schemas"]["AssemblyJobResponse"];
+      /** Overlays */
+      overlays: components["schemas"]["OverlayResponse"][];
+      /**
+       * Production Plan Id
+       * Format: uuid
+       */
+      production_plan_id: string;
+      /** Render Profile Key */
+      render_profile_key: string;
+      /** Render Profile Version */
+      render_profile_version: number;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Timeline Duration Ms */
+      timeline_duration_ms: number;
+    };
+    /** AssemblyReadinessResponse */
+    AssemblyReadinessResponse: {
+      /** Ready */
+      ready: boolean;
+      /** Sources */
+      sources: components["schemas"]["ReadinessItemResponse"][];
+      /** Status */
+      status: string;
+    };
     /** AssetCreate */
     AssetCreate: {
       /** Allowed Uses */
@@ -1331,6 +1574,17 @@ export interface components {
       /** Why Choose Us */
       why_choose_us?: string[];
     };
+    /** CaptionResponse */
+    CaptionResponse: {
+      /** End Ms */
+      end_ms: number;
+      /** Kind */
+      kind: string;
+      /** Start Ms */
+      start_ms: number;
+      /** Text */
+      text: string;
+    };
     /**
      * ChannelIntent
      * @enum {string}
@@ -1647,6 +1901,68 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** FinalCreativeResponse */
+    FinalCreativeResponse: {
+      /**
+       * Assembly Plan Id
+       * Format: uuid
+       */
+      assembly_plan_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Creative Concept Id
+       * Format: uuid
+       */
+      creative_concept_id: string;
+      /** Decision State */
+      decision_state: string | null;
+      /** Duration Ms */
+      duration_ms: number;
+      /** Fps */
+      fps: number;
+      /** Has Audio */
+      has_audio: boolean;
+      /** Height */
+      height: number;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Output Asset Id
+       * Format: uuid
+       */
+      output_asset_id: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /**
+       * Production Plan Id
+       * Format: uuid
+       */
+      production_plan_id: string;
+      /** Render Profile Key */
+      render_profile_key: string;
+      /** Render Profile Version */
+      render_profile_version: number;
+      /** Renderer */
+      renderer: string;
+      /** Renderer Version */
+      renderer_version: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Source Count */
+      source_count: number;
+      /** Width */
+      width: number;
+    };
     /** FullProjectionResponse */
     FullProjectionResponse: {
       /** Edges */
@@ -1719,11 +2035,32 @@ export interface components {
       /** Schema Version */
       schema_version: number;
     };
+    /** ManualSourceWrite */
+    ManualSourceWrite: {
+      /**
+       * Asset Id
+       * Format: uuid
+       */
+      asset_id: string;
+    };
     /**
      * MediaKind
      * @enum {string}
      */
     MediaKind: "IMAGE" | "VIDEO";
+    /** OverlayResponse */
+    OverlayResponse: {
+      /** End Ms */
+      end_ms: number;
+      /** Position */
+      position: string;
+      /** Start Ms */
+      start_ms: number;
+      /** Style Token */
+      style_token: string;
+      /** Text */
+      text: string;
+    };
     /** ProducerRunStart */
     ProducerRunStart: {
       /**
@@ -2066,6 +2403,11 @@ export interface components {
     };
     /** ProductionShotResponse */
     ProductionShotResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
       /** Ordinal */
       ordinal: number;
       /** Shot Key */
@@ -2091,6 +2433,13 @@ export interface components {
       has_more: boolean;
       /** Next Cursor */
       next_cursor: string;
+    };
+    /** ReadinessItemResponse */
+    ReadinessItemResponse: {
+      /** Shot Key */
+      shot_key: string;
+      /** Status */
+      status: string;
     };
     /** RecommendedSourceResponse */
     RecommendedSourceResponse: {
@@ -2418,6 +2767,76 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_job_v1_assembly_jobs__job_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        job_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyJobResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_plan_v1_assembly_plans__plan_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        plan_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyPlanResponse"];
         };
       };
       /** @description Validation Error */
@@ -3009,6 +3428,111 @@ export interface operations {
       };
     };
   };
+  get_final_v1_final_creatives__final_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        final_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FinalCreativeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  approve_v1_final_creatives__final_id__approve_publishing_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        final_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FinalCreativeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  reject_v1_final_creatives__final_id__reject_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        final_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FinalCreativeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   full_projection_v1_knowledge_projection_get: {
     parameters: {
       query?: never;
@@ -3214,6 +3738,111 @@ export interface operations {
       };
     };
   };
+  list_plans_v1_production_plans__plan_id__assembly_plans_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        plan_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyPlanResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_plan_v1_production_plans__plan_id__assembly_plans_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        plan_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyPlanResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readiness_v1_production_plans__plan_id__assembly_readiness_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        plan_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyReadinessResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_jobs_v1_production_plans__plan_id__jobs_get: {
     parameters: {
       query?: never;
@@ -3271,6 +3900,45 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ProductionPlanResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  manual_source_v1_production_shots__shot_id__manual_source_put: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        shot_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ManualSourceWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyReadinessResponse"];
         };
       };
       /** @description Validation Error */

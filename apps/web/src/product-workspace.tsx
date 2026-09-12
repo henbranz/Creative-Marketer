@@ -6,11 +6,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   type Asset,
+  type AssemblyPlan,
+  type AssemblyReadiness,
   type AgentRun,
   type Brand,
   type BriefWrite,
   type CreativeConcept,
   type CreativeConceptSet,
+  type FinalCreative,
   catalogApi,
   listText,
   obsidianOpenUrl,
@@ -1295,6 +1298,14 @@ function ProductionPanel({
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [concept, setConcept] = useState<CreativeConcept | null>(null);
+  const [assemblyPlans, setAssemblyPlans] = useState<AssemblyPlan[]>([]);
+  const [assemblyReadiness, setAssemblyReadiness] =
+    useState<AssemblyReadiness | null>(null);
+  const [finalCreative, setFinalCreative] = useState<FinalCreative | null>(
+    null,
+  );
+  const [sourceAssets, setSourceAssets] = useState<Asset[]>([]);
+  const [finalPreview, setFinalPreview] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const refresh = useCallback(async () => {
@@ -1311,10 +1322,26 @@ function ProductionPanel({
         .find((item) => item.decision_state === "APPROVED_FOR_PRODUCTION") ??
         null,
     );
-    setJobs(
-      nextPlans[0]
-        ? await catalogApi.listProductionJobs(session, nextPlans[0].id)
-        : [],
+    if (!nextPlans[0]) {
+      setJobs([]);
+      setAssemblyPlans([]);
+      setAssemblyReadiness(null);
+      setFinalCreative(null);
+      return;
+    }
+    const [nextJobs, readiness, nextAssemblies, assets] = await Promise.all([
+      catalogApi.listProductionJobs(session, nextPlans[0].id),
+      catalogApi.getAssemblyReadiness(session, nextPlans[0].id),
+      catalogApi.listAssemblyPlans(session, nextPlans[0].id),
+      catalogApi.listAssets(session, workspace.product.id),
+    ]);
+    setJobs(nextJobs);
+    setAssemblyReadiness(readiness);
+    setAssemblyPlans(nextAssemblies);
+    setSourceAssets(assets);
+    const finalId = nextAssemblies[0]?.job.final_creative_id;
+    setFinalCreative(
+      finalId ? await catalogApi.getFinalCreative(session, finalId) : null,
     );
   }, [session, workspace.product.id]);
   useEffect(() => {
@@ -1324,13 +1351,17 @@ function ProductionPanel({
     );
   }, [refresh]);
   useEffect(() => {
-    const active = jobs.some((job) =>
-      ["READY", "STARTING", "PROCESSING", "IMPORTING"].includes(job.status),
-    );
+    const active =
+      jobs.some((job) =>
+        ["READY", "STARTING", "PROCESSING", "IMPORTING"].includes(job.status),
+      ) ||
+      ["PENDING", "READY", "RENDERING", "IMPORTING"].includes(
+        assemblyPlans[0]?.job.status ?? "",
+      );
     if (!active) return;
     const timer = window.setInterval(() => void refresh(), 4000);
     return () => window.clearInterval(timer);
-  }, [jobs, refresh]);
+  }, [assemblyPlans, jobs, refresh]);
   useEffect(() => {
     for (const job of jobs) {
       if (!job.output_asset_id || previews[job.id]) continue;
@@ -1341,6 +1372,12 @@ function ProductionPanel({
         );
     }
   }, [jobs, previews, session]);
+  useEffect(() => {
+    if (!finalCreative || finalPreview) return;
+    void catalogApi
+      .downloadAsset(session, finalCreative.output_asset_id)
+      .then((grant) => setFinalPreview(grant.url));
+  }, [finalCreative, finalPreview, session]);
   const plan = plans[0];
   const producerRun = runs[0];
   const act = async (operation: () => Promise<unknown>) => {
@@ -1680,6 +1717,253 @@ function ProductionPanel({
           ) : (
             <p>No media jobs started.</p>
           )}
+          <div className="final-assembly">
+            <p className="eyebrow">Deterministic editing</p>
+            <h3>Final Assembly</h3>
+            <p>
+              Source readiness:{" "}
+              <strong>
+                {assemblyReadiness?.status.replaceAll("_", " ") ?? "Checking"}
+              </strong>
+            </p>
+            <div className="concept-grid">
+              {plan.scenes.flatMap((scene) =>
+                scene.shots.map((shot) => {
+                  const source = assemblyReadiness?.sources.find(
+                    (item) => item.shot_key === shot.shot_key,
+                  );
+                  return (
+                    <article
+                      key={`assembly-${shot.id}`}
+                      className="concept-card"
+                    >
+                      <strong>{shot.shot_key.replaceAll("_", " ")}</strong>
+                      <p>{source?.status.replaceAll("_", " ") ?? "Checking"}</p>
+                      {shot.source_strategy === "MANUAL_CAPTURE" &&
+                        source?.status === "MISSING_MANUAL_MEDIA" &&
+                        workspace.product.can_edit && (
+                          <label>
+                            Manual footage required
+                            <select
+                              defaultValue=""
+                              disabled={busy}
+                              onChange={(event) => {
+                                const assetId = event.currentTarget.value;
+                                if (assetId)
+                                  void act(() =>
+                                    catalogApi.bindManualSource(
+                                      session,
+                                      shot.id,
+                                      assetId,
+                                    ),
+                                  );
+                              }}
+                            >
+                              <option value="">Select Asset</option>
+                              {sourceAssets
+                                .filter(
+                                  (asset) =>
+                                    asset.kind === "video" &&
+                                    asset.status === "ready" &&
+                                    asset.rights_status === "confirmed" &&
+                                    asset.allowed_uses.includes(
+                                      "generation_input",
+                                    ),
+                                )
+                                .map((asset) => (
+                                  <option key={asset.id} value={asset.id}>
+                                    {asset.original_filename}
+                                  </option>
+                                ))}
+                            </select>
+                          </label>
+                        )}
+                    </article>
+                  );
+                }),
+              )}
+            </div>
+            {assemblyPlans[0] && (
+              <>
+                <h4>Assembly timeline</h4>
+                <ol className="timeline-list">
+                  {assemblyPlans[0].items.map((item) => (
+                    <li key={item.item_key}>
+                      <strong>
+                        {(item.timeline_start_ms / 1000).toFixed(1)}s
+                      </strong>{" "}
+                      {item.production_shot_keys.join(", ")} ·{" "}
+                      {item.source_kind.replaceAll("_", " ").toLowerCase()} ·{" "}
+                      {(item.timeline_duration_ms / 1000).toFixed(1)}s ·{" "}
+                      {item.transition_out} · Audio{" "}
+                      {item.audio_behavior.toLowerCase()}
+                    </li>
+                  ))}
+                </ol>
+                <p>
+                  {assemblyPlans[0].overlays.length} overlays ·{" "}
+                  {assemblyPlans[0].captions.length} scripted captions ·{" "}
+                  {assemblyPlans[0].render_profile_key}
+                </p>
+                <p>
+                  Render:{" "}
+                  <strong>
+                    {(
+                      {
+                        READY: "Preparing",
+                        RENDERING: "Rendering",
+                        IMPORTING: "Importing",
+                        SUCCEEDED: "Ready",
+                        FAILED: "Failed",
+                      } as Record<string, string>
+                    )[assemblyPlans[0].job.status] ??
+                      assemblyPlans[0].job.status}
+                  </strong>
+                </p>
+                {obsidianVaultName && (
+                  <div className="concept-actions">
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void obsidianOpenUrl(
+                          obsidianVaultName,
+                          "assembly_plan",
+                          assemblyPlans[0]!.id,
+                        ).then((url) => window.location.assign(url))
+                      }
+                    >
+                      Open Assembly Plan in Obsidian
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void obsidianOpenUrl(
+                          obsidianVaultName,
+                          "assembly_job",
+                          assemblyPlans[0]!.job.id,
+                        ).then((url) => window.location.assign(url))
+                      }
+                    >
+                      Open Assembly Job in Obsidian
+                    </button>
+                  </div>
+                )}
+                {assemblyPlans[0].job.failure_code && (
+                  <p className="error">{assemblyPlans[0].job.failure_code}</p>
+                )}
+              </>
+            )}
+            {workspace.product.can_edit &&
+              assemblyReadiness?.ready &&
+              !assemblyPlans.length && (
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(() =>
+                      catalogApi.createAssemblyPlan(session, plan.id),
+                    )
+                  }
+                >
+                  Assemble Final Creative
+                </button>
+              )}
+            {finalCreative && (
+              <article className="concept-card final-preview">
+                <p className="eyebrow">Assembled final creative</p>
+                <h4>Publish-ready candidate</h4>
+                {finalPreview && (
+                  <video
+                    className="asset-preview"
+                    src={finalPreview}
+                    controls
+                  />
+                )}
+                <p>
+                  {(finalCreative.duration_ms / 1000).toFixed(1)}s · 9:16 ·{" "}
+                  {finalCreative.width}×{finalCreative.height} ·{" "}
+                  {finalCreative.fps} FPS · Audio:{" "}
+                  {finalCreative.has_audio ? "source audio" : "none"}
+                </p>
+                <p>
+                  {finalCreative.render_profile_key} v
+                  {finalCreative.render_profile_version} ·{" "}
+                  {finalCreative.source_count} sources ·{" "}
+                  {finalCreative.decision_state?.replaceAll("_", " ") ??
+                    "Awaiting review"}
+                </p>
+                <div className="concept-actions">
+                  <button className="secondary" onClick={onOpenAssets}>
+                    Open Final Asset
+                  </button>
+                  {workspace.product.can_edit && (
+                    <>
+                      <button
+                        className="primary"
+                        disabled={busy}
+                        onClick={() =>
+                          void act(() =>
+                            catalogApi.approveFinalCreative(
+                              session,
+                              finalCreative.id,
+                            ),
+                          )
+                        }
+                      >
+                        Approve for publishing
+                      </button>
+                      <button
+                        className="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void act(() =>
+                            catalogApi.rejectFinalCreative(
+                              session,
+                              finalCreative.id,
+                            ),
+                          )
+                        }
+                      >
+                        Reject
+                      </button>
+                    </>
+                  )}
+                  {obsidianVaultName && (
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void obsidianOpenUrl(
+                          obsidianVaultName,
+                          "final_creative",
+                          finalCreative.id,
+                        ).then((url) => window.location.assign(url))
+                      }
+                    >
+                      Open in Obsidian
+                    </button>
+                  )}
+                  {obsidianVaultName && (
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void obsidianOpenUrl(
+                          obsidianVaultName,
+                          "asset",
+                          finalCreative.output_asset_id,
+                        ).then((url) => window.location.assign(url))
+                      }
+                    >
+                      Open Final Asset in Obsidian
+                    </button>
+                  )}
+                </div>
+                <small>
+                  Approval accepts this exact immutable render as a publishing
+                  candidate. It does not publish anything.
+                </small>
+              </article>
+            )}
+          </div>
         </section>
       ) : (
         <section className="empty-panel">

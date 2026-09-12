@@ -477,6 +477,7 @@ class AssetLineage:
             "SOURCE_IMAGE",
             "SOURCE_VIDEO",
             "DERIVED_FROM",
+            "ASSEMBLED_FROM",
         }
         if self.parent_asset_id == self.child_asset_id or self.relationship_type not in allowed:
             raise ValueError("asset lineage is invalid")

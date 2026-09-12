@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "assembly.plan.created.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assembly_plan_id", "assembly_job_id", "assembly_plan_digest"],
+  "properties": {
+    "assembly_plan_id": {"type": "string", "format": "uuid"},
+    "assembly_job_id": {"type": "string", "format": "uuid"},
+    "assembly_plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

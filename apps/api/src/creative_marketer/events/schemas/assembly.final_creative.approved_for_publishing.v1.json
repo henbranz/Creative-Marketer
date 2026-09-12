@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "assembly.final_creative.approved_for_publishing.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["final_creative_id", "final_creative_digest", "output_asset_id", "output_asset_digest", "decision_id"],
+  "properties": {
+    "final_creative_id": {"type": "string", "format": "uuid"},
+    "final_creative_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "output_asset_id": {"type": "string", "format": "uuid"},
+    "output_asset_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "decision_id": {"type": "string", "format": "uuid"}
+  }
+}

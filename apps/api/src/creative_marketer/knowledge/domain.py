@@ -30,6 +30,10 @@ class KnowledgeNodeType(StrEnum):
     PRODUCTION_SHOT = "production_shot"
     GENERATION_SEGMENT = "generation_segment"
     GENERATION_JOB = "generation_job"
+    ASSEMBLY_PLAN = "assembly_plan"
+    ASSEMBLY_JOB = "assembly_job"
+    FINAL_CREATIVE = "final_creative"
+    FINAL_CREATIVE_DECISION = "final_creative_decision"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

@@ -25,6 +25,7 @@ from creative_marketer.infrastructure.temporal.worker import create_worker
 from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
+    FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
     ResearcherWorkflow,
     ScheduledPublicationWorkflow,
@@ -34,6 +35,7 @@ from creative_marketer.tool_execution.domain import ToolInvocationRequest, Trust
 from creative_marketer.tool_governance.domain import RiskLevel
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
+    FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
     GenerationState,
@@ -154,6 +156,19 @@ class FakeGenerationService:
         if state is GenerationState.FAILED:
             return GenerationPollResult(state, failure_code="CONTENT_REJECTED")
         return GenerationPollResult(state)
+
+
+class FakeAssemblyExecutor:
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = 0
+        self.final_id = uuid4()
+
+    async def execute(self, tenant_id, job_id):
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return SimpleNamespace(id=self.final_id)
 
 
 async def wait_for_status(handle, expected: str) -> None:
@@ -335,6 +350,59 @@ async def test_generation_terminal_failure_and_deadline(temporal_environment):
         )
     assert deadline.state is WorkflowState.EXPIRED
     assert deadline.reason_code == "GENERATION_DEADLINE_EXCEEDED"
+
+
+@pytest.mark.asyncio
+async def test_final_assembly_workflow_executes_once_and_replays(temporal_environment):
+    executor = FakeAssemblyExecutor()
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), assembly_jobs=executor
+    )
+    request = FinalCreativeAssemblyWorkflowInput(
+        str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+    )
+    async with create_worker(temporal_environment.client, activities):
+        handle = await temporal_environment.client.start_workflow(
+            FinalCreativeAssemblyWorkflow.run,
+            request,
+            id="assembly-" + uuid4().hex,
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        result = await handle.result()
+        history = await handle.fetch_history()
+    assert result.status == "SUCCEEDED"
+    assert result.final_creative_id == str(executor.final_id)
+    assert executor.calls == 1
+    replay = await Replayer(workflows=[FinalCreativeAssemblyWorkflow]).replay_workflow(history)
+    assert replay.replay_failure is None
+
+
+@pytest.mark.asyncio
+async def test_final_assembly_activity_maps_controlled_and_unavailable_failures() -> None:
+    request = FinalCreativeAssemblyWorkflowInput(
+        str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+    )
+    unavailable = TemporalActivities(FakeGatewayService(), FakeGenerationService())
+    with pytest.raises(ApplicationError, match="not composed"):
+        await unavailable.assemble_final_creative(request)
+
+    controlled_error = RuntimeError("source rights changed")
+    controlled_error.code = "ASSEMBLY_SOURCE_RIGHTS_CHANGED"  # type: ignore[attr-defined]
+    controlled = TemporalActivities(
+        FakeGatewayService(),
+        FakeGenerationService(),
+        assembly_jobs=FakeAssemblyExecutor(controlled_error),
+    )
+    result = await controlled.assemble_final_creative(request)
+    assert result.status == "FAILED" and result.failure_code == controlled_error.code  # type: ignore[attr-defined]
+
+    transient = TemporalActivities(
+        FakeGatewayService(),
+        FakeGenerationService(),
+        assembly_jobs=FakeAssemblyExecutor(RuntimeError("renderer unavailable")),
+    )
+    with pytest.raises(ApplicationError, match="assembly activity failed"):
+        await transient.assemble_final_creative(request)
 
 
 @pytest.mark.asyncio

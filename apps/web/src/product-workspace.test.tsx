@@ -369,6 +369,7 @@ const productionPlan: ProductionPlan = {
       on_screen_text: "Look",
       shots: [
         {
+          id: "a1500000-0000-0000-0000-000000000001",
           shot_key: "shot_one",
           ordinal: 1,
           source_strategy: "GENERATE_IMAGE",
@@ -515,6 +516,12 @@ function mocks() {
   vi.spyOn(catalogApi, "listProductionPlans").mockResolvedValue([]);
   vi.spyOn(catalogApi, "listProducerRuns").mockResolvedValue([]);
   vi.spyOn(catalogApi, "listProductionJobs").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "getAssemblyReadiness").mockResolvedValue({
+    status: "MISSING_GENERATED_MEDIA",
+    ready: false,
+    sources: [],
+  });
+  vi.spyOn(catalogApi, "listAssemblyPlans").mockResolvedValue([]);
   vi.spyOn(catalogApi, "downloadAsset").mockResolvedValue({
     url: "https://assets.example.test/signed-preview",
     expires_at: product.updated_at,

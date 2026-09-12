@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     allow_billable_media: bool = False
     media_workload_actor_id: UUID | None = None
     media_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
+    assembly_workload_actor_id: UUID | None = None
+    assembly_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
     production_max_plan_cost_usd: Decimal = Field(default=Decimal("100"), gt=0)
     agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
@@ -102,6 +104,17 @@ class Settings(BaseSettings):
             )
         ):
             raise ValueError("deployed media workers require deployment-issued workload identity")
+        if (
+            self.app_env in {"staging", "production"}
+            and self.assembly_workload_id is not None
+            and (
+                self.assembly_workload_actor_id is None
+                or self.assembly_workload_id.startswith("local-")
+            )
+        ):
+            raise ValueError(
+                "deployed assembly workers require deployment-issued workload identity"
+            )
         if self.object_storage_backend == "s3" and self.app_env in {"staging", "production"}:
             if self.object_storage_endpoint_url.host in {"localhost", "127.0.0.1"}:
                 raise ValueError("deployed S3 storage cannot use a loopback endpoint")

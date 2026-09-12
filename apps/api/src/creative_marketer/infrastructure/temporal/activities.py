@@ -16,6 +16,8 @@ from creative_marketer.tool_execution.domain import (
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionActivityResult,
     AgentExecutionWorkflowInput,
+    FinalCreativeAssemblyResult,
+    FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
     GenerationState,
@@ -50,6 +52,14 @@ class ProductionJobExecutor(Protocol):
     async def execute(
         self, tenant_id: UUID, plan_id: UUID, job_id: UUID
     ) -> MediaProductionJobResult: ...
+
+
+class FinalAssemblyResult(Protocol):
+    id: UUID
+
+
+class FinalAssemblyExecutor(Protocol):
+    async def execute(self, tenant_id: UUID, job_id: UUID) -> FinalAssemblyResult: ...
 
 
 @dataclass(slots=True)
@@ -100,6 +110,7 @@ class TemporalActivities:
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
     agent_runtime: AgentRunService | None = None
     production_jobs: ProductionJobExecutor | None = None
+    assembly_jobs: FinalAssemblyExecutor | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -239,3 +250,29 @@ class TemporalActivities:
                 raise ApplicationError(
                     "generation activity transient failure", type="TRANSIENT"
                 ) from error
+
+    @activity.defn(name="workflow.assemble_final_creative")
+    async def assemble_final_creative(
+        self, request: FinalCreativeAssemblyWorkflowInput
+    ) -> FinalCreativeAssemblyResult:
+        if self.assembly_jobs is None:
+            raise ApplicationError(
+                "Assembly executor is not composed",
+                type="ASSEMBLY_UNAVAILABLE",
+                non_retryable=True,
+            )
+        try:
+            value = await self.assembly_jobs.execute(
+                UUID(request.tenant_id), UUID(request.assembly_job_id)
+            )
+            final_id = value.id
+        except Exception as error:
+            code = str(getattr(error, "code", "ASSEMBLY_RENDER_FAILED"))
+            if code in {
+                "ASSEMBLY_SOURCE_RIGHTS_CHANGED",
+                "ASSEMBLY_SOURCE_DIGEST_MISMATCH",
+                "ASSEMBLY_OUTPUT_INVALID",
+            }:
+                return FinalCreativeAssemblyResult(request.assembly_job_id, None, "FAILED", code)
+            raise ApplicationError("assembly activity failed", type=code) from error
+        return FinalCreativeAssemblyResult(request.assembly_job_id, str(final_id), "SUCCEEDED")

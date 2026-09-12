@@ -24,12 +24,14 @@ from creative_marketer.agent_runtime.application import (
     initial_researcher_route,
 )
 from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
+from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.catalog.application import CatalogService
 from creative_marketer.catalog.asset_application import AssetService
 from creative_marketer.catalog.asset_domain import (
     AllowedUse,
     AssetKind,
     AssetRole,
+    AssetStatus,
     RightsStatus,
 )
 from creative_marketer.catalog.domain import (
@@ -68,6 +70,9 @@ from creative_marketer.infrastructure.database.agent_governance_uow import (
 from creative_marketer.infrastructure.database.agent_runtime_uow import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.assembly_uow import (
+    SqlAlchemyAssemblyUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.catalog_uow import (
     SqlAlchemyCatalogUnitOfWorkFactory,
 )
@@ -101,6 +106,7 @@ from creative_marketer.permission_governance.domain import (
 )
 from creative_marketer.production.application import initial_producer_route
 from creative_marketer.production.domain import ProductionPlanningRequest
+from creative_marketer.production.infrastructure.fakes import DEMO_MP4
 from creative_marketer.production.tool_contracts import media_tool_contracts
 from creative_marketer.research.application import FetchedPage, ResearchService
 from creative_marketer.research.domain import ResearchCategory
@@ -218,9 +224,9 @@ def _creative_output(invocation: object) -> dict[str, object]:
                 "strategic_rationale": "Grounded in the captured commuter evidence.",
                 "target_audience": "Busy commuters",
                 "hook": {
-                    "spoken_or_voiceover": "Built for the commute.",
+                    "spoken_or_voiceover": f"Built for commute routine {index + 1}.",
                     "on_screen_text": "One bottle. Every day.",
-                    "visual_open": "Bottle lands beside a train pass.",
+                    "visual_open": f"Bottle reveal variation {index + 1} beside a train pass.",
                 },
                 "estimated_duration_seconds": 15,
                 "scenes": [
@@ -235,7 +241,12 @@ def _creative_output(invocation: object) -> dict[str, object]:
                         "asset_requirements": [],
                     }
                     for ordinal, purpose, direction, voice in (
-                        (1, "Hook", "Fast tabletop reveal", "Built for real routines."),
+                        (
+                            1,
+                            "Hook",
+                            f"Fast tabletop reveal variation {index + 1}",
+                            "Built for real routines.",
+                        ),
                         (2, "Proof", "Close product detail", "Durable and reusable."),
                         (3, "Action", "Product exits frame", "Take it everywhere."),
                     )
@@ -482,7 +493,6 @@ async def run() -> None:
             geographical_restrictions=("None",),
         )
         await catalog.create_product(context, product, profile, brief)
-        await catalog.create_snapshot(context, PRODUCT_ID)
         assets = AssetService(catalog_factory, store)
         for role in (AssetRole.PRODUCT_HERO, AssetRole.PRODUCT_DETAIL):
             await assets.ingest_generated(
@@ -507,12 +517,74 @@ async def run() -> None:
             display_name="LOCAL DEMO audience evidence",
             category=ResearchCategory.MARKET_REFERENCE,
         )
+    asset_service = AssetService(catalog_factory, store)
+    current_images = await asset_service.list(
+        context, product_id=PRODUCT_ID, kind=AssetKind.IMAGE, status=AssetStatus.READY
+    )
+    current_roles = {item.role for item in current_images}
+    for role in (AssetRole.PRODUCT_HERO, AssetRole.PRODUCT_DETAIL):
+        if role not in current_roles:
+            await asset_service.ingest_generated(
+                context,
+                brand_id=BRAND_ID,
+                product_id=PRODUCT_ID,
+                kind=AssetKind.IMAGE,
+                role=role,
+                content=PNG,
+                media_type="image/png",
+                rights_status=RightsStatus.CONFIRMED,
+                allowed_uses=(AllowedUse.INTERNAL_ANALYSIS, AllowedUse.GENERATION_INPUT),
+                original_filename=f"LOCAL-DEMO-{role.value}.png",
+            )
+    current_images = await asset_service.list(
+        context, product_id=PRODUCT_ID, kind=AssetKind.IMAGE, status=AssetStatus.READY
+    )
+    async with catalog_factory(context) as uow:
+        latest_snapshot = await uow.snapshots.latest(PRODUCT_ID)
+    raw_snapshot_assets = (
+        latest_snapshot.content.get("assets", ()) if latest_snapshot is not None else ()
+    )
+    snapshot_assets = raw_snapshot_assets if isinstance(raw_snapshot_assets, (list, tuple)) else ()
+    snapshot_asset_ids = {
+        str(item.get("asset_id")) for item in snapshot_assets if isinstance(item, dict)
+    }
+    current_image_ids = {str(item.id) for item in current_images}
+    if latest_snapshot is None or not current_image_ids.issubset(snapshot_asset_ids):
+        await catalog.create_snapshot(context, PRODUCT_ID)
+    research = ResearchService(SqlAlchemyResearchUnitOfWorkFactory(sessions), DemoFetcher(), store)
+    if not await research.list_sources(context, PRODUCT_ID):
+        await research.create_source(
+            context,
+            product_id=PRODUCT_ID,
+            url="https://example.com/local-demo-evidence",
+            display_name="LOCAL DEMO audience evidence",
+            category=ResearchCategory.MARKET_REFERENCE,
+        )
+    videos = await asset_service.list(
+        context, product_id=PRODUCT_ID, kind=AssetKind.VIDEO, status=AssetStatus.READY
+    )
+    manual_asset = (
+        videos[0]
+        if videos
+        else await asset_service.ingest_generated(
+            context,
+            brand_id=BRAND_ID,
+            product_id=PRODUCT_ID,
+            kind=AssetKind.VIDEO,
+            role=AssetRole.PRODUCTION_REFERENCE,
+            content=DEMO_MP4,
+            media_type="video/mp4",
+            rights_status=RightsStatus.CONFIRMED,
+            allowed_uses=(AllowedUse.INTERNAL_ANALYSIS, AllowedUse.GENERATION_INPUT),
+            original_filename="LOCAL-DEMO-manual-source.mp4",
+        )
+    )
     registry = SqlAlchemyAgentRegistryUnitOfWorkFactory(sessions)
     await _agent(registry, "researcher", "researcher", researcher_configuration())
     await _agent(
-        registry, "creative_strategist", "creative-strategist", creative_strategist_configuration()
+        registry, "creative_strategist", "creative_strategist", creative_strategist_configuration()
     )
-    producer_id = await _agent(registry, "producer", "astra-producer", producer_configuration())
+    producer_id = await _agent(registry, "producer", "astra_producer", producer_configuration())
     runtime = AgentRunService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
         ModelRouter(
@@ -586,7 +658,7 @@ async def run() -> None:
             context,
             product_id=PRODUCT_ID,
             request=CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
-            idempotency_key="local-demo-creative-v1",
+            idempotency_key="local-demo-creative-v2",
         )
         await runtime.execute(TENANT_ID, pending.id)
         sets = await creative.list_sets(context, PRODUCT_ID)
@@ -610,6 +682,23 @@ async def run() -> None:
             idempotency_key="local-demo-production-v1",
         )
         await runtime.execute(TENANT_ID, pending.id)
+        async with production_factory(TENANT_ID) as uow:
+            plans = await uow.production.list_plans(PRODUCT_ID)
+    assembly = AssemblyService(SqlAlchemyAssemblyUnitOfWorkFactory(sessions))
+    async with SqlAlchemyAssemblyUnitOfWorkFactory(sessions)(TENANT_ID) as uow:
+        source = await uow.assembly.production_input(plans[0].plan.id)
+    if source is not None:
+        manual_shot = next(
+            (
+                shot
+                for scene in source.scenes
+                for shot in scene.shots
+                if shot.source_strategy == "MANUAL_CAPTURE"
+            ),
+            None,
+        )
+        if manual_shot is not None and manual_shot.manual_source is None:
+            await assembly.bind_manual_source(context, manual_shot.id, manual_asset.id)
     __import__("os").environ["BOOTSTRAP_PLATFORM_ACTOR_ID"] = str(
         uuid5(NAMESPACE_URL, "creative-marketer:local-demo:platform")
     )

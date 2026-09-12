@@ -65,7 +65,11 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE knowledge_projection.projection_changes, "
+                "TRUNCATE assembly.final_creative_decisions, assembly.final_creatives, "
+                "assembly.assembly_jobs, assembly.manual_source_bindings, "
+                "assembly.overlay_instructions, assembly.caption_cues, "
+                "assembly.assembly_items, assembly.assembly_plans, "
+                "knowledge_projection.projection_changes, "
                 "knowledge_projection.projection_nodes, "
                 "catalog.asset_lineage, production.media_budget_usage, "
                 "production.generation_jobs, production.plan_decisions, "

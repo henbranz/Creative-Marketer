@@ -757,6 +757,7 @@ def build_creative_model_context(
         preparation.product_snapshot, preparation.research_snapshot, request
     )
     sections: dict[str, object] = {
+        "research_snapshot_id": str(preparation.research_snapshot.id),
         "product_brand_data": _compact_json(creative.product_context),
         "available_assets": [dict(item) for item in creative.asset_manifest],
         "research_findings": [dict(item) for item in creative.research_findings],

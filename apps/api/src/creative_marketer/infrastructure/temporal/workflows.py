@@ -17,6 +17,8 @@ with workflow.unsafe.imports_passed_through():
     from creative_marketer.workflow_orchestration.contracts import (
         AgentExecutionActivityResult,
         AgentExecutionWorkflowInput,
+        FinalCreativeAssemblyResult,
+        FinalCreativeAssemblyWorkflowInput,
         GenerationPollResult,
         GenerationStartResult,
         GenerationState,
@@ -240,6 +242,37 @@ class MediaProductionWorkflow:
                 retry_policy=GENERATION_RETRY_POLICY,
             ),
         )
+
+
+@workflow.defn(name="FinalCreativeAssemblyWorkflow")
+class FinalCreativeAssemblyWorkflow:
+    """IDs-only deterministic assembly coordinator."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: FinalCreativeAssemblyWorkflowInput) -> FinalCreativeAssemblyResult:
+        self._state = WorkflowState.EXECUTING
+        result = cast(
+            FinalCreativeAssemblyResult,
+            await workflow.execute_activity(
+                "workflow.assemble_final_creative",
+                request,
+                result_type=FinalCreativeAssemblyResult,
+                start_to_close_timeout=timedelta(minutes=20),
+                schedule_to_close_timeout=timedelta(minutes=30),
+                retry_policy=GENERATION_RETRY_POLICY,
+            ),
+        )
+        self._state = (
+            WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
+        )
+        return result
 
 
 @workflow.defn(name="ScheduledPublicationWorkflow")

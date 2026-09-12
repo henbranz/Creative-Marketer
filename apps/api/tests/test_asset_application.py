@@ -306,10 +306,10 @@ async def test_generated_media_is_validated_privately_ingested_and_evented() -> 
     assert generated.origin is AssetOrigin.GENERATED
     assert generated.status is AssetStatus.READY
     assert generated.object_key and generated.object_key.startswith(
-        f"tenants/{context.tenant_id}/assets/{generated.id}/generated/"
+        f"tenants/{context.tenant_id}/assets/{generated.id}/objects/"
     )
     assert store.private_objects == [(generated.object_key, "image/png", store.content)]
-    assert uow.outbox.values[-1].event_type == "catalog.asset.ready.v1"
+    assert uow.outbox.values[-1].event_type == "catalog.asset.ready.v2"
     assert uow.commits == 1
 
     with pytest.raises(CatalogValidationError):

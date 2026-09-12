@@ -39,6 +39,7 @@ class AssetRole(StrEnum):
     PRODUCTION_REFERENCE = "production_reference"
     GENERATED_SHOT = "generated_shot"
     GENERATED_FRAME = "generated_frame"
+    FINAL_CREATIVE = "final_creative"
     OTHER = "other"
 
 

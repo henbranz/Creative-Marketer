@@ -59,6 +59,14 @@ GenerationAuthority, binary validation, private Asset import, and lineage path. 
 components are deterministic image/video providers; the UI labels their outputs `Local demo
 provider`. Keep this worker running.
 
+In another terminal, start the deterministic assembly worker:
+
+```bash
+make assembly-worker
+```
+
+Its dedicated container supplies FFmpeg and Noto fonts. It makes no provider or model calls.
+
 ## 5. Open the Product Workspace
 
 1. Open <http://localhost:3000>.
@@ -72,6 +80,10 @@ provider`. Keep this worker running.
 9. Watch each Job update independently through Ready, Starting, Generating, Importing, and Ready
    for use. If the worker is absent, Ready honestly says it is waiting for the production worker.
 10. Preview the generated image and playable video through ordinary short-lived Asset grants.
+11. When every shot says Ready, click **Assemble Final Creative** and watch Preparing, Rendering,
+    Importing, and Ready.
+12. Preview the final 1080×1920 MP4 and approve or reject it. Approval is a publishing handoff only;
+    it does not publish.
 
 One failed output does not hide a successful sibling. `Needs operational recovery` means external
 effect or cost is uncertain and is never displayed as zero or automatically retried.
@@ -97,6 +109,10 @@ GenerationJob → Asset provenance. Job changes and generated Assets appear incr
 under `## My Notes`, allow another sync, and verify it remains. Only one watch process may own a
 Vault.
 
+The completed chain continues through AssemblyPlan → AssemblyJob → FinalCreative → final Asset.
+Assembly and final notes live under `Production/Assembly` and `Production/Finals`, and appear in
+both `Production.md` and `Final Creatives.md`.
+
 To enable browser deep links, set `NEXT_PUBLIC_OBSIDIAN_VAULT_NAME` to the Vault's display name before
 building/starting the web app. **Open in Obsidian** then opens the exact stable Product,
 ResearchSnapshot, CreativeConcept, AgentRun, ProductionPlan, Shot, Segment, Job, or Asset note.
@@ -108,6 +124,8 @@ ResearchSnapshot, CreativeConcept, AgentRun, ProductionPlan, Shot, Segment, Job,
 - [ ] Production renders scenes, shots, segments, provider-neutral labels, and nonzero estimates.
 - [ ] Approval creates separate image and video Jobs.
 - [ ] Both fake outputs become private READY Assets and preview in the browser.
+- [ ] Assembly produces one playable 1080×1920 final MP4 with visible text and exact provenance.
+- [ ] Final approval changes only the handoff decision and causes no publishing side effect.
 - [ ] Stopping/restarting the worker resumes a known video operation without a second start.
 - [ ] Obsidian updates incrementally, keeps `My Notes`, and contains no key, prompt, object key, or
   signed URL.

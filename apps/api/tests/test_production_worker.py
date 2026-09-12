@@ -215,7 +215,7 @@ async def test_bridge_marks_success_and_retry_then_requires_publisher_url(monkey
     assert retry_call.kwargs["error_code"] == "PRODUCTION_BRIDGE_UNAVAILABLE"
     assert retry_call.kwargs["error_digest"].startswith("sha256:")
 
-    without_publisher = Settings(database_url=DATABASE)
+    without_publisher = Settings(database_url=DATABASE, event_publisher_database_url=None)
     with pytest.raises(RuntimeError, match="EVENT_PUBLISHER_DATABASE_URL"):
         await _bridge_loop(without_publisher, AsyncMock())
 

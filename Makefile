@@ -3,7 +3,7 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke production-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -66,8 +66,11 @@ media-tools-bootstrap:
 production-worker:
 	cd apps/api && uv run python -m creative_marketer_api.production_worker
 
+assembly-worker:
+	docker compose --profile temporal run --rm assembly-worker
+
 demo-bootstrap:
-	cd apps/api && uv run python scripts/bootstrap_demo.py
+	cd apps/api && DATABASE_URL="$(MIGRATION_DATABASE_URL)" uv run python -m scripts.bootstrap_demo
 
 producer-astra-live-smoke:
 	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)

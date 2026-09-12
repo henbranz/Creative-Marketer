@@ -90,6 +90,12 @@ separate process. Development may derive the labeled local workload identity; st
 must inject `MEDIA_WORKLOAD_ACTOR_ID` and `MEDIA_WORKLOAD_ID`. The worker retains the initiating
 User only as immutable provenance and never impersonates that User.
 
+Final creative rendering runs in the independent `make assembly-worker` container after Temporal
+is available. Its dedicated image contains FFmpeg and Noto fonts; the API and web images do not.
+Development derives a labeled local assembly workload identity. Staging/production assembly worker
+deployments must inject `ASSEMBLY_WORKLOAD_ACTOR_ID` and `ASSEMBLY_WORKLOAD_ID`. See
+`docs/21_FINAL_CREATIVE_ASSEMBLY.md`.
+
 For the complete free local walkthrough, including deterministic identity output and Obsidian watch
 mode, follow [the local product runbook](docs/20_LOCAL_PRODUCT_AND_OBSIDIAN_RUNBOOK.md).
 

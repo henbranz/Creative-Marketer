@@ -14,6 +14,7 @@ from creative_marketer.agent_runtime.application import (
     initial_creative_strategist_route,
     initial_researcher_route,
 )
+from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.catalog.application import CatalogService
 from creative_marketer.catalog.asset_application import AssetService, UnavailableObjectStore
@@ -24,6 +25,7 @@ from creative_marketer.infrastructure.authentication import (
 )
 from creative_marketer.infrastructure.database import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
+    SqlAlchemyAssemblyUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyCreativeUnitOfWorkFactory,
     SqlAlchemyProductionUnitOfWorkFactory,
@@ -52,6 +54,7 @@ from creative_marketer.production.application import initial_media_router, initi
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
 from creative_marketer.research.application import ResearchService
+from creative_marketer_api.assembly_routes import create_assembly_router
 from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
@@ -169,6 +172,7 @@ def create_app(
     agent_runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
     creative_uow = SqlAlchemyCreativeUnitOfWorkFactory(session_factory)
     production_uow = SqlAlchemyProductionUnitOfWorkFactory(session_factory)
+    assembly_uow = SqlAlchemyAssemblyUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -261,6 +265,15 @@ def create_app(
                 )
                 if is_fake
             ),
+        )
+    )
+    application.include_router(
+        create_assembly_router(
+            authenticator,
+            identity_uow,
+            AssemblyService(assembly_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
         )
     )
     application.include_router(

@@ -140,6 +140,26 @@ def test_temporal_sdk_and_workflow_io_are_confined_to_the_temporal_adapter() -> 
         assert forbidden_call not in source
 
 
+def test_final_assembly_keeps_rendering_and_publishing_authority_out_of_domain() -> None:
+    assembly_domain = PRODUCT_SOURCE / "assembly" / "domain.py"
+    assembly_application = PRODUCT_SOURCE / "assembly" / "application.py"
+    renderer = PRODUCT_SOURCE / "assembly" / "infrastructure" / "ffmpeg.py"
+    domain_imports = _imports(assembly_domain) | _imports(assembly_application)
+    assert not domain_imports.intersection(
+        {"asyncio", "subprocess", "sqlalchemy", "temporalio", "requests", "httpx"}
+    )
+    renderer_source = renderer.read_text(encoding="utf-8")
+    assert "create_subprocess_exec(" in renderer_source
+    assert "create_subprocess_shell(" not in renderer_source
+    assert "shell=True" not in renderer_source
+    assert "http://" not in renderer_source and "https://" not in renderer_source
+    application_source = assembly_application.read_text(encoding="utf-8")
+    assert "APPROVED_FOR_PUBLISHING" in application_source
+    assert not any(
+        value in application_source for value in ("publish_post", "social_api", "ad_api")
+    )
+
+
 def test_phase0_has_no_provider_or_agent_framework_dependency() -> None:
     manifests = [
         API_ROOT / "pyproject.toml",
@@ -338,6 +358,15 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "production.generation.completed.v1": (
             "sha256:d3e73260489015012226018034537a3a074741c6123dd25f669cf0a29780f363"
         ),
+        "assembly.plan.created.v1": (
+            "sha256:f6bed697857bb3cef3b107425168b325c47453de96491a68ea38265b36f6e41d"
+        ),
+        "assembly.final_creative.created.v1": (
+            "sha256:c8a5f02894507c514798a33d4b35575d3aeca54dada6da91e5388981fb65223c"
+        ),
+        "assembly.final_creative.approved_for_publishing.v1": (
+            "sha256:83c8afe0b0fff341d461ddd6959c6acedcf14cfbae99ab7622dbe7023cb63ec4"
+        ),
         "production.plan.approved_for_generation.v1": (
             "sha256:9bfa5b25953d892c27d13b20c674b698dceff35a5a7a4b200b0a397d8d3c88a4"
         ),
@@ -425,6 +454,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260912_0020"]
+    assert script.get_heads() == ["20260912_0021"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

@@ -46,6 +46,7 @@ markers = [
   "postgres: requires a real PostgreSQL database",
   "temporal: requires the official ephemeral Temporal test server",
   "object_storage: requires a real S3-compatible object store",
+  "ffmpeg: requires FFmpeg and ffprobe binaries",
 ]
 
 [tool.coverage.report]
