@@ -51,7 +51,11 @@ from creative_marketer.production.application import (
     production_context_from_payload,
     validate_production_plan,
 )
-from creative_marketer.production.domain import ProductionPlanningContext, ProductionPlanningRequest
+from creative_marketer.production.domain import (
+    ProductionCreativeRefreshRequired,
+    ProductionPlanningContext,
+    ProductionPlanningRequest,
+)
 from creative_marketer.research.domain import (
     EvidenceSnapshot,
     ResearchCategory,
@@ -792,16 +796,35 @@ def conservative_creative_input_token_bound(context: ModelContext) -> int:
 def build_producer_model_context(
     preparation: ProducerPreparation,
     request: ProductionPlanningRequest,
+    *,
+    frozen_context: ProductionPlanningContext | None = None,
 ) -> tuple[ProductionPlanningContext, ModelContext]:
-    planning = build_production_context(
-        preparation.approved,
-        current_product_snapshot_id=preparation.product_snapshot.id,
-        current_product_snapshot_digest=preparation.product_snapshot.digest,
-        current_research_snapshot_id=preparation.research_snapshot.id,
-        current_research_snapshot_digest=preparation.research_snapshot.semantic_digest,
-        asset_manifest=preparation.asset_manifest,
-        request=request,
-    )
+    planning = frozen_context
+    if planning is None:
+        planning = build_production_context(
+            preparation.approved,
+            current_product_snapshot_id=preparation.product_snapshot.id,
+            current_product_snapshot_digest=preparation.product_snapshot.digest,
+            current_research_snapshot_id=preparation.research_snapshot.id,
+            current_research_snapshot_digest=preparation.research_snapshot.semantic_digest,
+            asset_manifest=preparation.asset_manifest,
+            request=request,
+        )
+    elif (
+        planning.concept_id != preparation.approved.concept.id
+        or planning.concept_digest != preparation.approved.concept.semantic_digest
+        or planning.concept_set_id != preparation.approved.concept_set.id
+        or planning.concept_set_digest != preparation.approved.concept_set.semantic_digest
+        or planning.creative_decision_id != preparation.approved.decision.id
+        or planning.product_snapshot_id != preparation.product_snapshot.id
+        or planning.product_snapshot_digest != preparation.product_snapshot.digest
+        or planning.research_snapshot_id != preparation.research_snapshot.id
+        or planning.research_snapshot_digest != preparation.research_snapshot.semantic_digest
+        or planning.request != request
+    ):
+        raise ProductionCreativeRefreshRequired(
+            "frozen Producer context does not match its immutable source records"
+        )
     scenes = preparation.approved.concept.payload.get("scenes", ())
     scene_items = scenes if isinstance(scenes, (list, tuple)) else ()
     normalized_scenes = [

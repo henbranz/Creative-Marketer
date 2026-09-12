@@ -88,6 +88,7 @@ from creative_marketer.infrastructure.database.production_schema import (
 )
 from creative_marketer.infrastructure.database.research_repositories import _evidence
 from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
+from creative_marketer.production.application import production_context_from_payload
 from creative_marketer.production.domain import ProductionPlan, ProductionPlanningRequest
 from creative_marketer.research.domain import (
     ResearchCategory,
@@ -1167,11 +1168,31 @@ class SqlAlchemyAgentRunRepository:
                 research,
                 tuple(dict(item) for item in manifest if isinstance(item, Mapping)),
             )
+            frozen_context = production_context_from_payload(
+                {
+                    "concept_id": concept_ref["id"],
+                    "concept_digest": concept_ref["digest"],
+                    "concept_set_id": concept_ref["concept_set_id"],
+                    "concept_set_digest": concept_ref["concept_set_digest"],
+                    "product_snapshot_id": run.product_snapshot_id,
+                    "product_snapshot_digest": run.product_snapshot_digest,
+                    "research_snapshot_id": research_ref["id"],
+                    "research_snapshot_digest": research_ref["digest"],
+                    "creative_decision_id": concept_ref["creative_decision_id"],
+                    "selected_assets": manifest,
+                    "production_request": {
+                        "target_format": request_ref["target_format"],
+                        "aspect_ratio": request_ref["aspect_ratio"],
+                    },
+                },
+                run.input_context_digest,
+            )
             planning, model = build_producer_model_context(
                 producer_preparation,
                 ProductionPlanningRequest(
                     str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
                 ),
+                frozen_context=frozen_context,
             )
             if planning.context_digest != run.input_context_digest:
                 raise ValueError("bound Producer context digest mismatch")
