@@ -24,6 +24,7 @@ from creative_marketer.agent_runtime.application import (
     RecoveryOperator,
     WorkloadIdentity,
     build_creative_model_context,
+    build_producer_model_context,
     initial_creative_strategist_route,
     initial_researcher_route,
 )
@@ -59,17 +60,28 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.production_uow import (
+    SqlAlchemyProductionUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
+from creative_marketer.production.application import initial_media_router, initial_producer_route
+from creative_marketer.production.domain import (
+    ProductionPlanDecisionState,
+    ProductionPlanningRequest,
+)
+from creative_marketer.production.service import ProductionService
 from creative_marketer.research.application import ResearchService
 from creative_marketer.research.domain import ResearchCategory
+from scripts.bootstrap_producer import producer_configuration
 from tests.integration.test_asset_library import asset, product_setup
 from tests.integration.test_catalog import owner_context, seed_catalog_identity
 from tests.integration.test_research_evidence import MemoryStore, StaticFetcher
 from tests.test_agent_runtime_application import configuration, creative_configuration
 from tests.test_agent_runtime_domain import output
 from tests.test_creative_strategy import output as creative_output
+from tests.test_production import valid_output as production_output
 
 
 class IdentityProvider:
@@ -324,6 +336,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     sessions = create_session_factory(runtime_database_url)
     uows = SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions)
     creative_context = None
+    producer_context = None
 
     def model(invocation):
         if invocation.output_contract_key == "research.research_snapshot":
@@ -333,6 +346,60 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 ModelUsage(100, 50, 150),
                 "openai",
                 "gpt-5.6-terra",
+            )
+        if invocation.output_contract_key == "production.production_plan":
+            assert producer_context is not None
+            assert invocation.capability_context is not None
+            scene_keys = invocation.capability_context["concept_scene_keys"]
+            selected = invocation.capability_context["selected_assets"]
+            assert isinstance(scene_keys, list) and scene_keys == ["scene_1", "scene_2", "scene_3"]
+            assert isinstance(selected, list) and len(selected) == 1
+            raw_plan = production_output(str(ready_asset.id))
+            first = raw_plan["scenes"][0]
+            first["scene_key"] = scene_keys[0]
+            for shot in first["shots"]:
+                shot["scene_key"] = scene_keys[0]
+            for ordinal, scene_key in enumerate(scene_keys[1:], 2):
+                raw_plan["scenes"].append(
+                    {
+                        "scene_key": scene_key,
+                        "ordinal": ordinal,
+                        "purpose": f"Preserve concept scene {ordinal}",
+                        "duration_seconds": 5,
+                        "message": "Approved product message",
+                        "voiceover": None,
+                        "on_screen_text": None,
+                        "shots": [
+                            {
+                                "shot_key": f"manual_{ordinal}",
+                                "scene_key": scene_key,
+                                "ordinal": 1,
+                                "visual_objective": "Manual supporting shot",
+                                "subject": "Product",
+                                "environment": "Studio",
+                                "composition": "Centered",
+                                "framing": "Close",
+                                "lens_intent": "Natural",
+                                "camera_position": "Eye level",
+                                "camera_motion": "Static",
+                                "lighting": "Soft",
+                                "action": "Hold",
+                                "continuity_requirements": [],
+                                "product_preservation_constraints": ["Keep label"],
+                                "audio_intent": None,
+                                "source_strategy": "MANUAL_CAPTURE",
+                                "existing_asset_id": None,
+                                "image_generation_spec": None,
+                            }
+                        ],
+                    }
+                )
+            return ModelInvocationResult(
+                raw_plan,
+                "producer-persisted",
+                ModelUsage(800, 1200, 2000),
+                "openai",
+                "gpt-5.6-sol",
             )
         assert creative_context is not None
         raw = creative_output(creative_context)
@@ -365,7 +432,13 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     provider = FakeModelProvider(model)
     runtime = AgentRunService(
         uows,
-        ModelRouter((initial_researcher_route(), initial_creative_strategist_route())),
+        ModelRouter(
+            (
+                initial_researcher_route(),
+                initial_creative_strategist_route(),
+                initial_producer_route(),
+            )
+        ),
         ModelProviderRegistry({"openai": provider}),
         IdentityProvider(),
     )
@@ -400,6 +473,41 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert current == decision
     assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
 
+    producer = await CreateTenantAgentDefinition(agent_registry_factory)(
+        context, agent_key="astra-producer", agent_type="producer"
+    )
+    producer_version = await CreateAgentVersion(agent_registry_factory)(
+        context, producer.id, producer_configuration()
+    )
+    await ActivateAgentVersion(agent_registry_factory)(context, producer.id, producer_version.id)
+    async with uows(context.tenant_id) as uow:
+        prepared_producer = await uow.runs.prepare_producer(concept.id)
+        assert prepared_producer is not None
+        producer_context = build_producer_model_context(
+            prepared_producer, ProductionPlanningRequest()
+        )[0]
+    producer_run = await runtime.request_producer(
+        context,
+        concept_id=concept.id,
+        request=ProductionPlanningRequest(),
+        idempotency_key="producer-run",
+    )
+    completed_producer = await runtime.execute(context.tenant_id, producer_run.id)
+    assert completed_producer.status is AgentRunStatus.SUCCEEDED
+    production = ProductionService(
+        SqlAlchemyProductionUnitOfWorkFactory(sessions), initial_media_router()
+    )
+    plans = await production.list_plans(context, product.id)
+    assert len(plans) == 1
+    plan = (await production.get_plan(context, plans[0].plan.id)).plan
+    approved_plan = await production.decide(
+        context, plan.id, ProductionPlanDecisionState.APPROVED_FOR_GENERATION
+    )
+    assert approved_plan.decision is not None
+    jobs = await production.list_jobs(context, plan.id)
+    assert len(jobs) == 2
+    assert (await production.get_job(context, jobs[0].id)).production_plan_id == plan.id
+
     graph, _ = await KnowledgeGraphProjector(
         SqlAlchemyCanonicalKnowledgeReader(sessions),
         SqlAlchemyKnowledgeProjectionStore(sessions),
@@ -430,6 +538,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     other_tenant, other_user = await seed_catalog_identity(admin_engine)
     other = owner_context(other_tenant, other_user)
     assert await creative.list_sets(other, product.id) == ()
+    assert await production.list_plans(other, product.id) == ()
 
     async with admin_engine.connect() as connection:
         safe_values = " ".join(

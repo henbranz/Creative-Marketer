@@ -804,17 +804,23 @@ def build_producer_model_context(
     )
     scenes = preparation.approved.concept.payload.get("scenes", ())
     scene_items = scenes if isinstance(scenes, (list, tuple)) else ()
-    scene_keys = [
-        str(item["scene_key"])
-        for item in scene_items
-        if isinstance(item, Mapping) and "scene_key" in item
+    normalized_scenes = [
+        {
+            **dict(item),
+            "scene_key": str(item.get("scene_key") or f"scene_{index}"),
+        }
+        for index, item in enumerate(scene_items, 1)
+        if isinstance(item, Mapping)
     ]
+    scene_keys = [str(item["scene_key"]) for item in normalized_scenes]
+    approved_concept = dict(preparation.approved.concept.payload)
+    approved_concept["scenes"] = normalized_scenes
     provenance = planning.semantic_content()
     sections: dict[str, object] = {
         **provenance,
         "production_request": provenance["request"],
         "concept_scene_keys": scene_keys,
-        "approved_creative_concept": _compact_json(preparation.approved.concept.payload),
+        "approved_creative_concept": _compact_json(approved_concept),
         "product_knowledge_snapshot": _compact_json(preparation.product_snapshot.content),
         "research_findings": [item.semantic() for item in preparation.research_snapshot.findings],
         "research_gaps": list(preparation.research_snapshot.research_gaps),
