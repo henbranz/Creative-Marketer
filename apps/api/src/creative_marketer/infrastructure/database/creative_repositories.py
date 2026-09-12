@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from creative_marketer.creative.domain import (
@@ -100,7 +100,13 @@ class SqlAlchemyCreativeRepository:
     ) -> CreativeConcept | None:
         query = select(concepts).where(concepts.c.id == concept_id)
         if for_update:
-            query = query.with_for_update()
+            # The immutable Concepts table intentionally grants no UPDATE privilege. A
+            # transaction-scoped advisory lock serializes decision appends without widening
+            # that database role or pretending the Concept row itself will be updated.
+            await self._session.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                {"key": f"creative-concept-decision:{concept_id}"},
+            )
         row = (await self._session.execute(query)).first()
         return _concept(row) if row else None
 
