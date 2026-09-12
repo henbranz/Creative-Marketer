@@ -16,7 +16,9 @@ from creative_marketer.knowledge.domain import (
     KnowledgeNode,
     KnowledgeNodeRef,
     KnowledgeNodeType,
+    KnowledgeProjectionError,
     KnowledgeRelationship,
+    safe_projection_value,
 )
 from creative_marketer_api.knowledge_routes import (
     create_knowledge_router,
@@ -191,3 +193,38 @@ async def test_projector_rejects_bad_bounds() -> None:
         await projector.changes(object(), cursor=-1)
     with pytest.raises(ValueError):
         await projector.changes(object(), cursor=0, limit=501)
+
+
+def test_knowledge_value_objects_fail_closed() -> None:
+    now = datetime.now(UTC)
+    with pytest.raises(KnowledgeProjectionError, match="identity"):
+        KnowledgeNodeRef(KnowledgeNodeType.PRODUCT, " ")
+    with pytest.raises(KnowledgeProjectionError, match="relationship"):
+        KnowledgeRelationship(KnowledgeNodeRef(KnowledgeNodeType.PRODUCT, "one"), "Bad Link")
+    with pytest.raises(KnowledgeProjectionError, match="title"):
+        KnowledgeNode(KnowledgeNodeType.PRODUCT, "one", " ", "active", now, now)
+    with pytest.raises(KnowledgeProjectionError, match="timezone"):
+        KnowledgeNode(
+            KnowledgeNodeType.PRODUCT,
+            "one",
+            "Product",
+            "active",
+            datetime.now(),
+            now,
+        )
+    with pytest.raises(KnowledgeProjectionError, match="digest"):
+        KnowledgeNode(
+            KnowledgeNodeType.PRODUCT,
+            "one",
+            "Product",
+            "active",
+            now,
+            now,
+            semantic_digest="md5:invalid",
+        )
+    duplicate = node()
+    with pytest.raises(KnowledgeProjectionError, match="duplicate"):
+        KnowledgeGraph((duplicate, duplicate))
+    with pytest.raises(KnowledgeProjectionError, match="change"):
+        KnowledgeChange(0, duplicate, None)
+    assert safe_projection_value(uuid4())

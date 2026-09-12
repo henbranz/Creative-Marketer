@@ -18,6 +18,7 @@ from creative_marketer.infrastructure.obsidian.bridge import (
     render_note,
     stable_filename,
 )
+from creative_marketer_api import obsidian_bridge as bridge_cli
 
 
 def projected_node(node_type="product", canonical_id=None, title="Clean Globe"):
@@ -270,3 +271,29 @@ def test_complete_vault_contains_no_secret_sentinels(tmp_path: Path) -> None:
     instance.sync(full=True)
     rendered = "\n".join(path.read_text() for path in tmp_path.rglob("*.md"))
     assert "supersecret" not in rendered and "<html>" not in rendered
+
+
+def test_bridge_cli_runs_full_sync(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    observed = {}
+
+    class Config:
+        @classmethod
+        def from_environment(cls):
+            return object()
+
+    class Bridge:
+        def __init__(self, _config):
+            pass
+
+        def sync(self, *, full: bool):
+            observed["full"] = full
+            return {"written": 2, "archived": 1}
+
+    monkeypatch.setattr(bridge_cli, "ObsidianBridgeConfig", Config)
+    monkeypatch.setattr(bridge_cli, "ObsidianBridge", Bridge)
+    monkeypatch.setattr("sys.argv", ["creative-marketer-obsidian", "--full"])
+    bridge_cli.main()
+    assert observed == {"full": True}
+    assert json.loads(capsys.readouterr().out) == {"written": 2, "archived": 1}
