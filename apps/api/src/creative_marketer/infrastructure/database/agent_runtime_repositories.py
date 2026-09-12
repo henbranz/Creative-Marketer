@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -468,11 +469,11 @@ class SqlAlchemyAgentRunRepository:
         freshness = await self.snapshot_freshness(research)
         profile = product.content.get("profile", {})
         brief = product.content.get("brief", {})
-        if not isinstance(profile, dict) or not isinstance(brief, dict):
+        if not isinstance(profile, Mapping) or not isinstance(brief, Mapping):
             completeness = 0
         else:
             primary = brief.get("primary_audience")
-            pain_points = primary.get("pain_points") if isinstance(primary, dict) else ()
+            pain_points = primary.get("pain_points") if isinstance(primary, Mapping) else ()
             checks = (
                 profile.get("description"),
                 brief.get("product_why"),

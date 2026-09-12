@@ -526,9 +526,11 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
         budget = (
             await connection.execute(
                 text(
-                    "SELECT reserved_cost,actual_cost,unknown_cost FROM "
+                    "SELECT SUM(reserved_cost) AS reserved_cost, "
+                    "SUM(actual_cost) AS actual_cost, "
+                    "SUM(unknown_cost) AS unknown_cost FROM "
                     "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
-                    "AND agent_definition_id=:definition ORDER BY period_start DESC LIMIT 1"
+                    "AND agent_definition_id=:definition"
                 ),
                 {"tenant": context.tenant_id, "definition": definition.id},
             )
@@ -553,9 +555,11 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
         reconciled_budget = (
             await connection.execute(
                 text(
-                    "SELECT reserved_cost,actual_cost,unknown_cost FROM "
+                    "SELECT SUM(reserved_cost) AS reserved_cost, "
+                    "SUM(actual_cost) AS actual_cost, "
+                    "SUM(unknown_cost) AS unknown_cost FROM "
                     "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
-                    "AND agent_definition_id=:definition ORDER BY period_start DESC LIMIT 1"
+                    "AND agent_definition_id=:definition"
                 ),
                 {"tenant": context.tenant_id, "definition": definition.id},
             )
