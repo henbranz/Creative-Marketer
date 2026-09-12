@@ -67,6 +67,10 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
             text(
                 "TRUNCATE knowledge_projection.projection_changes, "
                 "knowledge_projection.projection_nodes, "
+                "catalog.asset_lineage, production.media_budget_usage, "
+                "production.generation_jobs, production.plan_decisions, "
+                "production.generation_segments, production.production_shots, "
+                "production.production_scenes, production.production_plans, "
                 "creative.concept_decisions, creative.concepts, "
                 "creative.concept_sets, research.research_snapshots, "
                 "agent_runtime.model_cost_reconciliations, agent_runtime.model_attempts, "
