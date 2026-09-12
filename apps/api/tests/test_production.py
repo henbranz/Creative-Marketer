@@ -786,9 +786,13 @@ def test_media_result_and_workflow_contract_guards() -> None:
     with pytest.raises(InvalidMediaResult):
         validate_image_result(b"")
     with pytest.raises(InvalidMediaResult):
+        validate_image_result(b"unrecognized-image")
+    with pytest.raises(InvalidMediaResult):
         validate_image_result(b"\x89PNG\r\n\x1a\nlarge", maximum_bytes=2)
     with pytest.raises(InvalidMediaResult):
         validate_video_result(b"not-video")
+    with pytest.raises(InvalidMediaResult):
+        validate_video_result(b"\x00\x00\x00\x18ftypmp42video", maximum_bytes=2)
     request = MediaProductionWorkflowInput(
         str(uuid4()), str(uuid4()), (str(uuid4()),), (str(uuid4()),), str(uuid4())
     )

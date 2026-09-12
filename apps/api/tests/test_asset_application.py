@@ -271,6 +271,10 @@ async def test_association_permissions_and_state_conflicts_fail_closed() -> None
         await service.create(context, new_asset(context, brand, product, parent_asset_id=uuid4()))
     with pytest.raises(CatalogNotFound):
         await service.get(context, uuid4())
+    with pytest.raises(CatalogNotFound):
+        await service.finalize(context, uuid4())
+    with pytest.raises(CatalogNotFound):
+        await service.archive(context, uuid4())
     pending = new_asset(context, brand, product)
     await uow.assets.add(pending.validating())
     with pytest.raises(CatalogConflict):
