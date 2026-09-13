@@ -1,0 +1,68 @@
+:root {
+  color-scheme: light;
+
+  /* Creative Manager brand */
+  --brand-navy: #0b1026;
+  --brand-blue: #3b82f6;
+  --brand-purple: #8b5cf6;
+  --brand-magenta: #ec4899;
+  --brand-orange: #f59e0b;
+  --brand-cyan: #06b6d4;
+  --brand-light: #f8faff;
+
+  /* Semantic surfaces and text */
+  --background: #f4f6fc;
+  --surface: #ffffff;
+  --surface-elevated: #ffffff;
+  --surface-muted: #eef2fb;
+  --text-primary: #0b1026;
+  --text-secondary: #394466;
+  --text-muted: #6d7795;
+  --text-on-dark: #f8faff;
+  --border: #dfe4f1;
+  --border-strong: #c8d0e3;
+  --success: #138a64;
+  --warning: #b66a0a;
+  --danger: #bd3455;
+  --info: #2563d9;
+  --focus-ring: #3b82f6;
+
+  /* Controlled brand treatments */
+  --gradient-brand-main: linear-gradient(
+    120deg,
+    #3b82f6 0%,
+    #8b5cf6 50%,
+    #ec4899 100%
+  );
+  --gradient-brand-warm: linear-gradient(120deg, #ec4899 0%, #f59e0b 100%);
+  --gradient-brand-cool: linear-gradient(
+    120deg,
+    #06b6d4 0%,
+    #3b82f6 48%,
+    #8b5cf6 100%
+  );
+  --gradient-brand-subtle: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1),
+    rgba(139, 92, 246, 0.08) 55%,
+    rgba(236, 72, 153, 0.08)
+  );
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --shadow-sm: 0 1px 2px rgba(11, 16, 38, 0.05);
+  --shadow-md: 0 12px 32px rgba(20, 28, 67, 0.08);
+  --shadow-lg: 0 28px 80px rgba(20, 28, 67, 0.14);
+
+  /* Compatibility aliases for the existing domain panels. */
+  --ink: var(--text-primary);
+  --muted: var(--text-muted);
+  --line: var(--border);
+  --paper: var(--surface);
+  --canvas: var(--background);
+  --accent: var(--brand-purple);
+  --accent-soft: #f0ecff;
+  --shadow: var(--shadow-lg);
+}

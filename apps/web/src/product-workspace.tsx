@@ -47,6 +47,14 @@ import {
   type BriefDraftV1,
   type StoredBriefDraftV1,
 } from "./brief-draft";
+import {
+  BrandLockup,
+  BrandMark,
+  Button,
+  EmptyState,
+  Metric,
+  StatusBadge,
+} from "./ui/components";
 
 const navigation = [
   "Command Center",
@@ -56,6 +64,14 @@ const navigation = [
   "Activity",
   "Settings",
 ];
+const navigationIcons: Record<string, string> = {
+  "Command Center": "⌂",
+  Products: "◇",
+  Agents: "✦",
+  Approvals: "✓",
+  Activity: "↗",
+  Settings: "⚙",
+};
 const tabs = [
   "Overview",
   "Brief",
@@ -110,9 +126,9 @@ function AccessScreen({
   return (
     <main className="access-page">
       <section className="access-card">
-        <div className="brand-mark">CM</div>
-        <p className="eyebrow">Product workspace</p>
-        <h1>Build the source of truth your creative system can trust.</h1>
+        <BrandLockup />
+        <p className="eyebrow">Ideas · Create · Publish · Grow</p>
+        <h1>Turn product knowledge into creative impact.</h1>
         <p className="lede">
           Connect an authenticated workspace to organize brands, products,
           audiences, claims, and creative direction.
@@ -144,9 +160,9 @@ function AccessScreen({
               placeholder="Development issuer|subject"
             />
           </label>
-          <button className="primary" type="submit">
+          <Button variant="primary" type="submit">
             Open workspace
-          </button>
+          </Button>
         </form>
         <small>
           Production identity-provider selection remains intentionally deferred.
@@ -158,19 +174,20 @@ function AccessScreen({
 }
 
 function EmptyPanel({ tab }: { tab: string }) {
-  const copy =
-    tab === "Assets"
-      ? "Images and videos you upload will become the shared asset library used by future Creative and Producer Agents."
-      : `${tab} will appear here when its product capability is introduced.`;
+  const copy: Record<string, string> = {
+    Published:
+      "Approved work will appear here when governed publishing is introduced.",
+    Performance:
+      "Campaign results will appear here when performance integrations are available.",
+    Insights:
+      "Cross-campaign learning will appear here when the Intelligence workspace is introduced.",
+  };
   return (
-    <section className="empty-panel">
-      <span className="empty-glyph" aria-hidden="true">
-        {tab.slice(0, 1)}
-      </span>
-      <h2>No {tab.toLowerCase()} yet</h2>
-      <p>{copy}</p>
+    <EmptyState icon={tab.slice(0, 1)} title={`No ${tab.toLowerCase()} yet`}>
+      {copy[tab] ??
+        `${tab} will appear here when its product capability is introduced.`}
       <span className="coming">Coming in a future product slice</span>
-    </section>
+    </EmptyState>
   );
 }
 
@@ -691,79 +708,128 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
           </button>
         ))}
       </nav>
-      <section className="ai-research-card">
-        <div>
-          <p className="eyebrow">Evidence-grounded AI research</p>
-          <h2>Researcher</h2>
-          <p>
-            Analyze the current Product snapshot and captured evidence. External
-            pages remain untrusted data, and every factual finding must cite an
-            exact evidence block.
-          </p>
-        </div>
-        {workspace.product.can_edit ? (
-          <button
-            className="primary"
-            disabled={
-              !!busy ||
-              runs.some((run) => ["PENDING", "RUNNING"].includes(run.status))
-            }
-            onClick={async () => {
-              setBusy("researcher");
-              setError("");
-              try {
-                await catalogApi.startResearcher(
-                  session,
-                  workspace.product.id,
-                  crypto.randomUUID(),
-                );
-                await load();
-              } catch (caught) {
-                setError(
-                  caught instanceof Error
-                    ? caught.message
-                    : "Researcher could not start.",
-                );
-              } finally {
-                setBusy("");
-              }
-            }}
-          >
-            {busy === "researcher" ? "Queueing…" : "Run Researcher"}
-          </button>
-        ) : (
-          <p className="readonly-note">
-            Owners and admins can start billed research runs.
-          </p>
-        )}
-        {runs[0] && (
-          <div className="research-run-summary">
-            <span className={`fetch-state ${runs[0].status.toLowerCase()}`}>
-              {runs[0].is_stranded
-                ? "Needs operational recovery"
-                : runs[0].status === "PENDING"
-                  ? "Queued"
-                  : runs[0].status.toLowerCase()}
-            </span>
-            <span>Researcher v{runs[0].agent_version_number}</span>
-            <span>{runs[0].model_profile_key.replaceAll("_", " ")}</span>
-            {runs[0].total_tokens > 0 && (
-              <span>{runs[0].total_tokens} tokens</span>
-            )}
-            {runs[0].failure_code && (
-              <span>{runs[0].failure_code.replaceAll("_", " ")}</span>
-            )}
-            {runs[0].is_stranded && (
-              <p>
-                This run was interrupted and requires recovery before it can be
-                rerun.
-              </p>
-            )}
+      {error && (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      )}
+      {notice && (
+        <p className="success-banner" role="status">
+          {notice}
+        </p>
+      )}
+      {researchView === "overview" && (
+        <section className="research-overview">
+          <div>
+            <p className="eyebrow">Intelligence workspace</p>
+            <h2>Build strategy on traceable evidence.</h2>
+            <p>
+              Research stays product-scoped, source-linked, and clearly
+              separated from Product truth.
+            </p>
           </div>
-        )}
-        <AgentRunProvenance runs={runs} />
-      </section>
-      {snapshots[0] && (
+          <div className="research-overview-metrics">
+            <Metric
+              label="Web sources"
+              value={activeSources.length}
+              note={`${archivedSources.length} archived`}
+            />
+            <Metric
+              label="Competitors"
+              value={activeTargets.length}
+              note={`${socialEvidence.length} social evidence items`}
+            />
+            <Metric
+              label="Latest run"
+              value={runs[0]?.status.replaceAll("_", " ") ?? "Not run"}
+            />
+            <Metric
+              label="Snapshot"
+              value={snapshots[0]?.freshness ?? "None"}
+              note={
+                snapshots[0]
+                  ? `${snapshots[0].findings.length} findings`
+                  : "Run the Researcher when ready"
+              }
+            />
+          </div>
+        </section>
+      )}
+      {researchView === "overview" && (
+        <section className="ai-research-card">
+          <div>
+            <p className="eyebrow">Evidence-grounded AI research</p>
+            <h2>Researcher</h2>
+            <p>
+              Analyze the current Product snapshot and captured evidence.
+              External pages remain untrusted data, and every factual finding
+              must cite an exact evidence block.
+            </p>
+          </div>
+          {workspace.product.can_edit ? (
+            <button
+              className="primary"
+              disabled={
+                !!busy ||
+                runs.some((run) => ["PENDING", "RUNNING"].includes(run.status))
+              }
+              onClick={async () => {
+                setBusy("researcher");
+                setError("");
+                try {
+                  await catalogApi.startResearcher(
+                    session,
+                    workspace.product.id,
+                    crypto.randomUUID(),
+                  );
+                  await load();
+                } catch (caught) {
+                  setError(
+                    caught instanceof Error
+                      ? caught.message
+                      : "Researcher could not start.",
+                  );
+                } finally {
+                  setBusy("");
+                }
+              }}
+            >
+              {busy === "researcher" ? "Queueing…" : "Run Researcher"}
+            </button>
+          ) : (
+            <p className="readonly-note">
+              Owners and admins can start billed research runs.
+            </p>
+          )}
+          {runs[0] && (
+            <div className="research-run-summary">
+              <span className={`fetch-state ${runs[0].status.toLowerCase()}`}>
+                {runs[0].is_stranded
+                  ? "Needs operational recovery"
+                  : runs[0].status === "PENDING"
+                    ? "Queued"
+                    : runs[0].status.toLowerCase()}
+              </span>
+              <span>Researcher v{runs[0].agent_version_number}</span>
+              <span>{runs[0].model_profile_key.replaceAll("_", " ")}</span>
+              {runs[0].total_tokens > 0 && (
+                <span>{runs[0].total_tokens} tokens</span>
+              )}
+              {runs[0].failure_code && (
+                <span>{runs[0].failure_code.replaceAll("_", " ")}</span>
+              )}
+              {runs[0].is_stranded && (
+                <p>
+                  This run was interrupted and requires recovery before it can
+                  be rerun.
+                </p>
+              )}
+            </div>
+          )}
+          <AgentRunProvenance runs={runs} />
+        </section>
+      )}
+      {researchView === "results" && snapshots[0] && (
         <section className="research-snapshot">
           <div className="research-snapshot-heading">
             <div>
@@ -844,6 +910,12 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             </div>
           )}
         </section>
+      )}
+      {researchView === "results" && !snapshots[0] && (
+        <EmptyState icon="R" title="No research results yet">
+          Add trusted evidence, then run the Researcher to create
+          evidence-grounded findings.
+        </EmptyState>
       )}
       {researchView === "social" && (
         <section className="social-research">
@@ -1149,224 +1221,219 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
           )}
         </section>
       )}
-      <section className="research-intake">
-        <div>
-          <p className="eyebrow">Governed web evidence</p>
-          <h2>Research sources</h2>
-          <p>
-            Pages are fetched server-side under strict network policy and stored
-            as immutable, untrusted evidence.
-          </p>
-        </div>
-        {workspace.product.can_edit ? (
-          <div className="research-form">
-            <label>
-              Source URL
-              <input
-                aria-label="Research source URL"
-                type="url"
-                value={url}
-                placeholder="https://example.com/product"
-                onChange={(event) => setUrl(event.target.value)}
-              />
-            </label>
-            <label>
-              Display name
-              <input
-                aria-label="Research source name"
-                value={displayName}
-                maxLength={200}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-            </label>
-            <label>
-              Category
-              <select
-                aria-label="Research category"
-                value={category}
-                onChange={(event) =>
-                  setCategory(event.target.value as SourceCategory)
-                }
-              >
-                {[
-                  "competitor",
-                  "product_page",
-                  "landing_page",
-                  "pricing",
-                  "review",
-                  "market_reference",
-                  "creative_reference",
-                  "other",
-                ].map((value) => (
-                  <option key={value} value={value}>
-                    {value.replaceAll("_", " ")}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              className="primary"
-              disabled={!url || !displayName || !!busy}
-              onClick={() => void add()}
-            >
-              {busy === "new" ? "Fetching…" : "Add and fetch source"}
-            </button>
-          </div>
-        ) : (
-          <p className="readonly-note">
-            You have read-only access to research evidence.
-          </p>
-        )}
-      </section>
-      {error && (
-        <p className="error-banner" role="alert">
-          {error}
-        </p>
-      )}
-      {notice && (
-        <p className="success-banner" role="status">
-          {notice}
-        </p>
-      )}
-      {activeSources.length ? (
-        <div className="research-grid">
-          {activeSources.map((item) => (
-            <article className="research-card" key={item.source.id}>
-              <div className="research-card-heading">
-                <div>
-                  <span className="research-category">
-                    {item.source.category.replaceAll("_", " ")}
-                  </span>
-                  <h3>{item.source.display_name}</h3>
-                  <a
-                    href={item.source.canonical_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    title={item.source.canonical_url}
-                  >
-                    {safeSourceLabel(item.source.canonical_url)}
-                  </a>
-                </div>
-                <span
-                  className={`fetch-state ${item.latest?.status ?? "pending"}`}
-                >
-                  {busy === item.source.id
-                    ? "fetching"
-                    : (item.latest?.status ?? "not fetched")}
-                </span>
-              </div>
-              {item.latest?.failure_code && (
-                <p className="research-failure">
-                  Fetch rejected:{" "}
-                  {item.latest.failure_code.replaceAll("_", " ")}
-                </p>
-              )}
-              <small>
-                {item.latest?.completed_at
-                  ? `Last checked ${new Date(item.latest.completed_at).toLocaleString()}`
-                  : "No completed fetch"}
-              </small>
-              <div className="research-actions">
-                {item.latest?.evidence_snapshot_id && (
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      void viewEvidence(item.latest!.evidence_snapshot_id!)
+      {researchView === "web" && (
+        <>
+          <section className="research-intake">
+            <div>
+              <p className="eyebrow">Governed web evidence</p>
+              <h2>Research sources</h2>
+              <p>
+                Pages are fetched server-side under strict network policy and
+                stored as immutable, untrusted evidence.
+              </p>
+            </div>
+            {workspace.product.can_edit ? (
+              <div className="research-form">
+                <label>
+                  Source URL
+                  <input
+                    aria-label="Research source URL"
+                    type="url"
+                    value={url}
+                    placeholder="https://example.com/product"
+                    onChange={(event) => setUrl(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Display name
+                  <input
+                    aria-label="Research source name"
+                    value={displayName}
+                    maxLength={200}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Category
+                  <select
+                    aria-label="Research category"
+                    value={category}
+                    onChange={(event) =>
+                      setCategory(event.target.value as SourceCategory)
                     }
                   >
-                    View evidence
-                  </button>
-                )}
-                {item.source.can_edit && item.source.status === "active" && (
-                  <>
-                    <button
-                      className="secondary"
-                      disabled={!!busy}
-                      onClick={() => void refresh(item)}
-                    >
-                      Refresh
-                    </button>
-                    <button
-                      className="text-danger"
-                      disabled={!!busy}
-                      onClick={async () => {
-                        if (
-                          !window.confirm(
-                            "Remove this source from future research?\nHistorical evidence and previous research results will remain available.",
-                          )
-                        )
-                          return;
-                        try {
-                          await catalogApi.archiveResearchSource(
-                            session,
-                            item.source.id,
-                          );
-                          await load();
-                        } catch (caught) {
-                          setError(
-                            caught instanceof Error
-                              ? caught.message
-                              : "Source could not be removed.",
-                          );
-                        }
-                      }}
-                    >
-                      Remove source
-                    </button>
-                  </>
-                )}
-              </div>
-              {!!item.history.length && (
-                <details className="fetch-history">
-                  <summary>Fetch history ({item.history.length})</summary>
-                  <ol>
-                    {item.history.map((fetch, index) => (
-                      <li key={fetch.id}>
-                        <span>{fetch.status.replaceAll("_", " ")}</span>
-                        <small>
-                          {fetch.status !== "succeeded"
-                            ? (fetch.failure_code?.replaceAll("_", " ") ??
-                              "no evidence")
-                            : index === item.history.length - 1
-                              ? "first capture"
-                              : fetch.evidence_snapshot_id &&
-                                  fetch.evidence_snapshot_id ===
-                                    item.history[index + 1]
-                                      ?.evidence_snapshot_id
-                                ? "content unchanged"
-                                : "content changed"}
-                        </small>
-                      </li>
+                    {[
+                      "competitor",
+                      "product_page",
+                      "landing_page",
+                      "pricing",
+                      "review",
+                      "market_reference",
+                      "creative_reference",
+                      "other",
+                    ].map((value) => (
+                      <option key={value} value={value}>
+                        {value.replaceAll("_", " ")}
+                      </option>
                     ))}
-                  </ol>
-                </details>
-              )}
-            </article>
-          ))}
-        </div>
-      ) : (
-        <section className="empty-panel">
-          <span className="empty-glyph">R</span>
-          <h2>No research sources yet</h2>
-          <p>Add a public page to establish traceable product evidence.</p>
-        </section>
-      )}
-      {!!archivedSources.length && (
-        <details className="archived-research">
-          <summary>Archived sources ({archivedSources.length})</summary>
-          <div className="research-grid">
-            {archivedSources.map((item) => (
-              <article className="research-card" key={item.source.id}>
-                <span className="research-category">Archived · Web</span>
-                <h3>{item.source.display_name}</h3>
-                <small>
-                  Historical evidence remains available to previous Research
-                  results.
-                </small>
-              </article>
-            ))}
-          </div>
-        </details>
+                  </select>
+                </label>
+                <button
+                  className="primary"
+                  disabled={!url || !displayName || !!busy}
+                  onClick={() => void add()}
+                >
+                  {busy === "new" ? "Fetching…" : "Add and fetch source"}
+                </button>
+              </div>
+            ) : (
+              <p className="readonly-note">
+                You have read-only access to research evidence.
+              </p>
+            )}
+          </section>
+          {activeSources.length ? (
+            <div className="research-grid">
+              {activeSources.map((item) => (
+                <article className="research-card" key={item.source.id}>
+                  <div className="research-card-heading">
+                    <div>
+                      <span className="research-category">
+                        {item.source.category.replaceAll("_", " ")}
+                      </span>
+                      <h3>{item.source.display_name}</h3>
+                      <a
+                        href={item.source.canonical_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={item.source.canonical_url}
+                      >
+                        {safeSourceLabel(item.source.canonical_url)}
+                      </a>
+                    </div>
+                    <span
+                      className={`fetch-state ${item.latest?.status ?? "pending"}`}
+                    >
+                      {busy === item.source.id
+                        ? "fetching"
+                        : (item.latest?.status ?? "not fetched")}
+                    </span>
+                  </div>
+                  {item.latest?.failure_code && (
+                    <p className="research-failure">
+                      Fetch rejected:{" "}
+                      {item.latest.failure_code.replaceAll("_", " ")}
+                    </p>
+                  )}
+                  <small>
+                    {item.latest?.completed_at
+                      ? `Last checked ${new Date(item.latest.completed_at).toLocaleString()}`
+                      : "No completed fetch"}
+                  </small>
+                  <div className="research-actions">
+                    {item.latest?.evidence_snapshot_id && (
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void viewEvidence(item.latest!.evidence_snapshot_id!)
+                        }
+                      >
+                        View evidence
+                      </button>
+                    )}
+                    {item.source.can_edit &&
+                      item.source.status === "active" && (
+                        <>
+                          <button
+                            className="secondary"
+                            disabled={!!busy}
+                            onClick={() => void refresh(item)}
+                          >
+                            Refresh
+                          </button>
+                          <button
+                            className="text-danger"
+                            disabled={!!busy}
+                            onClick={async () => {
+                              if (
+                                !window.confirm(
+                                  "Remove this source from future research?\nHistorical evidence and previous research results will remain available.",
+                                )
+                              )
+                                return;
+                              try {
+                                await catalogApi.archiveResearchSource(
+                                  session,
+                                  item.source.id,
+                                );
+                                await load();
+                              } catch (caught) {
+                                setError(
+                                  caught instanceof Error
+                                    ? caught.message
+                                    : "Source could not be removed.",
+                                );
+                              }
+                            }}
+                          >
+                            Remove source
+                          </button>
+                        </>
+                      )}
+                  </div>
+                  {!!item.history.length && (
+                    <details className="fetch-history">
+                      <summary>Fetch history ({item.history.length})</summary>
+                      <ol>
+                        {item.history.map((fetch, index) => (
+                          <li key={fetch.id}>
+                            <span>{fetch.status.replaceAll("_", " ")}</span>
+                            <small>
+                              {fetch.status !== "succeeded"
+                                ? (fetch.failure_code?.replaceAll("_", " ") ??
+                                  "no evidence")
+                                : index === item.history.length - 1
+                                  ? "first capture"
+                                  : fetch.evidence_snapshot_id &&
+                                      fetch.evidence_snapshot_id ===
+                                        item.history[index + 1]
+                                          ?.evidence_snapshot_id
+                                    ? "content unchanged"
+                                    : "content changed"}
+                            </small>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <section className="empty-panel">
+              <span className="empty-glyph">R</span>
+              <h2>No research sources yet</h2>
+              <p>Add a public page to establish traceable product evidence.</p>
+            </section>
+          )}
+          {!!archivedSources.length && (
+            <details className="archived-research">
+              <summary>Archived sources ({archivedSources.length})</summary>
+              <div className="research-grid">
+                {archivedSources.map((item) => (
+                  <article className="research-card" key={item.source.id}>
+                    <span className="research-category">Archived · Web</span>
+                    <h3>{item.source.display_name}</h3>
+                    <small>
+                      Historical evidence remains available to previous Research
+                      results.
+                    </small>
+                  </article>
+                ))}
+              </div>
+            </details>
+          )}
+        </>
       )}
       {evidence && (
         <section className="evidence-viewer" aria-label="Evidence viewer">
@@ -1679,7 +1746,9 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
                     <span>
                       {assets.length - missing} ready · {missing} missing
                     </span>
-                    <span>{concept.decision_state ?? "UNREVIEWED"}</span>
+                    <StatusBadge
+                      status={concept.decision_state ?? "UNREVIEWED"}
+                    />
                   </div>
                   <button
                     className="secondary"
@@ -1693,13 +1762,10 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
           </div>
         </>
       ) : (
-        <section className="empty-panel">
-          <span className="empty-glyph">C</span>
-          <h2>No concepts yet</h2>
-          <p>
-            Run Researcher, complete the Brief, then generate a strategy set.
-          </p>
-        </section>
+        <EmptyState icon="C" title="No concepts yet">
+          Research the market, complete the Brief, then turn evidence into
+          creative directions.
+        </EmptyState>
       )}
       {selected && (
         <section
@@ -2029,7 +2095,7 @@ function ProductionPanel({
     }
   };
   return (
-    <div className="creative-workspace">
+    <div className="production-workspace creative-workspace">
       <section className="creative-hero">
         <div>
           <p className="eyebrow">Governed media production</p>
@@ -2090,8 +2156,8 @@ function ProductionPanel({
         </p>
       )}
       {plan ? (
-        <section className="concept-detail">
-          <p className="eyebrow">{plan.status.replaceAll("_", " ")}</p>
+        <section className="production-plan">
+          <StatusBadge status={plan.status} />
           <h3>Production plan</h3>
           <p>{plan.strategy}</p>
           {concept && (
@@ -2272,12 +2338,15 @@ function ProductionPanel({
                       ? "Image generation"
                       : "Video generation"}
                   </p>
-                  {job.local_demo_provider && (
-                    <span className="status draft">Local demo provider</span>
-                  )}
-                  {!job.local_demo_provider && (
-                    <span className="status active">Live provider</span>
-                  )}
+                  <StatusBadge
+                    status={job.local_demo_provider ? "draft" : "active"}
+                    label={
+                      job.local_demo_provider
+                        ? "Local demo provider"
+                        : "Live provider"
+                    }
+                  />
+                  <StatusBadge status={job.status} />
                   <h4>
                     {{
                       READY: "Waiting for production worker",
@@ -2618,10 +2687,9 @@ function ProductionPanel({
           </div>
         </section>
       ) : (
-        <section className="empty-panel">
-          <h2>No production plan yet</h2>
-          <p>Approve a current creative concept to unlock the Producer.</p>
-        </section>
+        <EmptyState icon="P" title="No production plan yet">
+          Approve a current creative concept to begin production planning.
+        </EmptyState>
       )}
     </div>
   );
@@ -2667,7 +2735,7 @@ function Overview({
           </p>
         </div>
         <div className="hero-meta">
-          <span className={`status ${product.status}`}>{product.status}</span>
+          <StatusBadge status={product.status} />
           {product.profile?.price && (
             <strong>
               {product.profile.currency} {product.profile.price}
@@ -2700,6 +2768,15 @@ function Overview({
           </p>
         </div>
       </section>
+      <Metric
+        label="Product brain"
+        value={
+          workspace.latest_snapshot
+            ? `Revision ${workspace.latest_snapshot.source_revision}`
+            : "Not versioned"
+        }
+        note="Immutable knowledge snapshot"
+      />
       <section className="data-card">
         <p className="eyebrow">Core audiences</p>
         <PillList
@@ -3246,6 +3323,106 @@ function readSession(): Session {
   return JSON.parse(raw) as Session;
 }
 
+function ProductCatalog({
+  brands,
+  products,
+  onOpen,
+  onCreateBrand,
+  onCreateProduct,
+}: {
+  brands: Brand[];
+  products: Record<string, Product[]>;
+  onOpen: (id: string) => void;
+  onCreateBrand: () => void;
+  onCreateProduct: (brand: Brand) => void;
+}) {
+  const productCount = Object.values(products).reduce(
+    (total, values) => total + values.length,
+    0,
+  );
+  return (
+    <div className="catalog-page">
+      <section className="catalog-hero">
+        <div>
+          <p className="eyebrow">Products</p>
+          <h2>Every idea starts with a clear product truth.</h2>
+          <p>
+            Organize the context your Researcher, Creative Strategist, and
+            Producer use to build evidence-grounded work.
+          </p>
+        </div>
+        <div className="catalog-actions">
+          <Button onClick={onCreateBrand}>Create brand</Button>
+          {brands.some((brand) => brand.can_edit) && (
+            <Button
+              variant="primary"
+              onClick={() =>
+                onCreateProduct(brands.find((brand) => brand.can_edit)!)
+              }
+            >
+              Create product
+            </Button>
+          )}
+        </div>
+        <div className="catalog-stats">
+          <Metric label="Brands" value={brands.length} />
+          <Metric label="Products" value={productCount} />
+          <Metric
+            label="Workflow"
+            value="Research → Create"
+            note="Publish remains governed"
+          />
+        </div>
+      </section>
+      {brands.map((brand) => (
+        <section className="brand-catalog" key={brand.id}>
+          <header>
+            <div className="brand-node large">
+              <span>{brand.name.slice(0, 1)}</span>
+              <div>
+                <h3>{brand.name}</h3>
+                <small>{brand.profile?.industry || "Brand workspace"}</small>
+              </div>
+            </div>
+            {brand.can_edit && (
+              <Button onClick={() => onCreateProduct(brand)}>
+                Add product
+              </Button>
+            )}
+          </header>
+          {(products[brand.id] ?? []).length ? (
+            <div className="product-card-grid">
+              {(products[brand.id] ?? []).map((product) => (
+                <button
+                  className="product-card"
+                  key={product.id}
+                  onClick={() => onOpen(product.id)}
+                >
+                  <span className="product-card-art" aria-hidden="true">
+                    {product.name.slice(0, 1)}
+                  </span>
+                  <span className="product-card-body">
+                    <span>
+                      <strong>{product.name}</strong>
+                      <StatusBadge status={product.status} />
+                    </span>
+                    <small>{product.category || "Uncategorized product"}</small>
+                    <span className="product-card-link">
+                      Open Product Brain <b>→</b>
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="brand-empty">No products in this brand yet.</p>
+          )}
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export function ProductWorkspaceApp() {
   const [session, setSession] = useState<Session | null>(null);
   const [brands, setBrands] = useState<Brand[]>([]);
@@ -3255,10 +3432,15 @@ export function ProductWorkspaceApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<"brand" | "product" | null>(null);
+  const [dialogBrandId, setDialogBrandId] = useState<string | null>(null);
   const [briefDirty, setBriefDirty] = useState(false);
+  const [navigationOpen, setNavigationOpen] = useState(false);
   const selectedBrand = useMemo(
-    () => brands.find((brand) => brand.id === workspace?.brand.id) ?? brands[0],
-    [brands, workspace],
+    () =>
+      brands.find((brand) => brand.id === dialogBrandId) ??
+      brands.find((brand) => brand.id === workspace?.brand.id) ??
+      brands[0],
+    [brands, dialogBrandId, workspace],
   );
   const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
 
@@ -3322,11 +3504,17 @@ export function ProductWorkspaceApp() {
   if (!session)
     return <AccessScreen onConnect={(value) => void connect(value)} />;
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${navigationOpen ? "navigation-open" : ""}`}>
       <aside className="sidebar">
         <div className="logo-row">
-          <span className="brand-mark small">CM</span>
-          <strong>Creative Marketer</strong>
+          <BrandLockup compact />
+          <button
+            className="sidebar-close"
+            aria-label="Close navigation"
+            onClick={() => setNavigationOpen(false)}
+          >
+            ×
+          </button>
         </div>
         <nav>
           {navigation.map((item) => (
@@ -3335,14 +3523,20 @@ export function ProductWorkspaceApp() {
               className={item === "Products" ? "active" : ""}
               disabled={item !== "Products"}
             >
-              {item}
+              <i aria-hidden="true">{navigationIcons[item]}</i>
+              <b>{item}</b>
               {item !== "Products" && <span>Soon</span>}
             </button>
           ))}
         </nav>
         <div className="account">
-          <span>Workspace</span>
-          <code>{session.tenantId.slice(0, 8)}</code>
+          <span className="workspace-avatar" aria-hidden="true">
+            W
+          </span>
+          <div>
+            <span>Workspace</span>
+            <code>{session.tenantId.slice(0, 8)}</code>
+          </div>
           <button
             onClick={() => {
               sessionStorage.removeItem("cm-session");
@@ -3353,13 +3547,25 @@ export function ProductWorkspaceApp() {
           </button>
         </div>
       </aside>
+      {navigationOpen && (
+        <button
+          className="navigation-scrim"
+          aria-label="Close navigation"
+          onClick={() => setNavigationOpen(false)}
+        />
+      )}
       <main className="workspace">
         <header className="topbar">
-          <button className="mobile-menu" aria-label="Open navigation">
-            CM
+          <button
+            className="mobile-menu"
+            aria-label="Open navigation"
+            aria-expanded={navigationOpen}
+            onClick={() => setNavigationOpen(true)}
+          >
+            <BrandMark compact />
           </button>
           <div>
-            <p className="eyebrow">Product brain</p>
+            <p className="eyebrow">Creative Manager · Product Brain</p>
             <h1>{workspace?.product.name ?? "Products"}</h1>
           </div>
           <div className="top-actions">
@@ -3378,11 +3584,18 @@ export function ProductWorkspaceApp() {
               </button>
             )}
             <button className="secondary" onClick={() => setDialog("brand")}>
-              New brand
+              Create brand
             </button>
             {selectedBrand?.can_edit && (
-              <button className="primary" onClick={() => setDialog("product")}>
-                New product
+              <button
+                className="primary"
+                aria-label="New product"
+                onClick={() => {
+                  setDialogBrandId(selectedBrand.id);
+                  setDialog("product");
+                }}
+              >
+                Create product
               </button>
             )}
           </div>
@@ -3412,50 +3625,55 @@ export function ProductWorkspaceApp() {
           </section>
         )}
         {!!brands.length && (
-          <div className="product-layout">
-            <aside className="product-tree">
-              <div className="tree-title">
-                <span>Brands & products</span>
-                <button
-                  onClick={() => setDialog("brand")}
-                  aria-label="Create brand"
-                >
-                  +
-                </button>
-              </div>
-              {brands.map((brand) => (
-                <div className="tree-group" key={brand.id}>
-                  <div className="brand-node">
-                    <span>{brand.name.slice(0, 1)}</span>
-                    <strong>{brand.name}</strong>
-                  </div>
-                  {(products[brand.id] ?? []).map((product) => (
-                    <button
-                      key={product.id}
-                      className={
-                        workspace?.product.id === product.id ? "selected" : ""
-                      }
-                      onClick={() => void openProduct(product.id)}
-                    >
-                      {product.name}
-                      <small>{product.status}</small>
-                    </button>
-                  ))}
-                  {brand.can_edit && (
-                    <button
-                      className="add-product"
-                      onClick={() => {
-                        if (!workspace || workspace.brand.id !== brand.id)
-                          setWorkspace(null);
-                        setDialog("product");
-                      }}
-                    >
-                      + Add product
-                    </button>
-                  )}
+          <div
+            className={`product-layout ${workspace ? "" : "catalog-layout"}`}
+          >
+            {workspace && (
+              <aside className="product-tree">
+                <div className="tree-title">
+                  <span>Brands & products</span>
+                  <button
+                    onClick={() => setDialog("brand")}
+                    aria-label="Create brand"
+                  >
+                    +
+                  </button>
                 </div>
-              ))}
-            </aside>
+                {brands.map((brand) => (
+                  <div className="tree-group" key={brand.id}>
+                    <div className="brand-node">
+                      <span>{brand.name.slice(0, 1)}</span>
+                      <strong>{brand.name}</strong>
+                    </div>
+                    {(products[brand.id] ?? []).map((product) => (
+                      <button
+                        key={product.id}
+                        className={
+                          workspace?.product.id === product.id ? "selected" : ""
+                        }
+                        onClick={() => void openProduct(product.id)}
+                      >
+                        {product.name}
+                        <small>{product.status}</small>
+                      </button>
+                    ))}
+                    {brand.can_edit && (
+                      <button
+                        className="add-product"
+                        onClick={() => {
+                          if (!workspace || workspace.brand.id !== brand.id)
+                            setWorkspace(null);
+                          setDialogBrandId(brand.id);
+                          setDialog("product");
+                        }}
+                      >
+                        + Add product
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </aside>
+            )}
             <section className="product-content">
               {workspace ? (
                 <>
@@ -3518,14 +3736,16 @@ export function ProductWorkspaceApp() {
                   )}
                 </>
               ) : (
-                <section className="select-product">
-                  <p className="eyebrow">Catalog ready</p>
-                  <h2>Select a product to open its workspace.</h2>
-                  <p>
-                    Your Product Brain keeps strategy inputs structured,
-                    reviewable, and ready for future agents.
-                  </p>
-                </section>
+                <ProductCatalog
+                  brands={brands}
+                  products={products}
+                  onOpen={(id) => void openProduct(id)}
+                  onCreateBrand={() => setDialog("brand")}
+                  onCreateProduct={(brand) => {
+                    setDialogBrandId(brand.id);
+                    setDialog("product");
+                  }}
+                />
               )}
             </section>
           </div>
@@ -3536,9 +3756,13 @@ export function ProductWorkspaceApp() {
             brands={brands}
             preferredBrand={selectedBrand}
             session={session}
-            onClose={() => setDialog(null)}
+            onClose={() => {
+              setDialog(null);
+              setDialogBrandId(null);
+            }}
             onCreated={async (brand, nextWorkspace) => {
               setDialog(null);
+              setDialogBrandId(null);
               if (brand) setBrands((current) => [...current, brand]);
               if (nextWorkspace) {
                 setWorkspace(nextWorkspace);

@@ -12,6 +12,8 @@ import {
   type ResearchFetch,
   type ResearchSource,
   type ResearchSnapshot,
+  type ResearchTarget,
+  type SocialEvidence,
   type Workspace,
 } from "./catalog-api";
 import { ProductWorkspaceApp } from "./product-workspace";
@@ -204,6 +206,52 @@ const researchEvidence: ResearchEvidence = {
   schema_version: 1,
   extractor_version: "html-v1",
   instruction_like_content: false,
+  captured_at: product.updated_at,
+};
+const researchTarget: ResearchTarget = {
+  id: "81000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  kind: "competitor_brand",
+  display_name: "Rival Studio",
+  website_url: null,
+  platform: "instagram",
+  platform_handle: null,
+  platform_profile_url: "https://instagram.com/rival-studio",
+  platform_identifier: null,
+  status: "active",
+  created_at: product.created_at,
+  updated_at: product.updated_at,
+  can_edit: true,
+};
+const socialEvidence: SocialEvidence = {
+  id: "82000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  research_target_id: researchTarget.id,
+  platform: "instagram",
+  evidence_type: "reel",
+  provenance: "user_provided",
+  source_provider: null,
+  source_url: "https://instagram.com/reel/public-example",
+  destination_url: null,
+  advertiser_name: "Rival Studio",
+  advertiser_platform_id: null,
+  platform_content_id: null,
+  headline: "A manual competitor reel",
+  body_text: "Public creative pattern captured for analysis.",
+  cta: null,
+  media_type: null,
+  placements: [],
+  first_seen_at: null,
+  last_seen_at: null,
+  activity_status: null,
+  ad_objective: null,
+  reach_range: null,
+  region: null,
+  media_asset_id: null,
+  rights_status: "restricted",
+  allowed_uses: ["internal_analysis"],
+  schema_version: 1,
+  semantic_digest: `sha256:${"e".repeat(64)}`,
   captured_at: product.updated_at,
 };
 const agentRun: AgentRun = {
@@ -568,6 +616,11 @@ describe("Product Workspace", () => {
     await renderConnected();
     expect(screen.getByText("Northstar")).toBeInTheDocument();
     expect(screen.getByText("Atlas")).toBeInTheDocument();
+    expect(screen.getByText("Creative Manager")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Command Center/ }),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Products" })).toBeEnabled();
   });
 
   it("opens a real overview with completeness progress", async () => {
@@ -756,8 +809,54 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     expect(
       await screen.findByText("No research sources yet"),
+    ).toBeInTheDocument();
+  });
+
+  it("separates Research into four focused views", async () => {
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    expect(
+      screen.getByText("Build strategy on traceable evidence."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Web Sources" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Competitors & Ads" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Research Results" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows manual social evidence restrictions and disabled official providers", async () => {
+    vi.mocked(catalogApi.listResearchTargets).mockResolvedValue([
+      researchTarget,
+    ]);
+    vi.mocked(catalogApi.listSocialEvidence).mockResolvedValue([
+      socialEvidence,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Competitors & Ads" }));
+    expect(
+      await screen.findByText("A manual competitor reel"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Restricted · internal analysis only"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Query official provider" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Add manual evidence" }),
     ).toBeInTheDocument();
   });
 
@@ -857,6 +956,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Research Results" }));
     expect(
       await screen.findByText("The competitor advertises a $20 price."),
     ).toBeInTheDocument();
@@ -995,6 +1095,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     fireEvent.change(screen.getByLabelText("Research source URL"), {
       target: { value: "file:///etc/passwd" },
     });
@@ -1024,6 +1125,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     fireEvent.change(screen.getByLabelText("Research source URL"), {
       target: { value: researchSource.canonical_url },
     });
@@ -1051,6 +1153,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     expect(await screen.findByText("Competitor page")).toBeInTheDocument();
     expect(screen.getAllByText("succeeded")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "View evidence" }));
@@ -1085,6 +1188,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     await screen.findByText("Competitor page");
     fireEvent.click(screen.getByRole("button", { name: "View evidence" }));
     expect(await screen.findByText(/remains data/)).toBeInTheDocument();
@@ -1109,6 +1213,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     expect(
       await screen.findByText(/Fetch rejected: blocked network target/),
     ).toBeInTheDocument();
@@ -1128,6 +1233,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     await screen.findByText("Competitor page");
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     expect(await screen.findByText(/Content unchanged/)).toBeInTheDocument();
@@ -1153,6 +1259,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     await screen.findByText("Competitor page");
     fireEvent.click(screen.getByRole("button", { name: "Remove source" }));
     await waitFor(() =>
@@ -1175,6 +1282,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     expect(
       await screen.findByText(/read-only access to research evidence/i),
     ).toBeInTheDocument();
@@ -1204,6 +1312,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
+    fireEvent.click(screen.getByRole("button", { name: "Web Sources" }));
     expect(
       (await screen.findByText("Research sources")).closest(".research-intake"),
     ).not.toBeNull();
@@ -1241,7 +1350,9 @@ describe("Product Workspace", () => {
     fireEvent.change(screen.getByLabelText("Category"), {
       target: { value: "Drinkware" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Create product" }));
+    fireEvent.click(
+      screen.getByRole("dialog").querySelector("button.primary")!,
+    );
     await waitFor(() =>
       expect(catalogApi.createProduct).toHaveBeenCalledOnce(),
     );
