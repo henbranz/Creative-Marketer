@@ -185,7 +185,7 @@ async def wait_for_status(handle, expected: str) -> None:
 @pytest_asyncio.fixture
 async def temporal_environment():
     async with await WorkflowEnvironment.start_time_skipping(
-        test_server_existing_path=os.getenv("TEMPORAL_TEST_SERVER_PATH")
+        test_server_existing_path=os.getenv("TEMPORAL_TEST_SERVER_PATH") or None
     ) as environment:
         yield environment
 
