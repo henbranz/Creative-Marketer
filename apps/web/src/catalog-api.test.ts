@@ -1,8 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { listText, obsidianOpenUrl, slugify } from "./catalog-api";
 
 describe("catalog form utilities", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
   it("creates canonical product slugs", () =>
     expect(slugify(" Atlas Bottle 2 ")).toBe("atlas-bottle-2"));
   it("turns multiline fields into clean structured lists", () =>
@@ -32,6 +38,33 @@ describe("catalog form utilities", () => {
     );
     await expect(obsidianOpenUrl("Creative Brain", "asset", id)).resolves.toBe(
       "obsidian://open?vault=Creative+Brain&file=Assets%2Fasset--4b60dacb33a2049ec4da0d7d23f06760c66731b5463ee5eb140647ae5fd298fa",
+    );
+  });
+
+  it("initializes a Products API request with the compiled public base URL", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_BASE_URL", "https://api.example.test");
+    vi.stubEnv("NEXT_PUBLIC_OBSIDIAN_VAULT_NAME", "");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockResolvedValue([]),
+      }),
+    );
+    vi.resetModules();
+    const { catalogApi: compiledCatalogApi } = await import("./catalog-api");
+
+    await expect(
+      compiledCatalogApi.listBrands({
+        tenantId: "tenant-id",
+        credential: "local-credential",
+      }),
+    ).resolves.toEqual([]);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.example.test/v1/brands",
+      expect.objectContaining({
+        headers: expect.objectContaining({ "X-Tenant-ID": "tenant-id" }),
+      }),
     );
   });
 });
