@@ -47,12 +47,16 @@ def _safe_error(code: str, *, provider: str, model: str, category: str) -> int:
 
 async def preflight(settings: Settings, client: ModelLookup | None = None) -> int:
     expected = {
+        "Researcher": initial_researcher_route().model,
+        "Creative Strategist": initial_creative_strategist_route().model,
         "Producer": initial_producer_route().model,
         "Image": initial_media_router().resolve("production_image").model,
         "Video": initial_media_router().resolve("production_video").model,
     }
     if expected != {
-        "Producer": "gpt-6-astra",
+        "Researcher": "gpt-5.6-sol",
+        "Creative Strategist": "gpt-5.6-sol",
+        "Producer": "gpt-5.6-sol",
         "Image": "gpt-image-2.5-sunburst-2026-09-08",
         "Video": "dreamina-seedance-2-5-260628",
     }:
@@ -65,7 +69,14 @@ async def preflight(settings: Settings, client: ModelLookup | None = None) -> in
     openai_client = client or AsyncOpenAI(
         api_key=settings.openai_api_key.get_secret_value(), max_retries=0
     )
-    for model in (expected["Producer"], expected["Image"]):
+    for model in dict.fromkeys(
+        (
+            expected["Researcher"],
+            expected["Creative Strategist"],
+            expected["Producer"],
+            expected["Image"],
+        )
+    ):
         try:
             await openai_client.models.retrieve(model)
         except AuthenticationError:
@@ -241,7 +252,7 @@ def media_smoke(settings: Settings, kind: str) -> int:
     product = str(settings.live_e2e_product_id)
     producer = _successful(_runs(api, product, "production"), initial_producer_route())
     if producer is None:
-        print("PAUSED: complete live-openai-smoke with the current Astra route first.")
+        print("PAUSED: complete live-openai-smoke with the current Sol route first.")
         return 3
     plans = api.request(f"/v1/products/{product}/production/plans")
     plan = next((item for item in plans if item["agent_run_id"] == producer["id"]), None)

@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded in part by ADR-034
 
 ## Context
 
@@ -53,3 +53,6 @@ still require conservative operator recovery and may cause a later billed re-run
 inference is not claimed. Recovery and uncertain-cost policy are defined by ADR-027. Production deployments must review the
 provider's data handling and inject both provider and workload credentials through deployment
 secrets.
+
+The Terra route and pricing above are the truthful original decision. ADR-034 supersedes only the
+current reasoning-model route policy; historical records remain immutable.

@@ -398,26 +398,30 @@ def initial_researcher_route() -> ModelRoute:
     """Versioned operational route; Agent Registry remains provider-neutral."""
     return ModelRoute(
         profile_key="research_balanced",
-        route_version="openai-gpt-5.6-terra-2026-09",
+        route_version="openai-gpt-5.6-sol-research-2026-09-13",
         provider="openai",
-        model="gpt-5.6-terra",
+        model="gpt-5.6-sol",
         capabilities=frozenset({"text", "reasoning", "structured_output"}),
         reasoning_effort="medium",
         max_output_tokens=6000,
-        pricing=ModelPricing("openai-2026-09-11", Decimal("2.00"), Decimal("12.00"), "USD"),
+        pricing=ModelPricing(
+            "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
+        ),
     )
 
 
 def initial_creative_strategist_route() -> ModelRoute:
     return ModelRoute(
         profile_key="creative_balanced",
-        route_version="openai-gpt-5.6-terra-creative-2026-09",
+        route_version="openai-gpt-5.6-sol-creative-2026-09-13",
         provider="openai",
-        model="gpt-5.6-terra",
+        model="gpt-5.6-sol",
         capabilities=frozenset({"text", "reasoning", "structured_output"}),
-        reasoning_effort="medium",
+        reasoning_effort="high",
         max_output_tokens=8000,
-        pricing=ModelPricing("openai-2026-09-11", Decimal("2.00"), Decimal("12.00"), "USD"),
+        pricing=ModelPricing(
+            "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
+        ),
     )
 
 

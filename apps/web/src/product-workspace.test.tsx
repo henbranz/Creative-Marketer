@@ -224,9 +224,9 @@ const agentRun: AgentRun = {
   input_context_digest: `sha256:${"3".repeat(64)}`,
   model_profile_key: "research_balanced",
   resolved_provider: "openai",
-  resolved_model: "gpt-5.6-terra",
-  model_route_version: "openai-gpt-5.6-terra-2026-09",
-  pricing_version: "openai-2026-09-11",
+  resolved_model: "gpt-5.6-sol",
+  model_route_version: "openai-gpt-5.6-sol-research-2026-09-13",
+  pricing_version: "openai-gpt-5.6-sol-2026-09-13",
   product_snapshot_id: "92000000-0000-0000-0000-000000000001",
   product_snapshot_digest: `sha256:${"1".repeat(64)}`,
   research_context_digest: `sha256:${"2".repeat(64)}`,
@@ -237,7 +237,7 @@ const agentRun: AgentRun = {
   input_tokens: 100,
   output_tokens: 50,
   total_tokens: 150,
-  estimated_cost: "0.000800",
+  estimated_cost: "0.001400",
   currency: "USD",
   result_ref: "research-snapshot://result",
   failure_code: null,
@@ -789,12 +789,31 @@ describe("Product Workspace", () => {
     vi.mocked(catalogApi.listProductionPlans).mockResolvedValue([
       productionPlan,
     ]);
+    vi.mocked(catalogApi.listProducerRuns).mockResolvedValue([
+      {
+        ...agentRun,
+        agent_type: "producer",
+        model_profile_key: "production_deep",
+        resolved_model: "gpt-5.6-sol",
+        model_route_version: "openai-gpt-5.6-sol-production-2026-09-13",
+      },
+      {
+        ...agentRun,
+        id: "90000000-0000-0000-0000-000000000002",
+        agent_type: "producer",
+        model_profile_key: "production_deep",
+        resolved_model: "gpt-6-astra",
+        model_route_version: "openai-gpt-6-astra-production-2026-09-13",
+      },
+    ]);
     vi.mocked(catalogApi.listProductionJobs).mockResolvedValue(productionJobs);
     await renderConnected();
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Production" }));
     expect(await screen.findByText("Production plan")).toBeInTheDocument();
+    expect(screen.getAllByText(/gpt-5\.6-sol/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/gpt-6-astra/)).toBeInTheDocument();
     expect(screen.getByText(/Scene 1 · Hook · 12s/)).toBeInTheDocument();
     expect(screen.getByText(/shot one — generate image/)).toBeInTheDocument();
     expect(screen.getByText(/AI planning: 0.42 USD/)).toBeInTheDocument();

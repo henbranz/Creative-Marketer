@@ -9,8 +9,8 @@ authority, coupling canonical data to provider JSON, hiding spend, or weakening 
 
 ## Decision
 
-- Astra is the Producer product role. It performs one structured inference through logical
-  `production_deep`, receives at most ten authorized visual inputs, and has no tools.
+- Producer performs one structured inference through logical `production_deep`, receives at most
+  ten authorized visual inputs, and has no tools.
 - `ProductionPlan` is immutable and provider-neutral. `GenerationSegment`, not Shot, is the provider
   unit and can cover contiguous shots.
 - Images use `ImageProvider`; videos use `VideoProvider`. The current verified routes are OpenAI
@@ -31,5 +31,6 @@ authority, coupling canonical data to provider JSON, hiding spend, or weakening 
 Explicit persistence and workflow complexity buy reviewable cost, recovery, and lineage evidence.
 Provider changes do not rewrite plans but intentionally invalidate execution approval.
 
-Provider availability changed after this ADR was first accepted. ADR-033 records the verified
-current route migration without rewriting the truthful historical Sol/GPT Image 2 records.
+Provider availability changed after this ADR was first accepted. ADR-033 records the historical
+Astra/Sunburst activation, and ADR-034 records the current Sol reasoning-model policy, without
+rewriting immutable historical records.

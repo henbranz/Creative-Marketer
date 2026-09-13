@@ -42,11 +42,11 @@ def route() -> ModelRoute:
         "research_balanced",
         "route.v1",
         "openai",
-        "gpt-5.6-terra",
+        "gpt-5.6-sol",
         frozenset({"text", "reasoning", "structured_output"}),
         "medium",
         6000,
-        ModelPricing("prices.v1", Decimal("2"), Decimal("12"), "USD"),
+        ModelPricing("prices.v1", Decimal("4"), Decimal("20"), "USD"),
     )
 
 
@@ -154,9 +154,9 @@ def evidence(category: ResearchCategory, captured_at: datetime, text: str) -> Ev
 
 
 def test_pricing_routing_and_usage_are_bounded() -> None:
-    assert route().pricing.cost(1000, 500) == Decimal("0.008000")
+    assert route().pricing.cost(1000, 500) == Decimal("0.014000")
     router = ModelRouter((route(),))
-    assert router.resolve("research_balanced", ("text",)).model == "gpt-5.6-terra"
+    assert router.resolve("research_balanced", ("text",)).model == "gpt-5.6-sol"
     with pytest.raises(ModelRouteUnavailable):
         router.resolve("missing", ("text",))
     with pytest.raises(ModelCapabilityUnavailable):

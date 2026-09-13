@@ -584,7 +584,7 @@ async def run() -> None:
     await _agent(
         registry, "creative_strategist", "creative_strategist", creative_strategist_configuration()
     )
-    producer_id = await _agent(registry, "producer", "astra_producer", producer_configuration())
+    producer_id = await _agent(registry, "producer", "producer", producer_configuration())
     runtime = AgentRunService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
         ModelRouter(
@@ -636,9 +636,7 @@ async def run() -> None:
                         f"local-demo-{invocation.output_contract_key}",
                         ModelUsage(100, 100, 200),
                         "openai",
-                        "gpt-6-astra"
-                        if invocation.output_contract_key == "production.production_plan"
-                        else "gpt-5.6-terra",
+                        "gpt-5.6-sol",
                     )
                 )
             }

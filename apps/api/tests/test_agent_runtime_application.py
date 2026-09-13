@@ -661,7 +661,7 @@ async def test_monthly_budget_reservation_uses_month_boundary() -> None:
     runtime, _, _, _ = service(
         prepared,
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
 
@@ -678,7 +678,7 @@ async def test_request_recovers_the_winning_idempotency_race(monkeypatch) -> Non
     runtime, repository, _, _ = service(
         preparation(tenant_id, product_id),
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
 
@@ -700,7 +700,7 @@ async def test_request_fails_closed_when_insert_race_has_no_matching_replay(monk
     runtime, repository, _, _ = service(
         preparation(tenant_id, product_id),
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
 
@@ -727,7 +727,7 @@ async def test_researcher_happy_path_is_async_idempotent_and_evidence_grounded()
             "response-1",
             ModelUsage(1000, 500, 1500),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     provider = FakeModelProvider(model)
@@ -744,7 +744,7 @@ async def test_researcher_happy_path_is_async_idempotent_and_evidence_grounded()
 
     completed = await runtime.execute(tenant_id, requested.id)
     assert completed.status is AgentRunStatus.SUCCEEDED
-    assert completed.estimated_cost == Decimal("0.008000")
+    assert completed.estimated_cost == Decimal("0.014000")
     assert completed.result_ref
     assert len(provider.calls) == 1
     assert [item.action for item in audit.values] == [
@@ -775,7 +775,7 @@ async def test_creative_capability_reuses_runtime_and_freezes_exact_context() ->
                 "research-response",
                 ModelUsage(100, 50, 150),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             )
         assert creative_context is not None
         assert invocation.untrusted_evidence == ()
@@ -791,7 +791,7 @@ async def test_creative_capability_reuses_runtime_and_freezes_exact_context() ->
             "creative-response",
             ModelUsage(500, 1000, 1500),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     provider = FakeModelProvider(model)
@@ -852,7 +852,7 @@ async def test_creative_request_preflight_fails_closed_and_reuses_active_run() -
             "preflight-research-response",
             ModelUsage(100, 50, 150),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     provider = FakeModelProvider(research_model)
@@ -972,7 +972,7 @@ async def test_researcher_rejects_unauthorized_or_unready_requests() -> None:
     tenant_id, product_id = uuid4(), uuid4()
     prepared = preparation(tenant_id, product_id)
     provider = FakeModelProvider(
-        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
     )
     runtime, _, _, _ = service(prepared, provider)
     with pytest.raises(AgentRunDenied):
@@ -1006,7 +1006,7 @@ async def test_invalid_citation_fails_without_persisting_snapshot_and_records_bi
             "response-malicious",
             ModelUsage(100, 100, 200),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     runtime, repository, _, _ = service(prepared, FakeModelProvider(malicious))
@@ -1016,7 +1016,7 @@ async def test_invalid_citation_fails_without_persisting_snapshot_and_records_bi
     failed = await runtime.execute(tenant_id, requested.id)
     assert failed.status is AgentRunStatus.FAILED
     assert failed.failure_code == "INVALID_RESEARCH_CITATION"
-    assert failed.estimated_cost == Decimal("0.001400")
+    assert failed.estimated_cost == Decimal("0.002400")
     assert repository.snapshots == {}
 
 
@@ -1037,7 +1037,7 @@ async def test_transient_provider_timeout_is_retried_once_then_succeeds(monkeypa
                 "response-after-retry",
                 ModelUsage(100, 50, 150),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             )
 
     async def no_delay(_seconds):
@@ -1155,7 +1155,7 @@ async def test_stranded_attempt_classification_is_conservative(status, classific
     runtime, repository, audit, outbox = service(
         preparation(tenant_id, product_id),
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
     pending = await runtime.request_researcher(
@@ -1180,7 +1180,7 @@ async def test_stranded_attempt_classification_is_conservative(status, classific
 async def test_operator_abandons_safe_before_provider_without_model_call() -> None:
     tenant_id, product_id = uuid4(), uuid4()
     provider = FakeModelProvider(
-        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
     )
     runtime, repository, audit, outbox = service(preparation(tenant_id, product_id), provider)
     pending = await runtime.request_researcher(
@@ -1213,7 +1213,7 @@ async def test_ambiguous_recovery_creates_new_run_and_reconciles_unknown_cost_on
             "recovery-response",
             ModelUsage(100, 50, 150),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     runtime, repository, audit, outbox = service(prepared, FakeModelProvider(model))
@@ -1268,7 +1268,7 @@ async def test_recovery_fails_closed_when_successor_insert_loses_the_race(monkey
     runtime, repository, audit, outbox = service(
         preparation(tenant_id, product_id),
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
     original = await runtime.request_researcher(
@@ -1295,7 +1295,7 @@ async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_error
     runtime, repository, audit, outbox = service(
         preparation(tenant_id, product_id),
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
     recovery = AgentRunRecoveryService(
@@ -1343,7 +1343,7 @@ async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_error
     [
         (
             lambda _invocation: ModelInvocationResult(
-                {}, "malformed", ModelUsage(10, 10, 20), "openai", "gpt-5.6-terra"
+                {}, "malformed", ModelUsage(10, 10, 20), "openai", "gpt-5.6-sol"
             ),
             "MODEL_INVALID_OUTPUT",
         ),
@@ -1353,7 +1353,7 @@ async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_error
                 "over-total",
                 ModelUsage(6500, 6000, 12500),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             ),
             "AGENT_BUDGET_EXCEEDED",
         ),
@@ -1363,7 +1363,7 @@ async def test_recovery_fails_closed_for_state_agent_route_budget_and_cost_error
                 "over-output",
                 ModelUsage(10, 6001, 6011),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             ),
             "AGENT_BUDGET_EXCEEDED",
         ),
@@ -1405,7 +1405,7 @@ async def test_cost_overrun_defense_and_provider_unavailability_fail_closed() ->
             "cost-overrun",
             ModelUsage(100, 100, 200),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     runtime, repository, _, _ = service(prepared, FakeModelProvider(model))
@@ -1480,7 +1480,7 @@ async def test_invalid_researcher_call_token_and_cost_envelopes_are_blocked(
     runtime, _, _, _ = service(
         prepared,
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
     with pytest.raises(expected):
@@ -1510,7 +1510,7 @@ async def test_researcher_forbids_fallback_and_noncanonical_capabilities() -> No
         runtime, _, _, _ = service(
             candidate,
             FakeModelProvider(
-                ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+                ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
             ),
         )
         with pytest.raises(AgentRunNotReady):
@@ -1528,7 +1528,7 @@ async def test_active_run_reuse_and_idempotency_binding_are_exact() -> None:
     runtime, repository, _, _ = service(
         prepared,
         FakeModelProvider(
-            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
         ),
     )
     first = await runtime.request_researcher(
@@ -1550,7 +1550,7 @@ async def test_empty_evidence_and_currency_mismatch_fail_before_reservation() ->
     tenant_id, product_id = uuid4(), uuid4()
     prepared = preparation(tenant_id, product_id)
     provider = FakeModelProvider(
-        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-terra")
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
     )
     empty = replace(prepared, evidence=())
     runtime, _, _, _ = service(empty, provider)
@@ -1589,7 +1589,7 @@ async def test_execute_missing_running_and_succeeded_runs_is_idempotent() -> Non
             "response-idempotent",
             ModelUsage(10, 10, 20),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     runtime, repository, _, _ = service(prepared, FakeModelProvider(model))

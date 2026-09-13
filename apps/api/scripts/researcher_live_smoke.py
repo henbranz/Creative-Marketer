@@ -2,17 +2,16 @@
 
 import asyncio
 import os
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from creative_marketer.agent_runtime.application import load_output_schema
+from creative_marketer.agent_runtime.application import initial_researcher_route, load_output_schema
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
     EvidenceBlockRef,
     ModelInvocation,
-    ModelPricing,
-    ModelRoute,
     canonical_digest,
     parse_research_output,
 )
@@ -25,16 +24,7 @@ async def run() -> None:
     if os.getenv("RUN_OPENAI_SMOKE_TEST") != "1":
         raise SystemExit("Set RUN_OPENAI_SMOKE_TEST=1 to authorize one billed model call")
     key = os.getenv("OPENAI_API_KEY", "")
-    route = ModelRoute(
-        "research_balanced",
-        "openai-gpt-5.6-terra-2026-09",
-        "openai",
-        "gpt-5.6-terra",
-        frozenset({"text", "reasoning", "structured_output"}),
-        "medium",
-        1200,
-        ModelPricing("openai-2026-09-11", Decimal("2"), Decimal("12"), "USD"),
-    )
+    route = replace(initial_researcher_route(), max_output_tokens=1200)
     evidence = EvidenceBlockRef(
         uuid4(),
         uuid4(),

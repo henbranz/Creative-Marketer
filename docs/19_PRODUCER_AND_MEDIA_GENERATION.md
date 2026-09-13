@@ -2,12 +2,13 @@
 
 ## Status and verified provider snapshot
 
-Phase 3 introduces the provider-neutral `production` bounded context. As reverified on 2026-09-13,
-the current `production_deep` route uses OpenAI `gpt-6-astra` with high reasoning and a
-12,000-token output ceiling. Researcher and Creative Strategist remain on `gpt-5.6-terra`. The
+Phase 3 introduces the provider-neutral `production` bounded context. As verified on 2026-09-13,
+the current `production_deep` route uses OpenAI `gpt-5.6-sol` with high reasoning and a
+12,000-token output ceiling. Researcher also uses Sol at medium reasoning; Creative Strategist uses
+Sol at high reasoning. The
 current `production_image` route uses the exact documented
 `gpt-image-2.5-sunburst-2026-09-08` snapshot. Historical AgentRuns and GenerationJobs retain their
-older Sol/GPT Image 2 model and route fields.
+older Terra/Astra and GPT Image 2 model and route fields.
 The verified video route is BytePlus LAS Enhanced `dreamina-seedance-2-5-260628`, documented
 2026-08-17 in `ap-southeast-1`.
 
@@ -16,7 +17,7 @@ The verified video route is BytePlus LAS Enhanced `dreamina-seedance-2-5-260628`
 ```text
 Approved CreativeConcept
           ↓
-Astra Producer (one structured inference, zero tools)
+Producer on GPT-5.6 Sol (one structured inference, zero tools)
           ↓
 Provider-neutral immutable ProductionPlan
           ↓
@@ -61,6 +62,12 @@ replace Tool Gateway approval or current permission, rights, capability, connect
 
 ## Provider routes and pricing
 
+`production_deep` freezes route `openai-gpt-5.6-sol-production-2026-09-13` and pricing snapshot
+`openai-gpt-5.6-sol-2026-09-13`: USD 4/M input, USD 0.40/M eligible cached input, and USD 20/M
+output. Reservations conservatively price all input as uncached. The 32,000-token bound permits at
+most 20,000 input plus 12,000 output tokens, or USD 0.32 per run and USD 6.40 across the configured
+20-run daily ceiling.
+
 `production_video` resolves to Seedance 2.5 at fixed LAS create/status endpoints. It supports
 480p/720p, 24 fps, 4–30 seconds, documented aspect ratios, audio-video generation, and bounded
 multimodal references. V1 enforces provider maxima of 30 images, 10 videos, and 10 audio clips and
@@ -77,7 +84,8 @@ Factors: no input video 480p `0.6785`, 720p `1.525`; with input video 480p `0.40
 Amounts use `Decimal` and round upward to six places. Failed/review-rejected jobs settle no generation
 charge under the verified policy; successful status is authoritative for settlement.
 
-`production_image` resolves to GPT Image 2. Medium/high intent maps deterministically to bounded
+`production_image` resolves to the exact `gpt-image-2.5-sunburst-2026-09-08` snapshot. Medium/high
+intent maps deterministically to bounded
 provider quality/size. Until an official stable usage-price surface is encoded, approval uses
 conservative versioned per-image reservations and reconciles actual usage/cost when returned; the UI
 must label this an estimate.
@@ -100,7 +108,8 @@ committed tenant-scoped jobs and starts the deterministic `MediaProductionWorkfl
 Successful temporary output locators trigger immediate bounded download, signature/MIME/size
 validation, SHA-256 calculation, private ObjectStore import, and a normal READY generated Asset.
 Generated media has conservative configurable rights. Multi-parent lineage supports Product Asset →
-generated image → generated video. Final editing/compositing and social publishing are out of scope.
+generated image → generated video. Final editing/compositing is owned by the deterministic FFmpeg
+assembly boundary; social publishing remains out of scope.
 
 Provider composition defaults disabled. Live smoke targets require an explicit flag and credential
 and are never CI dependencies. Metrics use bounded dimensions without tenant/Plan/Job/Asset IDs.

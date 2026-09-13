@@ -10,6 +10,10 @@ import pytest
 from httpx import Request, Response
 from openai import APIConnectionError, APITimeoutError, RateLimitError
 
+from creative_marketer.agent_runtime.application import (
+    initial_creative_strategist_route,
+    initial_researcher_route,
+)
 from creative_marketer.agent_runtime.domain import (
     InvalidModelOutput,
     ModelImageInputRef,
@@ -29,12 +33,12 @@ from creative_marketer.infrastructure.model_providers.openai_responses import (
     OpenAIResponsesModelProvider,
 )
 from creative_marketer.production.application import initial_producer_route
-from tests.test_agent_runtime_domain import block, output, route
+from tests.test_agent_runtime_domain import block, output
 
 
 def invocation() -> ModelInvocation:
     return ModelInvocation(
-        route=route(),
+        route=initial_researcher_route(),
         system_instructions="Only analyze supplied evidence.",
         trusted_product_context={"name": "Product"},
         untrusted_evidence=(block(),),
@@ -59,7 +63,7 @@ async def test_openai_adapter_separates_untrusted_evidence_and_disables_tools_an
         output_text=__import__("json").dumps(output(call.untrusted_evidence[0])),
         usage=SimpleNamespace(input_tokens=100, output_tokens=50, total_tokens=150),
         id="resp_1",
-        model="gpt-5.6-terra",
+        model="gpt-5.6-sol",
     )
     client, create = client_with(response)
     provider = OpenAIResponsesModelProvider("unit-live-credential", client=client)
@@ -67,6 +71,8 @@ async def test_openai_adapter_separates_untrusted_evidence_and_disables_tools_an
     assert result.provider_response_id == "resp_1"
     assert result.usage.total_tokens == 150
     parameters = create.await_args.kwargs
+    assert parameters["model"] == "gpt-5.6-sol"
+    assert parameters["reasoning"] == {"effort": "medium"}
     assert parameters["tools"] == []
     assert parameters["store"] is False
     assert parameters["text"]["format"]["strict"] is True
@@ -75,32 +81,76 @@ async def test_openai_adapter_separates_untrusted_evidence_and_disables_tools_an
 
 
 @pytest.mark.asyncio
-async def test_astra_producer_maps_exact_responses_contract_with_zero_tools() -> None:
+async def test_creative_strategist_maps_sol_high_reasoning_contract() -> None:
     call = replace(
         invocation(),
-        route=initial_producer_route(),
-        max_output_tokens=12_000,
+        route=initial_creative_strategist_route(),
+        max_output_tokens=8_000,
         reasoning_effort="high",
-        output_contract_key="production.production_plan",
+        output_contract_key="creative.creative_concept_set",
     )
     response = SimpleNamespace(
         status="completed",
         output_text="{}",
         output=(),
         usage=SimpleNamespace(input_tokens=20, output_tokens=10, total_tokens=30),
-        id="resp_astra",
-        model="gpt-6-astra",
+        id="resp_creative_sol",
+        model="gpt-5.6-sol",
     )
     client, create = client_with(response)
     await OpenAIResponsesModelProvider("unit-live-credential", client=client).generate_structured(
         call
     )
     parameters = create.await_args.kwargs
-    assert parameters["model"] == "gpt-6-astra"
+    assert parameters["model"] == "gpt-5.6-sol"
+    assert parameters["reasoning"] == {"effort": "high"}
+    assert parameters["max_output_tokens"] == 8_000
+    assert parameters["tools"] == []
+
+
+class StaticImageMaterializer:
+    async def materialize(self, _reference):
+        return b"image", "image/png"
+
+
+@pytest.mark.asyncio
+async def test_sol_producer_maps_bounded_image_contract_with_zero_tools() -> None:
+    image_reference = ModelImageInputRef(
+        uuid4(),
+        uuid4(),
+        "sha256:" + __import__("hashlib").sha256(b"image").hexdigest(),
+    )
+    call = replace(
+        invocation(),
+        route=initial_producer_route(),
+        max_output_tokens=12_000,
+        reasoning_effort="high",
+        output_contract_key="production.production_plan",
+        image_inputs=(image_reference,),
+    )
+    response = SimpleNamespace(
+        status="completed",
+        output_text="{}",
+        output=(),
+        usage=SimpleNamespace(input_tokens=20, output_tokens=10, total_tokens=30),
+        id="resp_producer_sol",
+        model="gpt-5.6-sol",
+    )
+    client, create = client_with(response)
+    await OpenAIResponsesModelProvider(
+        "unit-live-credential",
+        client=client,
+        image_materializer=StaticImageMaterializer(),
+    ).generate_structured(call)
+    parameters = create.await_args.kwargs
+    assert parameters["model"] == "gpt-5.6-sol"
     assert parameters["reasoning"] == {"effort": "high"}
     assert parameters["text"]["format"]["strict"] is True
     assert parameters["max_output_tokens"] == 12_000
     assert parameters["tools"] == []
+    content = parameters["input"][0]["content"]
+    assert [part["type"] for part in content] == ["input_text", "input_image"]
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
 
 
 @pytest.mark.parametrize("key", ["", "disabled-key", "test-key", "fake-key", "replace-key"])
@@ -148,7 +198,7 @@ async def test_openai_adapter_rejects_refusal_and_invalid_json() -> None:
         output_text="not-json",
         usage=SimpleNamespace(input_tokens=1, output_tokens=1, total_tokens=2),
         id="resp_2",
-        model="gpt-5.6-terra",
+        model="gpt-5.6-sol",
     )
     client, _ = client_with(invalid)
     with pytest.raises(InvalidModelOutput):

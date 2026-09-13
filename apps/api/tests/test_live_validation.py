@@ -29,7 +29,7 @@ async def test_provider_preflight_checks_models_without_generation(monkeypatch, 
         byteplus_las_api_key=secret,
     )
     assert await live.preflight(settings, client) == 0
-    assert retrieve == ["gpt-6-astra", "gpt-image-2.5-sunburst-2026-09-08"]
+    assert retrieve == ["gpt-5.6-sol", "gpt-image-2.5-sunburst-2026-09-08"]
     output = capsys.readouterr().out
     assert secret not in output
     assert "no inference or media-generation requests" in output
@@ -63,8 +63,8 @@ def test_successful_run_requires_the_exact_current_route() -> None:
     historical = {
         "id": "old",
         "status": "SUCCEEDED",
-        "resolved_model": "gpt-5.6-sol",
-        "model_route_version": "openai-gpt-5.6-sol-production-2026-09-12",
+        "resolved_model": "gpt-6-astra",
+        "model_route_version": "openai-gpt-6-astra-production-2026-09-13",
     }
     current = {
         "id": "current",

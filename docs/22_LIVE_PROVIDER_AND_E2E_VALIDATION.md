@@ -51,7 +51,7 @@ make env-check
 make live-provider-preflight
 ```
 
-Preflight retrieves OpenAI model metadata for `gpt-6-astra` and
+Preflight retrieves OpenAI model metadata once for the shared reasoning model `gpt-5.6-sol` and for
 `gpt-image-2.5-sunburst-2026-09-08`, checks application route identity, and resolves the configured
 BytePlus LAS host. BytePlus documents no credential-only endpoint for this API, so authentication
 is explicitly deferred to the minimal Seedance smoke; no video task is created. An inaccessible
@@ -88,7 +88,8 @@ make live-openai-smoke
 ```
 
 The command advances one governed step at a time against `LIVE_E2E_PRODUCT_ID`: Researcher, then
-Creative Strategist, then GPT-6 Astra Producer. Re-run after workers finish. It pauses for a human
+Creative Strategist, then Producer, all through their current GPT-5.6 Sol routes. Re-run after
+workers finish. It pauses for a human
 to approve one Creative Concept in the UI. Successful runs report only route/model, token usage,
 cost, and schema status—never prompts or provider payloads.
 
@@ -117,7 +118,7 @@ decisions in the UI and re-run. After media is ready, create/review Final Assemb
 the command again: it requests the deterministic AssemblyPlan through the existing API when all
 sources are ready. Keep the Assembly worker running, preview the final MP4, approve it for
 publishing, and run `make obsidian-sync` (or keep `make obsidian-watch` active). The command returns
-success only after the current Astra-linked FinalCreative is approved for publishing; browser
+success only after the current Sol-linked FinalCreative is approved for publishing; browser
 playback and Obsidian projection remain explicit operator checks.
 
 `LIVE_E2E_MAX_USD` covers reserved/actual Agent and media cost for the selected Product. The media
@@ -135,7 +136,7 @@ authorize more. Provider billing remains authoritative; reservations are conserv
 [ ] provider preflight passes
 [ ] Researcher live run succeeds
 [ ] Creative Strategist live run succeeds
-[ ] Astra Producer live run succeeds
+[ ] Producer GPT-5.6 Sol live run succeeds
 [ ] Sunburst image generation succeeds
 [ ] Seedance 2.5 generation succeeds
 [ ] generated assets preview

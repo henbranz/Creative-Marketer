@@ -100,6 +100,10 @@ binary. No separately running Temporal service is required for tests.
 The generic worker factory is `creative_marketer.infrastructure.temporal.worker:create_worker`.
 The activated local Agent entrypoint is `make agent-worker`; one worker handles Researcher,
 Creative Strategist, and Producer runs.
+Current operational routing uses OpenAI `gpt-5.6-sol` for all three reasoning capabilities:
+Researcher at medium reasoning, and Creative Strategist and Producer at high reasoning. Image and
+video generation remain separate exact Sunburst and Seedance routes, while final assembly remains
+deterministic FFmpeg work. Route changes create new immutable provenance and never rewrite old runs.
 The activated media entrypoint is `make production-worker`: it composes the existing Tool Gateway,
 canonical PostgreSQL authority, private object storage, media adapters, and Temporal workflow in a
 separate process. Development may derive the labeled local workload identity; staging/production

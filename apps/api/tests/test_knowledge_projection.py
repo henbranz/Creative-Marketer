@@ -1,6 +1,7 @@
 # mypy: disable-error-code="arg-type,no-untyped-def"
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -124,6 +125,7 @@ def test_cursor_is_tenant_bound_and_rejects_tampering() -> None:
 
 def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -> None:
     now, brand_id, product_id = datetime.now(UTC), uuid4(), uuid4()
+    historical_run_ids = [uuid4(), uuid4(), uuid4()]
     rows = {
         "brands": [
             {
@@ -154,7 +156,35 @@ def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -
         "definitions": [],
         "versions": [],
         "activations": [],
-        "runs": [],
+        "runs": [
+            {
+                "id": run_id,
+                "agent_type": agent_type,
+                "agent_version_id": uuid4(),
+                "agent_version_number": 2,
+                "product_snapshot_id": uuid4(),
+                "input_context_refs": [],
+                "status": "SUCCEEDED",
+                "created_at": now,
+                "started_at": now,
+                "completed_at": now,
+                "model_profile_key": "production_deep",
+                "resolved_provider": "openai",
+                "resolved_model": model,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150,
+                "estimated_cost": Decimal("0.003"),
+                "currency": "USD",
+                "result_ref": None,
+            }
+            for run_id, agent_type, model in zip(
+                historical_run_ids,
+                ("researcher", "creative_strategist", "producer"),
+                ("gpt-5.6-terra", "gpt-5.6-terra", "gpt-6-astra"),
+                strict=True,
+            )
+        ],
         "sources": [],
         "evidence": [],
         "research_snapshots": [],
@@ -163,9 +193,19 @@ def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -
         "decisions": [],
     }
     graph = SqlAlchemyCanonicalKnowledgeReader(None)._build(rows)
-    assert len(graph.nodes) == 2
+    assert len(graph.nodes) == 5
     brand = next(item for item in graph.nodes if item.node_type is KnowledgeNodeType.BRAND)
     assert any(rel.target.canonical_id == str(product_id) for rel in brand.relationships)
+    historical_runs = {
+        item.canonical_id: item.properties["model"]
+        for item in graph.nodes
+        if item.node_type is KnowledgeNodeType.AGENT_RUN
+    }
+    assert historical_runs == {
+        str(historical_run_ids[0]): "gpt-5.6-terra",
+        str(historical_run_ids[1]): "gpt-5.6-terra",
+        str(historical_run_ids[2]): "gpt-6-astra",
+    }
 
 
 def endpoint(router, path: str):

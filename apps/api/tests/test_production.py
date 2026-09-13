@@ -260,11 +260,13 @@ def test_routes_pricing_contracts_and_selection() -> None:
     producer = initial_producer_route()
     assert (producer.profile_key, producer.model, producer.reasoning_effort) == (
         "production_deep",
-        "gpt-6-astra",
+        "gpt-5.6-sol",
         "high",
     )
-    assert producer.route_version == "openai-gpt-6-astra-production-2026-09-13"
-    assert producer.pricing.version == "openai-gpt-6-astra-2026-09-13"
+    assert producer.route_version == "openai-gpt-5.6-sol-production-2026-09-13"
+    assert producer.pricing.version == "openai-gpt-5.6-sol-2026-09-13"
+    assert producer.pricing.input_price_per_million == Decimal("4")
+    assert producer.pricing.output_price_per_million == Decimal("20")
     assert producer.max_output_tokens == 12_000
     router = initial_media_router()
     assert router.resolve("production_video").model == "dreamina-seedance-2-5-260628"

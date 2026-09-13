@@ -84,13 +84,13 @@ def initial_producer_route() -> ModelRoute:
     """Current immutable Producer route verified against official OpenAI documentation."""
     return ModelRoute(
         profile_key="production_deep",
-        route_version="openai-gpt-6-astra-production-2026-09-13",
+        route_version="openai-gpt-5.6-sol-production-2026-09-13",
         provider="openai",
-        model="gpt-6-astra",
+        model="gpt-5.6-sol",
         capabilities=frozenset({"text", "image_input", "reasoning", "structured_output"}),
         reasoning_effort="high",
         max_output_tokens=12_000,
-        pricing=ModelPricing("openai-gpt-6-astra-2026-09-13", Decimal("10"), Decimal("50"), "USD"),
+        pricing=ModelPricing("openai-gpt-5.6-sol-2026-09-13", Decimal("4"), Decimal("20"), "USD"),
     )
 
 

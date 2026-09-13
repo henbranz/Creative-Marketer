@@ -550,6 +550,7 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             )}
           </div>
         )}
+        <AgentRunProvenance runs={runs} />
       </section>
       {snapshots[0] && (
         <section className="research-snapshot">
@@ -879,6 +880,24 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function AgentRunProvenance({ runs }: { runs: AgentRun[] }) {
+  if (!runs.length) return null;
+  return (
+    <details>
+      <summary>Run provenance</summary>
+      <ul>
+        {runs.map((run, index) => (
+          <li key={run.id}>
+            <strong>{index === 0 ? "Current" : "Historical"}</strong> ·{" "}
+            {run.resolved_model ?? "Unresolved model"} ·{" "}
+            {run.model_route_version ?? "pending route"}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 function creativeValue(payload: Record<string, unknown>, key: string): string {
   const value = payload[key];
   return typeof value === "string" || typeof value === "number"
@@ -1017,6 +1036,7 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
           )}
         </div>
       )}
+      <AgentRunProvenance runs={runs} />
       {error && <p className="error-banner">{error}</p>}
       {latest ? (
         <>
@@ -1451,6 +1471,7 @@ function ProductionPanel({
               {producerRun.model_route_version}
             </span>
           )}
+          <AgentRunProvenance runs={runs} />
           {workspace.product.can_edit && concept && !plan && (
             <button
               className="primary"
@@ -2006,7 +2027,7 @@ function ProductionPanel({
       ) : (
         <section className="empty-panel">
           <h2>No production plan yet</h2>
-          <p>Approve a current creative concept to unlock Astra Producer.</p>
+          <p>Approve a current creative concept to unlock the Producer.</p>
         </section>
       )}
     </div>

@@ -31,11 +31,11 @@ AgentRuntime owns execution records, routing, budgets, context construction, nor
 and outcome persistence. The OpenAI Responses adapter is infrastructure-only. Researcher does not
 use the Agents SDK's tools, hosted web search, memory, tracing, or orchestration facilities.
 
-## Researcher V1 configuration
+## Researcher configuration
 
 The explicit development bootstrap creates one tenant `researcher` definition with profile
 `research_balanced`; capabilities `text`, `reasoning`, and `structured_output`; one turn; one model
-call; zero tool calls; 12,000 total tokens; USD 0.15 per run; 20 runs/USD 3 per day; exact Catalog,
+call; zero tool calls; 16,000 total tokens; USD 0.16 per run; 20 runs/USD 3.20 per day; exact Catalog,
 Research, and snapshot scopes; no memory; no Tool declarations; and output contract
 `research.research_snapshot` version 1. It never runs automatically and refuses staging/production.
 
@@ -94,9 +94,12 @@ Temporal history. Events carry IDs, digests, safe status, and numeric usage only
 
 ## Routing, pricing, and operations
 
-The initial exact route is `research_balanced` → `openai` → `gpt-5.6-terra`, route
-`openai-gpt-5.6-terra-2026-09`, medium reasoning, 6,000 output tokens. Pricing snapshot
-`openai-2026-09-11` is USD 2.00 per million input tokens and USD 12.00 per million output tokens.
+The current exact route is `research_balanced` → `openai` → `gpt-5.6-sol`, route
+`openai-gpt-5.6-sol-research-2026-09-13`, medium reasoning, and 6,000 output tokens. Pricing snapshot
+`openai-gpt-5.6-sol-2026-09-13` is USD 4.00 per million input tokens and USD 20.00 per million
+output tokens; eligible cached input is USD 0.40 per million. Reservations conservatively price all
+input as uncached. At the 16,000-token run bound, 10,000 input plus 6,000 output tokens costs at
+most USD 0.16. Historical Terra runs retain their frozen model, route, pricing, and cost provenance.
 Route capability/currency and worst-case cost are checked before reservation. Provider-reported
 usage is checked after the call. Response identity, usage, and Decimal cost are durably recorded on
 the attempt before local output validation, so a crash can be classified without storing content.

@@ -57,10 +57,12 @@ have semantic digests and immutable server-generated identities.
 
 The explicit `creative_strategist` capability uses the common AgentRuntime lifecycle, Agent Registry,
 ModelRouter, ModelAttempt boundary, daily ledger, response-before-validation durability, recovery,
-Audit, Outbox, and telemetry. The initial `creative_balanced` route uses the existing versioned
-OpenAI/gpt-5.6-terra pricing snapshot, medium reasoning, 8,000 maximum output tokens, 16,000 total
-tokens, one model call, zero tool calls, and a USD 0.20 run ceiling. The worst configured pricing case
-is USD 0.112.
+Audit, Outbox, and telemetry. The current `creative_balanced` route uses OpenAI `gpt-5.6-sol`, high
+reasoning, 8,000 maximum output tokens, 32,000 total tokens, one model call, zero tool calls, and a
+USD 0.256 run ceiling. The versioned prices are USD 4/M input, USD 0.40/M eligible cached input, and
+USD 20/M output; reservations conservatively price all input as uncached. Thus 24,000 input plus
+8,000 output tokens costs at most USD 0.256; the daily ceiling is 20 runs/USD 5.12. Historical
+Terra runs retain their frozen model, route, pricing, and cost provenance.
 
 Existing `ResearcherWorkflow` history is unchanged. New Creative runs use the future-only thin
 `AgentExecutionWorkflow`, and the event bridge resolves authoritative AgentRun type before selecting

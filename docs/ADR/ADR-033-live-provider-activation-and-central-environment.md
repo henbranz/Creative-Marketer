@@ -1,6 +1,6 @@
 # ADR-033 — Live provider activation and central environment
 
-Status: Accepted
+Status: Superseded in part by ADR-034
 
 ## Context
 
@@ -30,3 +30,7 @@ OpenAI now officially documents GPT-6 Astra and the GPT Image 2.5 Sunburst snaps
 Local activation is intentionally multi-step and resumable. Account-region configuration is
 explicit. Conservative reservations may overstate pending cost, while actual usage replaces them
 when sufficiently authoritative. CI stays secret-free and cannot claim live-provider acceptance.
+
+The Astra/Terra reasoning routes above remain a truthful historical decision. ADR-034 supersedes
+only the current reasoning-model route policy. Sunburst, Seedance, central environment, and live
+activation controls remain accepted.

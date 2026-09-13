@@ -184,7 +184,7 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
             "response-integration",
             ModelUsage(1000, 500, 1500),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     provider = FakeModelProvider(model)
@@ -366,7 +366,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 "research-before-creative",
                 ModelUsage(100, 50, 150),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             )
         if invocation.output_contract_key == "production.production_plan":
             assert producer_context is not None
@@ -420,7 +420,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 "producer-persisted",
                 ModelUsage(800, 1200, 2000),
                 "openai",
-                "gpt-6-astra",
+                "gpt-5.6-sol",
             )
         assert creative_context is not None
         raw = creative_output(creative_context)
@@ -447,7 +447,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             "creative-persisted",
             ModelUsage(500, 1000, 1500),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     provider = FakeModelProvider(model)
@@ -495,7 +495,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
 
     producer = await CreateTenantAgentDefinition(agent_registry_factory)(
-        context, agent_key="astra_producer", agent_type="producer"
+        context, agent_key="producer", agent_type="producer"
     )
     producer_version = await CreateAgentVersion(agent_registry_factory)(
         context, producer.id, producer_configuration()
@@ -675,7 +675,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
             "response-recovery-successor",
             ModelUsage(100, 50, 150),
             "openai",
-            "gpt-5.6-terra",
+            "gpt-5.6-sol",
         )
 
     runtime = AgentRunService(
@@ -737,7 +737,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
                     "late-response",
                     ModelUsage(100, 50, 150),
                     "openai",
-                    "gpt-5.6-terra",
+                    "gpt-5.6-sol",
                 ),
                 Decimal("0.000800"),
             )
@@ -751,7 +751,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
                     "misbound-late-response",
                     ModelUsage(100, 50, 150),
                     "openai",
-                    "gpt-5.6-terra",
+                    "gpt-5.6-sol",
                 ),
                 Decimal("0.000800"),
             )
@@ -804,7 +804,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
             )
         ).one()
     assert reconciled_budget.unknown_cost == Decimal("0.000000")
-    assert reconciled_budget.actual_cost == Decimal("0.010800")
+    assert reconciled_budget.actual_cost == Decimal("0.011400")
 
     safe_run = await runtime.request_researcher(
         context, product_id=product.id, idempotency_key="recovery-safe-before-provider"
@@ -845,7 +845,7 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
                 "recorded-before-crash",
                 ModelUsage(100, 50, 150),
                 "openai",
-                "gpt-5.6-terra",
+                "gpt-5.6-sol",
             ),
             Decimal("0.000800"),
         )

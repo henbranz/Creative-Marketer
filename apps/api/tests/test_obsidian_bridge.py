@@ -102,6 +102,19 @@ def test_markdown_frontmatter_wikilinks_and_escaping() -> None:
     assert markdown_escape("# [unsafe]") == "\\# \\[unsafe\\]"
 
 
+@pytest.mark.parametrize("model", ["gpt-5.6-terra", "gpt-6-astra"])
+def test_historical_agent_model_is_rendered_from_durable_projection(model: str) -> None:
+    historical = projected_node("agent_run", title="Producer Run historical")
+    historical["properties"] = {
+        "provider": "openai",
+        "model": model,
+        "model_profile": "production_deep",
+    }
+    text = render_note(historical, titles={}, incoming=[])
+    assert model in text
+    assert "gpt-5.6-sol" not in text
+
+
 def test_environment_configuration_and_http_projection_request(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
