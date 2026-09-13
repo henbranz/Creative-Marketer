@@ -106,7 +106,7 @@ def configuration() -> AgentVersionConfiguration:
         denied_tool_keys=(),
         approval_policy_key="researcher.read_only",
         output_contract_key="research.research_snapshot",
-        output_contract_version=1,
+        output_contract_version=2,
     )
 
 

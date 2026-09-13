@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   type Asset,
+  type AssetCreate,
   type AssemblyPlan,
   type AssemblyReadiness,
   type AgentRun,
@@ -15,7 +16,6 @@ import {
   type CreativeConceptSet,
   type FinalCreative,
   catalogApi,
-  listText,
   obsidianOpenUrl,
   type Product,
   type ProductionJob,
@@ -26,10 +26,27 @@ import {
   type ResearchSourceCreate,
   type ResearchSnapshot,
   type Session,
+  type ResearchTarget,
+  type SocialCapability,
+  type SocialEvidence,
   slugify,
   type Workspace,
   uploadToGrant,
 } from "./catalog-api";
+import {
+  AUDIENCE_DESCRIPTION_MAX,
+  AUDIENCE_NAME_MAX,
+  BriefDraftValidationError,
+  briefDraftKey,
+  draftDigest,
+  readStoredBriefDraft,
+  serializeBriefDraft,
+  toBriefDraft,
+  toBriefWrite,
+  type AudienceDraftV1,
+  type BriefDraftV1,
+  type StoredBriefDraftV1,
+} from "./brief-draft";
 
 const navigation = [
   "Command Center",
@@ -366,14 +383,52 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [evidence, setEvidence] = useState<ResearchEvidence | null>(null);
+  const [selectedSocialEvidence, setSelectedSocialEvidence] =
+    useState<SocialEvidence | null>(null);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [snapshots, setSnapshots] = useState<ResearchSnapshot[]>([]);
+  const [targets, setTargets] = useState<ResearchTarget[]>([]);
+  const [socialEvidence, setSocialEvidence] = useState<SocialEvidence[]>([]);
+  const [capabilities, setCapabilities] = useState<SocialCapability[]>([]);
+  const [researchView, setResearchView] = useState<
+    "overview" | "web" | "social" | "results"
+  >("overview");
+  const [targetName, setTargetName] = useState("");
+  const [targetPlatform, setTargetPlatform] = useState<
+    "facebook" | "instagram" | "tiktok" | "other"
+  >("facebook");
+  const [targetProfileUrl, setTargetProfileUrl] = useState("");
+  const [evidenceTargetId, setEvidenceTargetId] = useState("");
+  const [evidenceUrl, setEvidenceUrl] = useState("");
+  const [evidenceHeadline, setEvidenceHeadline] = useState("");
+  const [evidenceBody, setEvidenceBody] = useState("");
+  const [evidenceType, setEvidenceType] = useState<
+    | "ad"
+    | "post"
+    | "reel"
+    | "video"
+    | "screenshot"
+    | "exported_image"
+    | "exported_video"
+    | "other"
+  >("ad");
+  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
 
   const load = useCallback(async () => {
-    const [values, runValues, snapshotValues] = await Promise.all([
+    const [
+      values,
+      runValues,
+      snapshotValues,
+      targetValues,
+      socialValues,
+      capabilityValues,
+    ] = await Promise.all([
       catalogApi.listResearchSources(session, workspace.product.id),
       catalogApi.listResearcherRuns(session, workspace.product.id),
       catalogApi.listResearchSnapshots(session, workspace.product.id),
+      catalogApi.listResearchTargets(session, workspace.product.id),
+      catalogApi.listSocialEvidence(session, workspace.product.id),
+      catalogApi.listSocialCapabilities(session),
     ]);
     const enriched = await Promise.all(
       values.map(async (source) => {
@@ -387,6 +442,9 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
     setSources(enriched);
     setRuns(runValues);
     setSnapshots(snapshotValues);
+    setTargets(targetValues);
+    setSocialEvidence(socialValues);
+    setCapabilities(capabilityValues);
   }, [session, workspace.product.id]);
 
   useEffect(() => {
@@ -469,7 +527,24 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
     setError("");
     try {
       setEvidence(await catalogApi.getResearchEvidence(session, evidenceId));
+      setSelectedSocialEvidence(null);
     } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) {
+        try {
+          setSelectedSocialEvidence(
+            await catalogApi.getSocialEvidence(session, evidenceId),
+          );
+          setEvidence(null);
+          return;
+        } catch (socialError) {
+          setError(
+            socialError instanceof Error
+              ? socialError.message
+              : "Evidence could not be loaded.",
+          );
+          return;
+        }
+      }
       setError(
         caught instanceof Error
           ? caught.message
@@ -478,8 +553,144 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
     }
   };
 
+  const addTarget = async () => {
+    setBusy("target");
+    setError("");
+    try {
+      const created = await catalogApi.createResearchTarget(
+        session,
+        workspace.product.id,
+        {
+          kind: "competitor_brand",
+          display_name: targetName,
+          website_url: null,
+          platform: targetPlatform,
+          platform_handle: null,
+          platform_profile_url: targetProfileUrl || null,
+          platform_identifier: null,
+        },
+      );
+      setEvidenceTargetId(created.id);
+      setTargetName("");
+      setTargetProfileUrl("");
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Competitor could not be added.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const addManualEvidence = async () => {
+    if (!evidenceTargetId) return;
+    setBusy("manual-evidence");
+    setError("");
+    try {
+      let mediaAssetId: string | null = null;
+      if (evidenceFile) {
+        const allowedMimeTypes: AssetCreate["mime_type"][] = [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+          "video/mp4",
+          "video/webm",
+        ];
+        if (
+          !allowedMimeTypes.includes(
+            evidenceFile.type as AssetCreate["mime_type"],
+          )
+        )
+          throw new Error("Use a JPEG, PNG, WebP, MP4, or WebM evidence file.");
+        const kind = evidenceFile.type.startsWith("video/") ? "video" : "image";
+        const grant = await catalogApi.createAsset(session, {
+          brand_id: workspace.brand.id,
+          product_id: workspace.product.id,
+          kind,
+          role: "other",
+          original_filename: evidenceFile.name,
+          mime_type: evidenceFile.type as AssetCreate["mime_type"],
+          rights_status: "restricted",
+          allowed_uses: ["internal_analysis"],
+          parent_asset_id: null,
+          source_url: evidenceUrl || null,
+        });
+        await uploadToGrant(grant, evidenceFile, () => undefined);
+        const finalized = await catalogApi.finalizeAsset(
+          session,
+          grant.asset.id,
+        );
+        mediaAssetId = finalized.id;
+      }
+      const target = targets.find((item) => item.id === evidenceTargetId);
+      await catalogApi.addManualSocialEvidence(session, evidenceTargetId, {
+        platform: target?.platform ?? targetPlatform,
+        evidence_type: evidenceType,
+        source_url: evidenceUrl || null,
+        destination_url: null,
+        advertiser_name: target?.display_name ?? null,
+        platform_content_id: null,
+        headline: evidenceHeadline || null,
+        body_text: evidenceBody || null,
+        cta: null,
+        media_type: evidenceFile?.type ?? null,
+        placements: [],
+        first_seen_at: null,
+        last_seen_at: null,
+        activity_status: null,
+        region: null,
+        media_asset_id: mediaAssetId,
+      });
+      setEvidenceUrl("");
+      setEvidenceHeadline("");
+      setEvidenceBody("");
+      setEvidenceFile(null);
+      await load();
+      setNotice(
+        "Manual social evidence captured as restricted, analysis-only evidence.",
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Evidence could not be added.",
+      );
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const activeSources = sources.filter(
+    (item) => item.source.status === "active",
+  );
+  const archivedSources = sources.filter(
+    (item) => item.source.status === "archived",
+  );
+  const activeTargets = targets.filter((item) => item.status === "active");
+  const archivedTargets = targets.filter((item) => item.status === "archived");
+
   return (
     <div className="research-workspace">
+      <nav className="research-subnav" aria-label="Research sections">
+        {(["overview", "web", "social", "results"] as const).map((value) => (
+          <button
+            key={value}
+            className={researchView === value ? "active" : ""}
+            onClick={() => setResearchView(value)}
+          >
+            {value === "web"
+              ? "Web Sources"
+              : value === "social"
+                ? "Competitors & Ads"
+                : value === "results"
+                  ? "Research Results"
+                  : "Overview"}
+          </button>
+        ))}
+      </nav>
       <section className="ai-research-card">
         <div>
           <p className="eyebrow">Evidence-grounded AI research</p>
@@ -585,6 +796,7 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
                   <span title="Model-assessed confidence based on supplied evidence">
                     {finding.confidence.toLowerCase()} confidence
                   </span>
+                  <span>{finding.basis.toLowerCase()}</span>
                 </div>
                 <p>{finding.statement}</p>
                 {finding.implication && <small>{finding.implication}</small>}
@@ -630,6 +842,310 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
                 automatically.
               </small>
             </div>
+          )}
+        </section>
+      )}
+      {researchView === "social" && (
+        <section className="social-research">
+          <div>
+            <p className="eyebrow">Competitor evidence</p>
+            <h2>Competitors &amp; Ads</h2>
+            <p>
+              Manual evidence works without platform credentials. Every upload
+              is restricted to internal analysis and cannot become a production
+              input.
+            </p>
+          </div>
+          {workspace.product.can_edit && (
+            <div className="research-form">
+              <label>
+                Competitor name
+                <input
+                  aria-label="Competitor name"
+                  value={targetName}
+                  maxLength={200}
+                  onChange={(event) => setTargetName(event.target.value)}
+                />
+              </label>
+              <label>
+                Platform
+                <select
+                  aria-label="Competitor platform"
+                  value={targetPlatform}
+                  onChange={(event) =>
+                    setTargetPlatform(
+                      event.target.value as typeof targetPlatform,
+                    )
+                  }
+                >
+                  <option value="facebook">Facebook</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="tiktok">TikTok</option>
+                  <option value="other">Other</option>
+                </select>
+              </label>
+              <label>
+                Public profile URL
+                <input
+                  aria-label="Competitor profile URL"
+                  type="url"
+                  value={targetProfileUrl}
+                  onChange={(event) => setTargetProfileUrl(event.target.value)}
+                />
+              </label>
+              <button
+                className="primary"
+                disabled={!targetName || busy === "target"}
+                onClick={() => void addTarget()}
+              >
+                Add competitor
+              </button>
+            </div>
+          )}
+          {!!activeTargets.length && (
+            <div className="research-grid">
+              {activeTargets.map((target) => {
+                const platformCapability = capabilities.find(
+                  (item) => item.platform === target.platform,
+                );
+                return (
+                  <article className="research-card" key={target.id}>
+                    <div className="research-card-heading">
+                      <div>
+                        <span className="research-category">
+                          {target.platform ?? "other"}
+                        </span>
+                        <h3>{target.display_name}</h3>
+                        <small>{target.kind.replaceAll("_", " ")}</small>
+                      </div>
+                      <span className="fetch-state active">Active</span>
+                    </div>
+                    {target.platform_profile_url && (
+                      <a
+                        href={target.platform_profile_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open original profile
+                      </a>
+                    )}
+                    <div className="research-actions">
+                      <button
+                        className="secondary"
+                        disabled={!platformCapability?.enabled || !!busy}
+                        title={
+                          platformCapability?.enabled
+                            ? "Query the configured official provider"
+                            : "Official provider capability is not configured"
+                        }
+                        onClick={() =>
+                          void catalogApi
+                            .querySocialProvider(
+                              session,
+                              target.id,
+                              "search_ads",
+                            )
+                            .then(load)
+                            .catch((caught: unknown) =>
+                              setError(
+                                caught instanceof Error
+                                  ? caught.message
+                                  : "Provider query failed.",
+                              ),
+                            )
+                        }
+                      >
+                        Query official provider
+                      </button>
+                      {target.can_edit && (
+                        <button
+                          className="text-danger"
+                          onClick={async () => {
+                            if (
+                              !window.confirm(
+                                "Archive this competitor? Historical social evidence and previous research results will remain available.",
+                              )
+                            )
+                              return;
+                            try {
+                              await catalogApi.archiveResearchTarget(
+                                session,
+                                target.id,
+                              );
+                              await load();
+                            } catch (caught) {
+                              setError(
+                                caught instanceof Error
+                                  ? caught.message
+                                  : "Competitor could not be archived.",
+                              );
+                            }
+                          }}
+                        >
+                          Archive competitor
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+          {workspace.product.can_edit && !!activeTargets.length && (
+            <div className="research-form">
+              <label>
+                Competitor
+                <select
+                  aria-label="Evidence competitor"
+                  value={evidenceTargetId}
+                  onChange={(event) => setEvidenceTargetId(event.target.value)}
+                >
+                  <option value="">Select competitor</option>
+                  {activeTargets.map((target) => (
+                    <option key={target.id} value={target.id}>
+                      {target.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Evidence type
+                <select
+                  aria-label="Social evidence type"
+                  value={evidenceType}
+                  onChange={(event) =>
+                    setEvidenceType(event.target.value as typeof evidenceType)
+                  }
+                >
+                  {(
+                    [
+                      "ad",
+                      "post",
+                      "reel",
+                      "video",
+                      "screenshot",
+                      "exported_image",
+                      "exported_video",
+                      "other",
+                    ] as const
+                  ).map((value) => (
+                    <option key={value} value={value}>
+                      {value.replaceAll("_", " ")}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Public source URL
+                <input
+                  aria-label="Social evidence URL"
+                  type="url"
+                  value={evidenceUrl}
+                  onChange={(event) => setEvidenceUrl(event.target.value)}
+                />
+              </label>
+              <label>
+                Headline
+                <input
+                  aria-label="Social evidence headline"
+                  value={evidenceHeadline}
+                  maxLength={1000}
+                  onChange={(event) => setEvidenceHeadline(event.target.value)}
+                />
+              </label>
+              <label>
+                Caption / notes
+                <textarea
+                  aria-label="Social evidence body"
+                  value={evidenceBody}
+                  maxLength={8000}
+                  onChange={(event) => setEvidenceBody(event.target.value)}
+                />
+              </label>
+              <label>
+                Screenshot or exported media
+                <input
+                  aria-label="Social evidence media"
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp,video/mp4,video/webm"
+                  onChange={(event) =>
+                    setEvidenceFile(event.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+              <button
+                className="primary"
+                disabled={
+                  !evidenceTargetId ||
+                  (!evidenceUrl &&
+                    !evidenceHeadline &&
+                    !evidenceBody &&
+                    !evidenceFile) ||
+                  !!busy
+                }
+                onClick={() => void addManualEvidence()}
+              >
+                {busy === "manual-evidence"
+                  ? "Capturing…"
+                  : "Add manual evidence"}
+              </button>
+            </div>
+          )}
+          {!!socialEvidence.length && (
+            <div className="research-grid">
+              {socialEvidence.map((item) => (
+                <article className="research-card" key={item.id}>
+                  <div className="research-card-heading">
+                    <div>
+                      <span className="research-category">{item.platform}</span>
+                      <h3>
+                        {item.headline ||
+                          item.advertiser_name ||
+                          `${item.evidence_type} evidence`}
+                      </h3>
+                    </div>
+                    <span className="fetch-state succeeded">
+                      {item.provenance === "provider_fetched"
+                        ? "Provider verified"
+                        : "Manual"}
+                    </span>
+                  </div>
+                  {item.body_text && <p>{item.body_text}</p>}
+                  <small>
+                    Captured {new Date(item.captured_at).toLocaleString()}
+                  </small>
+                  <small>Restricted · internal analysis only</small>
+                  {item.source_url && (
+                    <a
+                      href={item.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open original source
+                    </a>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+          {!!archivedTargets.length && (
+            <details className="archived-research">
+              <summary>Archived competitors ({archivedTargets.length})</summary>
+              <div className="research-grid">
+                {archivedTargets.map((target) => (
+                  <article className="research-card" key={target.id}>
+                    <span className="research-category">
+                      Archived · {target.platform ?? "other"}
+                    </span>
+                    <h3>{target.display_name}</h3>
+                    <small>
+                      Historical social evidence and Research results remain
+                      available.
+                    </small>
+                  </article>
+                ))}
+              </div>
+            </details>
           )}
         </section>
       )}
@@ -712,9 +1228,9 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
           {notice}
         </p>
       )}
-      {sources.length ? (
+      {activeSources.length ? (
         <div className="research-grid">
-          {sources.map((item) => (
+          {activeSources.map((item) => (
             <article className="research-card" key={item.source.id}>
               <div className="research-card-heading">
                 <div>
@@ -774,14 +1290,28 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
                       className="text-danger"
                       disabled={!!busy}
                       onClick={async () => {
-                        await catalogApi.archiveResearchSource(
-                          session,
-                          item.source.id,
-                        );
-                        await load();
+                        if (
+                          !window.confirm(
+                            "Remove this source from future research?\nHistorical evidence and previous research results will remain available.",
+                          )
+                        )
+                          return;
+                        try {
+                          await catalogApi.archiveResearchSource(
+                            session,
+                            item.source.id,
+                          );
+                          await load();
+                        } catch (caught) {
+                          setError(
+                            caught instanceof Error
+                              ? caught.message
+                              : "Source could not be removed.",
+                          );
+                        }
                       }}
                     >
-                      Archive
+                      Remove source
                     </button>
                   </>
                 )}
@@ -820,6 +1350,23 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
           <h2>No research sources yet</h2>
           <p>Add a public page to establish traceable product evidence.</p>
         </section>
+      )}
+      {!!archivedSources.length && (
+        <details className="archived-research">
+          <summary>Archived sources ({archivedSources.length})</summary>
+          <div className="research-grid">
+            {archivedSources.map((item) => (
+              <article className="research-card" key={item.source.id}>
+                <span className="research-category">Archived · Web</span>
+                <h3>{item.source.display_name}</h3>
+                <small>
+                  Historical evidence remains available to previous Research
+                  results.
+                </small>
+              </article>
+            ))}
+          </div>
+        </details>
       )}
       {evidence && (
         <section className="evidence-viewer" aria-label="Evidence viewer">
@@ -872,6 +1419,52 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             ))}
           </div>
           <button className="secondary" onClick={() => setEvidence(null)}>
+            Close evidence
+          </button>
+        </section>
+      )}
+      {selectedSocialEvidence && (
+        <section
+          className="evidence-viewer"
+          aria-label="Social evidence viewer"
+        >
+          <div>
+            <p className="eyebrow">Untrusted social evidence · analysis only</p>
+            <h3>
+              {selectedSocialEvidence.headline ||
+                selectedSocialEvidence.advertiser_name ||
+                "Social evidence"}
+            </h3>
+            <p>
+              {selectedSocialEvidence.body_text ||
+                "No caption or body text was supplied."}
+            </p>
+            <div className="evidence-metadata">
+              <small>
+                {selectedSocialEvidence.platform} ·{" "}
+                {selectedSocialEvidence.provenance === "provider_fetched"
+                  ? "Provider verified"
+                  : "Manual"}
+              </small>
+              <small>
+                {selectedSocialEvidence.rights_status} ·{" "}
+                {selectedSocialEvidence.allowed_uses.join(", ")}
+              </small>
+              {selectedSocialEvidence.source_url && (
+                <a
+                  href={selectedSocialEvidence.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open original source
+                </a>
+              )}
+            </div>
+          </div>
+          <button
+            className="secondary"
+            onClick={() => setSelectedSocialEvidence(null)}
+          >
             Close evidence
           </button>
         </section>
@@ -2163,74 +2756,158 @@ function Overview({
   );
 }
 
-type BriefField = keyof BriefWrite;
-
 function TextArea({
   label,
   value,
   onChange,
   hint,
+  maxLength,
+  error,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   hint?: string;
+  maxLength?: number;
+  error?: string;
 }) {
   return (
     <label className="field">
       <span>{label}</span>
       {hint && <small>{hint}</small>}
       <textarea
+        aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         rows={4}
+        aria-invalid={Boolean(error)}
       />
+      {maxLength && (
+        <small>
+          {value.length}/{maxLength}
+        </small>
+      )}
+      {error && <small className="field-error">{error}</small>}
     </label>
   );
 }
 
 function ListArea({
   label,
-  values,
+  value,
   onChange,
   hint,
+  maxItems = 30,
 }: {
   label: string;
-  values: string[];
-  onChange: (value: string[]) => void;
+  value: string;
+  onChange: (value: string) => void;
   hint?: string;
+  maxItems?: number;
 }) {
+  const itemCount = value.split("\n").filter((item) => item.trim()).length;
   return (
-    <TextArea
-      label={label}
-      hint={hint ?? "One item per line"}
-      value={values.join("\n")}
-      onChange={(value) => onChange(listText(value))}
-    />
+    <label className="field">
+      <span>{label}</span>
+      <small>{hint ?? "One item per line"}</small>
+      <textarea
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        rows={4}
+      />
+      <small>
+        {itemCount}/{maxItems} items
+      </small>
+    </label>
   );
 }
 
 function BriefEditor({
   workspace,
   onSaved,
+  onDirtyChange,
 }: {
   workspace: Workspace;
   onSaved: (workspace: Workspace) => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [section, setSection] = useState(0);
-  const [brief, setBrief] = useState<BriefWrite>(() => ({
-    ...emptyBrief,
-    ...workspace.brief,
-  }));
+  const canonicalDraft = useMemo(
+    () => toBriefDraft(toBriefWrite(workspace.brief)),
+    [workspace.brief],
+  );
+  const [brief, setBrief] = useState<BriefDraftV1>(canonicalDraft);
+  const [baseRevision, setBaseRevision] = useState(workspace.brief.revision);
+  const [recovery, setRecovery] = useState<StoredBriefDraftV1 | null>(() => {
+    const session = readSession();
+    return readStoredBriefDraft(
+      window.localStorage,
+      session.tenantId,
+      workspace.product.id,
+    );
+  });
+  const [migrationNotice, setMigrationNotice] = useState(
+    canonicalDraft.legacyAudienceMigrated,
+  );
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [error, setError] = useState("");
+  const [fieldError, setFieldError] = useState<{
+    field: string;
+    message: string;
+  } | null>(null);
   const readOnly = !workspace.brief.can_edit;
-  const set = <K extends BriefField>(key: K, value: BriefWrite[K]) => {
+  const dirty = draftDigest(brief) !== draftDigest(canonicalDraft);
+  const set = <K extends keyof BriefDraftV1>(
+    key: K,
+    value: BriefDraftV1[K],
+  ) => {
     setBrief((current) => ({ ...current, [key]: value }));
     setSaveState("idle");
+    setFieldError(null);
   };
+  const setAudience = (value: Partial<AudienceDraftV1>) =>
+    set("primary_audience", {
+      name: "",
+      description: "",
+      pain_points: "",
+      desires: "",
+      motivations: "",
+      objections: "",
+      ...brief.primary_audience,
+      ...value,
+    });
+
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
+  useEffect(() => {
+    if (readOnly || !dirty) return;
+    const session = readSession();
+    const timer = window.setTimeout(() => {
+      const stored: StoredBriefDraftV1 = {
+        version: 1,
+        tenantId: session.tenantId,
+        productId: workspace.product.id,
+        baseRevision,
+        savedAt: new Date().toISOString(),
+        dirty: true,
+        digest: draftDigest(brief),
+        draft: brief,
+      };
+      window.localStorage.setItem(
+        briefDraftKey(session.tenantId, workspace.product.id),
+        JSON.stringify(stored),
+      );
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [baseRevision, brief, dirty, readOnly, workspace.product.id]);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
   const save = async () => {
     setSaveState("saving");
     setError("");
@@ -2238,15 +2915,21 @@ function BriefEditor({
       const saved = await catalogApi.saveBrief(
         readSession(),
         workspace.product.id,
-        brief,
+        serializeBriefDraft(brief),
       );
-      const updated = await catalogApi.getWorkspace(
-        readSession(),
-        workspace.product.id,
+      onSaved({ ...workspace, brief: saved });
+      const session = readSession();
+      window.localStorage.removeItem(
+        briefDraftKey(session.tenantId, workspace.product.id),
       );
-      onSaved({ ...updated, brief: saved });
+      setBrief(toBriefDraft(toBriefWrite(saved)));
+      setBaseRevision(saved.revision);
+      setRecovery(null);
       setSaveState("saved");
     } catch (caught) {
+      if (caught instanceof BriefDraftValidationError) {
+        setFieldError({ field: caught.field, message: caught.message });
+      }
       setError(caught instanceof Error ? caught.message : "Save failed");
       setSaveState("error");
     }
@@ -2266,6 +2949,45 @@ function BriefEditor({
         ))}
       </nav>
       <section className="brief-card">
+        {recovery && (
+          <div className="warning-banner" role="status">
+            <strong>Unsaved local draft found</strong>
+            <p>
+              {recovery.baseRevision !== workspace.brief.revision
+                ? `The server is now revision ${workspace.brief.revision}; this draft began from revision ${recovery.baseRevision}. Restore it for review or discard it. No automatic merge will occur.`
+                : "Restore your browser draft or discard it and continue from the saved Brief."}
+            </p>
+            <button
+              className="secondary"
+              onClick={() => {
+                setBrief(recovery.draft);
+                setBaseRevision(recovery.baseRevision);
+                setMigrationNotice(recovery.draft.legacyAudienceMigrated);
+                setRecovery(null);
+              }}
+            >
+              Restore draft
+            </button>
+            <button
+              className="text-danger"
+              onClick={() => {
+                const session = readSession();
+                window.localStorage.removeItem(
+                  briefDraftKey(session.tenantId, workspace.product.id),
+                );
+                setRecovery(null);
+              }}
+            >
+              Discard local draft
+            </button>
+          </div>
+        )}
+        {migrationNotice && (
+          <p className="warning-banner" role="status">
+            We moved your previous audience text into Audience description so it
+            would not be lost. Please add a short Audience name before saving.
+          </p>
+        )}
         <header>
           <div>
             <p className="eyebrow">
@@ -2289,58 +3011,67 @@ function BriefEditor({
               <TextArea
                 label="Why does this product exist?"
                 value={brief.product_why ?? ""}
+                maxLength={3000}
                 onChange={(v) => set("product_why", v)}
               />
               <ListArea
                 label="Emotional benefits"
-                values={brief.emotional_benefits ?? []}
+                value={brief.emotional_benefits}
                 onChange={(v) => set("emotional_benefits", v)}
               />
             </>
           )}
           {section === 1 && (
             <>
+              <label className="field">
+                <span>Audience name</span>
+                <input
+                  aria-label="Audience name"
+                  value={brief.primary_audience?.name ?? ""}
+                  aria-invalid={fieldError?.field === "primary_audience.name"}
+                  onChange={(event) =>
+                    setAudience({ name: event.target.value })
+                  }
+                />
+                <small>
+                  {brief.primary_audience?.name.length ?? 0}/{AUDIENCE_NAME_MAX}
+                </small>
+                {fieldError?.field === "primary_audience.name" && (
+                  <small className="field-error">{fieldError.message}</small>
+                )}
+              </label>
               <TextArea
-                label="Primary audience"
-                value={brief.primary_audience?.name ?? ""}
-                onChange={(v) =>
-                  set("primary_audience", {
-                    name: v,
-                    description: brief.primary_audience?.description ?? "",
-                    pain_points: brief.primary_audience?.pain_points ?? [],
-                    desires: brief.primary_audience?.desires ?? [],
-                    motivations: brief.primary_audience?.motivations ?? [],
-                    objections: brief.primary_audience?.objections ?? [],
-                  })
-                }
+                label="Audience description"
+                value={brief.primary_audience?.description ?? ""}
+                maxLength={AUDIENCE_DESCRIPTION_MAX}
+                {...(fieldError?.field === "primary_audience.description"
+                  ? { error: fieldError.message }
+                  : {})}
+                onChange={(v) => setAudience({ description: v })}
               />
               <ListArea
                 label="Pain points"
-                values={brief.primary_audience?.pain_points ?? []}
-                onChange={(v) =>
-                  set("primary_audience", {
-                    name: brief.primary_audience?.name ?? "Primary audience",
-                    description: brief.primary_audience?.description ?? "",
-                    pain_points: v,
-                    desires: brief.primary_audience?.desires ?? [],
-                    motivations: brief.primary_audience?.motivations ?? [],
-                    objections: brief.primary_audience?.objections ?? [],
-                  })
-                }
+                value={brief.primary_audience?.pain_points ?? ""}
+                maxItems={20}
+                onChange={(v) => setAudience({ pain_points: v })}
+              />
+              <ListArea
+                label="Desires"
+                value={brief.primary_audience?.desires ?? ""}
+                maxItems={20}
+                onChange={(v) => setAudience({ desires: v })}
+              />
+              <ListArea
+                label="Motivations"
+                value={brief.primary_audience?.motivations ?? ""}
+                maxItems={20}
+                onChange={(v) => setAudience({ motivations: v })}
               />
               <ListArea
                 label="Purchase objections"
-                values={brief.primary_audience?.objections ?? []}
-                onChange={(v) =>
-                  set("primary_audience", {
-                    name: brief.primary_audience?.name ?? "Primary audience",
-                    description: brief.primary_audience?.description ?? "",
-                    pain_points: brief.primary_audience?.pain_points ?? [],
-                    desires: brief.primary_audience?.desires ?? [],
-                    motivations: brief.primary_audience?.motivations ?? [],
-                    objections: v,
-                  })
-                }
+                value={brief.primary_audience?.objections ?? ""}
+                maxItems={20}
+                onChange={(v) => setAudience({ objections: v })}
               />
             </>
           )}
@@ -2349,16 +3080,17 @@ function BriefEditor({
               <TextArea
                 label="Positioning statement"
                 value={brief.positioning_statement ?? ""}
+                maxLength={3000}
                 onChange={(v) => set("positioning_statement", v)}
               />
               <ListArea
                 label="Competitive alternatives"
-                values={brief.competitive_alternatives ?? []}
+                value={brief.competitive_alternatives}
                 onChange={(v) => set("competitive_alternatives", v)}
               />
               <ListArea
                 label="Why choose us?"
-                values={brief.why_choose_us ?? []}
+                value={brief.why_choose_us}
                 onChange={(v) => set("why_choose_us", v)}
               />
             </>
@@ -2368,17 +3100,28 @@ function BriefEditor({
               <TextArea
                 label="Primary conversion goal"
                 value={brief.conversion_goal ?? ""}
+                maxLength={500}
                 onChange={(v) => set("conversion_goal", v)}
               />
               <ListArea
                 label="Priority channels"
-                values={brief.priority_channels ?? []}
+                value={brief.priority_channels}
                 onChange={(v) => set("priority_channels", v)}
               />
               <ListArea
+                label="Current channels"
+                value={brief.current_channels}
+                onChange={(v) => set("current_channels", v)}
+              />
+              <ListArea
                 label="Offers & promotions"
-                values={brief.offers ?? []}
+                value={brief.offers}
                 onChange={(v) => set("offers", v)}
+              />
+              <ListArea
+                label="CTA preferences"
+                value={brief.cta_preferences}
+                onChange={(v) => set("cta_preferences", v)}
               />
             </>
           )}
@@ -2387,17 +3130,23 @@ function BriefEditor({
               <TextArea
                 label="Desired creative style"
                 value={brief.desired_creative_style ?? ""}
+                maxLength={2000}
                 onChange={(v) => set("desired_creative_style", v)}
               />
               <ListArea
                 label="Tones to explore"
-                values={brief.tones_to_explore ?? []}
+                value={brief.tones_to_explore}
                 onChange={(v) => set("tones_to_explore", v)}
               />
               <ListArea
                 label="Tones to avoid"
-                values={brief.tones_to_avoid ?? []}
+                value={brief.tones_to_avoid}
                 onChange={(v) => set("tones_to_avoid", v)}
+              />
+              <ListArea
+                label="Creative references"
+                value={brief.creative_references}
+                onChange={(v) => set("creative_references", v)}
               />
             </>
           )}
@@ -2405,23 +3154,28 @@ function BriefEditor({
             <>
               <ListArea
                 label="Mandatory messaging"
-                values={brief.mandatory_messaging ?? []}
+                value={brief.mandatory_messaging}
                 onChange={(v) => set("mandatory_messaging", v)}
               />
               <ListArea
                 label="Prohibited messaging"
-                values={brief.prohibited_messaging ?? []}
+                value={brief.prohibited_messaging}
                 onChange={(v) => set("prohibited_messaging", v)}
               />
               <ListArea
                 label="Required disclaimers"
-                values={brief.required_disclaimers ?? []}
+                value={brief.required_disclaimers}
                 onChange={(v) => set("required_disclaimers", v)}
               />
               <ListArea
                 label="Legal & safety constraints"
-                values={brief.legal_safety_constraints ?? []}
+                value={brief.legal_safety_constraints}
                 onChange={(v) => set("legal_safety_constraints", v)}
+              />
+              <ListArea
+                label="Geographical restrictions"
+                value={brief.geographical_restrictions}
+                onChange={(v) => set("geographical_restrictions", v)}
               />
             </>
           )}
@@ -2501,6 +3255,7 @@ export function ProductWorkspaceApp() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<"brand" | "product" | null>(null);
+  const [briefDirty, setBriefDirty] = useState(false);
   const selectedBrand = useMemo(
     () => brands.find((brand) => brand.id === workspace?.brand.id) ?? brands[0],
     [brands, workspace],
@@ -2543,6 +3298,14 @@ export function ProductWorkspaceApp() {
   }, [brands, session]);
   const openProduct = async (id: string) => {
     if (!session) return;
+    if (
+      briefDirty &&
+      !window.confirm(
+        "You have unsaved Brief changes. Leave this Product? Your local draft will remain available.",
+      )
+    )
+      return;
+    setBriefDirty(false);
     setLoading(true);
     setError("");
     try {
@@ -2701,7 +3464,19 @@ export function ProductWorkspaceApp() {
                       <button
                         key={name}
                         className={tab === name ? "active" : ""}
-                        onClick={() => setTab(name)}
+                        onClick={() => {
+                          if (
+                            tab === "Brief" &&
+                            briefDirty &&
+                            name !== "Brief" &&
+                            !window.confirm(
+                              "You have unsaved Brief changes. Leave the Brief? Your local draft will remain available.",
+                            )
+                          )
+                            return;
+                          if (name !== "Brief") setBriefDirty(false);
+                          setTab(name);
+                        }}
                       >
                         {name}
                       </button>
@@ -2722,7 +3497,11 @@ export function ProductWorkspaceApp() {
                       }}
                     />
                   ) : tab === "Brief" ? (
-                    <BriefEditor workspace={workspace} onSaved={setWorkspace} />
+                    <BriefEditor
+                      workspace={workspace}
+                      onSaved={setWorkspace}
+                      onDirtyChange={setBriefDirty}
+                    />
                   ) : tab === "Assets" ? (
                     <AssetsPanel workspace={workspace} />
                   ) : tab === "Research" ? (

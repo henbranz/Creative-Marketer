@@ -908,7 +908,7 @@
         "properties": {
           "description": {
             "default": "",
-            "maxLength": 1000,
+            "maxLength": 8000,
             "title": "Description",
             "type": "string"
           },
@@ -2626,10 +2626,195 @@
           "schema_version": {
             "title": "Schema Version",
             "type": "integer"
+          },
+          "social_evidence": {
+            "items": {
+              "$ref": "#/components/schemas/SocialEvidenceReferenceResponse"
+            },
+            "title": "Social Evidence",
+            "type": "array"
           }
         },
         "required": ["product_id", "schema_version", "digest", "evidence"],
         "title": "ManifestResponse",
+        "type": "object"
+      },
+      "ManualSocialEvidenceCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "activity_status": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Status"
+          },
+          "advertiser_name": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertiser Name"
+          },
+          "body_text": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Text"
+          },
+          "cta": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "evidence_type": {
+            "$ref": "#/components/schemas/SocialEvidenceType"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "media_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Asset Id"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "placements": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Placements",
+            "type": "array"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SocialPlatform"
+          },
+          "platform_content_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Content Id"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": ["platform", "evidence_type"],
+        "title": "ManualSocialEvidenceCreate",
         "type": "object"
       },
       "ManualSourceWrite": {
@@ -3809,6 +3994,10 @@
       "ResearchFindingResponse": {
         "additionalProperties": false,
         "properties": {
+          "basis": {
+            "title": "Basis",
+            "type": "string"
+          },
           "category": {
             "title": "Category",
             "type": "string"
@@ -3853,6 +4042,7 @@
           "category",
           "statement",
           "confidence",
+          "basis",
           "citations",
           "scope",
           "implication"
@@ -3949,6 +4139,198 @@
         "title": "ResearchSnapshotResponse",
         "type": "object"
       },
+      "ResearchTargetCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Display Name",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ResearchTargetKind"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SocialPlatform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "platform_handle": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Handle"
+          },
+          "platform_identifier": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Identifier"
+          },
+          "platform_profile_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Profile Url"
+          },
+          "website_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website Url"
+          }
+        },
+        "required": ["kind", "display_name"],
+        "title": "ResearchTargetCreate",
+        "type": "object"
+      },
+      "ResearchTargetKind": {
+        "enum": ["competitor_brand", "advertiser", "social_profile", "product"],
+        "title": "ResearchTargetKind",
+        "type": "string"
+      },
+      "ResearchTargetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "can_edit": {
+            "title": "Can Edit",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ResearchTargetKind"
+          },
+          "platform": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SocialPlatform"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "platform_handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Handle"
+          },
+          "platform_identifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Identifier"
+          },
+          "platform_profile_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Profile Url"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": ["active", "archived"],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "website_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Website Url"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "kind",
+          "display_name",
+          "website_url",
+          "platform",
+          "platform_handle",
+          "platform_profile_url",
+          "platform_identifier",
+          "status",
+          "created_at",
+          "updated_at",
+          "can_edit"
+        ],
+        "title": "ResearchTargetResponse",
+        "type": "object"
+      },
       "SnapshotResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3989,6 +4371,387 @@
           "created_at"
         ],
         "title": "SnapshotResponse",
+        "type": "object"
+      },
+      "SocialCapabilityResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SocialPlatform"
+          }
+        },
+        "required": ["platform", "enabled", "capabilities"],
+        "title": "SocialCapabilityResponse",
+        "type": "object"
+      },
+      "SocialEvidenceProvenance": {
+        "enum": ["user_provided", "provider_fetched"],
+        "title": "SocialEvidenceProvenance",
+        "type": "string"
+      },
+      "SocialEvidenceReferenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "platform": {
+            "title": "Platform",
+            "type": "string"
+          },
+          "research_target_id": {
+            "format": "uuid",
+            "title": "Research Target Id",
+            "type": "string"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          },
+          "social_evidence_snapshot_id": {
+            "format": "uuid",
+            "title": "Social Evidence Snapshot Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "research_target_id",
+          "social_evidence_snapshot_id",
+          "semantic_digest",
+          "platform",
+          "captured_at"
+        ],
+        "title": "SocialEvidenceReferenceResponse",
+        "type": "object"
+      },
+      "SocialEvidenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "activity_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activity Status"
+          },
+          "ad_objective": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ad Objective"
+          },
+          "advertiser_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertiser Name"
+          },
+          "advertiser_platform_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advertiser Platform Id"
+          },
+          "allowed_uses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Uses",
+            "type": "array"
+          },
+          "body_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body Text"
+          },
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "cta": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cta"
+          },
+          "destination_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Destination Url"
+          },
+          "evidence_type": {
+            "$ref": "#/components/schemas/SocialEvidenceType"
+          },
+          "first_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen At"
+          },
+          "headline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Headline"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
+          "media_asset_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Asset Id"
+          },
+          "media_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Type"
+          },
+          "placements": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Placements",
+            "type": "array"
+          },
+          "platform": {
+            "$ref": "#/components/schemas/SocialPlatform"
+          },
+          "platform_content_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Platform Content Id"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SocialEvidenceProvenance"
+          },
+          "reach_range": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reach Range"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "research_target_id": {
+            "format": "uuid",
+            "title": "Research Target Id",
+            "type": "string"
+          },
+          "rights_status": {
+            "const": "restricted",
+            "title": "Rights Status",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          },
+          "source_provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Provider"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "research_target_id",
+          "platform",
+          "evidence_type",
+          "provenance",
+          "source_url",
+          "destination_url",
+          "advertiser_name",
+          "advertiser_platform_id",
+          "platform_content_id",
+          "headline",
+          "body_text",
+          "cta",
+          "ad_objective",
+          "media_type",
+          "placements",
+          "first_seen_at",
+          "last_seen_at",
+          "activity_status",
+          "region",
+          "reach_range",
+          "source_provider",
+          "media_asset_id",
+          "semantic_digest",
+          "schema_version",
+          "rights_status",
+          "allowed_uses",
+          "captured_at"
+        ],
+        "title": "SocialEvidenceResponse",
+        "type": "object"
+      },
+      "SocialEvidenceType": {
+        "enum": [
+          "ad",
+          "post",
+          "reel",
+          "video",
+          "screenshot",
+          "exported_image",
+          "exported_video",
+          "other"
+        ],
+        "title": "SocialEvidenceType",
+        "type": "string"
+      },
+      "SocialPlatform": {
+        "enum": ["facebook", "instagram", "tiktok", "other"],
+        "title": "SocialPlatform",
+        "type": "string"
+      },
+      "SocialProviderQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "capability": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Capability",
+            "type": "string"
+          }
+        },
+        "required": ["capability"],
+        "title": "SocialProviderQuery",
         "type": "object"
       },
       "SourceCreate": {
@@ -8762,6 +9525,200 @@
         "tags": ["research"]
       }
     },
+    "/v1/products/{product_id}/research-targets": {
+      "get": {
+        "operationId": "list_targets_v1_products__product_id__research_targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ResearchTargetResponse"
+                  },
+                  "title": "Response List Targets V1 Products  Product Id  Research Targets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Targets",
+        "tags": ["research"]
+      },
+      "post": {
+        "operationId": "create_target_v1_products__product_id__research_targets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResearchTargetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchTargetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Target",
+        "tags": ["research"]
+      }
+    },
     "/v1/products/{product_id}/research/runs": {
       "get": {
         "operationId": "list_researcher_runs_v1_products__product_id__research_runs_get",
@@ -9233,6 +10190,101 @@
         "tags": ["catalog"]
       }
     },
+    "/v1/products/{product_id}/social-evidence": {
+      "get": {
+        "operationId": "list_social_evidence_v1_products__product_id__social_evidence_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SocialEvidenceResponse"
+                  },
+                  "title": "Response List Social Evidence V1 Products  Product Id  Social Evidence Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Social Evidence",
+        "tags": ["research"]
+      }
+    },
     "/v1/research-evidence/{evidence_id}": {
       "get": {
         "operationId": "get_evidence_v1_research_evidence__evidence_id__get",
@@ -9692,6 +10744,303 @@
         "tags": ["research"]
       }
     },
+    "/v1/research-targets/{target_id}/archive": {
+      "post": {
+        "operationId": "archive_target_v1_research_targets__target_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchTargetResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Target",
+        "tags": ["research"]
+      }
+    },
+    "/v1/research-targets/{target_id}/provider-query": {
+      "post": {
+        "operationId": "query_social_provider_v1_research_targets__target_id__provider_query_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SocialProviderQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SocialEvidenceResponse"
+                  },
+                  "title": "Response Query Social Provider V1 Research Targets  Target Id  Provider Query Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Query Social Provider",
+        "tags": ["research"]
+      }
+    },
+    "/v1/research-targets/{target_id}/social-evidence": {
+      "post": {
+        "operationId": "add_manual_social_evidence_v1_research_targets__target_id__social_evidence_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualSocialEvidenceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocialEvidenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Manual Social Evidence",
+        "tags": ["research"]
+      }
+    },
     "/v1/research/snapshots/{snapshot_id}": {
       "get": {
         "operationId": "get_research_snapshot_v1_research_snapshots__snapshot_id__get",
@@ -9780,6 +11129,182 @@
           }
         },
         "summary": "Get Research Snapshot",
+        "tags": ["research"]
+      }
+    },
+    "/v1/social-evidence/{evidence_id}": {
+      "get": {
+        "operationId": "get_social_evidence_v1_social_evidence__evidence_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "evidence_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Evidence Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SocialEvidenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Social Evidence",
+        "tags": ["research"]
+      }
+    },
+    "/v1/social-research/capabilities": {
+      "get": {
+        "operationId": "social_capabilities_v1_social_research_capabilities_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SocialCapabilityResponse"
+                  },
+                  "title": "Response Social Capabilities V1 Social Research Capabilities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Social Capabilities",
         "tags": ["research"]
       }
     },

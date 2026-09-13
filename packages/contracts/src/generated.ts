@@ -743,6 +743,24 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/research-targets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Targets */
+    get: operations["list_targets_v1_products__product_id__research_targets_get"];
+    put?: never;
+    /** Create Target */
+    post: operations["create_target_v1_products__product_id__research_targets_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/research/runs": {
     parameters: {
       query?: never;
@@ -804,6 +822,23 @@ export interface paths {
     };
     /** Latest Snapshot */
     get: operations["latest_snapshot_v1_products__product_id__snapshots_latest_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/social-evidence": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Social Evidence */
+    get: operations["list_social_evidence_v1_products__product_id__social_evidence_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -897,6 +932,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/research-targets/{target_id}/archive": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Archive Target */
+    post: operations["archive_target_v1_research_targets__target_id__archive_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/research-targets/{target_id}/provider-query": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Query Social Provider */
+    post: operations["query_social_provider_v1_research_targets__target_id__provider_query_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/research-targets/{target_id}/social-evidence": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Add Manual Social Evidence */
+    post: operations["add_manual_social_evidence_v1_research_targets__target_id__social_evidence_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/research/snapshots/{snapshot_id}": {
     parameters: {
       query?: never;
@@ -906,6 +992,40 @@ export interface paths {
     };
     /** Get Research Snapshot */
     get: operations["get_research_snapshot_v1_research_snapshots__snapshot_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/social-evidence/{evidence_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Social Evidence */
+    get: operations["get_social_evidence_v1_social_evidence__evidence_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/social-research/capabilities": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Social Capabilities */
+    get: operations["social_capabilities_v1_social_research_capabilities_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -2034,6 +2154,41 @@ export interface components {
       product_id: string;
       /** Schema Version */
       schema_version: number;
+      /** Social Evidence */
+      social_evidence?: components["schemas"]["SocialEvidenceReferenceResponse"][];
+    };
+    /** ManualSocialEvidenceCreate */
+    ManualSocialEvidenceCreate: {
+      /** Activity Status */
+      activity_status?: string | null;
+      /** Advertiser Name */
+      advertiser_name?: string | null;
+      /** Body Text */
+      body_text?: string | null;
+      /** Cta */
+      cta?: string | null;
+      /** Destination Url */
+      destination_url?: string | null;
+      evidence_type: components["schemas"]["SocialEvidenceType"];
+      /** First Seen At */
+      first_seen_at?: string | null;
+      /** Headline */
+      headline?: string | null;
+      /** Last Seen At */
+      last_seen_at?: string | null;
+      /** Media Asset Id */
+      media_asset_id?: string | null;
+      /** Media Type */
+      media_type?: string | null;
+      /** Placements */
+      placements?: string[];
+      platform: components["schemas"]["SocialPlatform"];
+      /** Platform Content Id */
+      platform_content_id?: string | null;
+      /** Region */
+      region?: string | null;
+      /** Source Url */
+      source_url?: string | null;
     };
     /** ManualSourceWrite */
     ManualSourceWrite: {
@@ -2486,6 +2641,8 @@ export interface components {
     };
     /** ResearchFindingResponse */
     ResearchFindingResponse: {
+      /** Basis */
+      basis: string;
       /** Category */
       category: string;
       /** Citations */
@@ -2548,6 +2705,69 @@ export interface components {
        */
       valid_until: string;
     };
+    /** ResearchTargetCreate */
+    ResearchTargetCreate: {
+      /** Display Name */
+      display_name: string;
+      kind: components["schemas"]["ResearchTargetKind"];
+      platform?: components["schemas"]["SocialPlatform"] | null;
+      /** Platform Handle */
+      platform_handle?: string | null;
+      /** Platform Identifier */
+      platform_identifier?: string | null;
+      /** Platform Profile Url */
+      platform_profile_url?: string | null;
+      /** Website Url */
+      website_url?: string | null;
+    };
+    /**
+     * ResearchTargetKind
+     * @enum {string}
+     */
+    ResearchTargetKind:
+      "competitor_brand" | "advertiser" | "social_profile" | "product";
+    /** ResearchTargetResponse */
+    ResearchTargetResponse: {
+      /** Can Edit */
+      can_edit: boolean;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Display Name */
+      display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      kind: components["schemas"]["ResearchTargetKind"];
+      platform: components["schemas"]["SocialPlatform"] | null;
+      /** Platform Handle */
+      platform_handle: string | null;
+      /** Platform Identifier */
+      platform_identifier: string | null;
+      /** Platform Profile Url */
+      platform_profile_url: string | null;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "active" | "archived";
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+      /** Website Url */
+      website_url: string | null;
+    };
     /** SnapshotResponse */
     SnapshotResponse: {
       /**
@@ -2571,6 +2791,137 @@ export interface components {
       schema_version: number;
       /** Source Revision */
       source_revision: number;
+    };
+    /** SocialCapabilityResponse */
+    SocialCapabilityResponse: {
+      /** Capabilities */
+      capabilities: string[];
+      /** Enabled */
+      enabled: boolean;
+      platform: components["schemas"]["SocialPlatform"];
+    };
+    /**
+     * SocialEvidenceProvenance
+     * @enum {string}
+     */
+    SocialEvidenceProvenance: "user_provided" | "provider_fetched";
+    /** SocialEvidenceReferenceResponse */
+    SocialEvidenceReferenceResponse: {
+      /**
+       * Captured At
+       * Format: date-time
+       */
+      captured_at: string;
+      /** Platform */
+      platform: string;
+      /**
+       * Research Target Id
+       * Format: uuid
+       */
+      research_target_id: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /**
+       * Social Evidence Snapshot Id
+       * Format: uuid
+       */
+      social_evidence_snapshot_id: string;
+    };
+    /** SocialEvidenceResponse */
+    SocialEvidenceResponse: {
+      /** Activity Status */
+      activity_status: string | null;
+      /** Ad Objective */
+      ad_objective: string | null;
+      /** Advertiser Name */
+      advertiser_name: string | null;
+      /** Advertiser Platform Id */
+      advertiser_platform_id: string | null;
+      /** Allowed Uses */
+      allowed_uses: string[];
+      /** Body Text */
+      body_text: string | null;
+      /**
+       * Captured At
+       * Format: date-time
+       */
+      captured_at: string;
+      /** Cta */
+      cta: string | null;
+      /** Destination Url */
+      destination_url: string | null;
+      evidence_type: components["schemas"]["SocialEvidenceType"];
+      /** First Seen At */
+      first_seen_at: string | null;
+      /** Headline */
+      headline: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Last Seen At */
+      last_seen_at: string | null;
+      /** Media Asset Id */
+      media_asset_id: string | null;
+      /** Media Type */
+      media_type: string | null;
+      /** Placements */
+      placements: string[];
+      platform: components["schemas"]["SocialPlatform"];
+      /** Platform Content Id */
+      platform_content_id: string | null;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      provenance: components["schemas"]["SocialEvidenceProvenance"];
+      /** Reach Range */
+      reach_range: string | null;
+      /** Region */
+      region: string | null;
+      /**
+       * Research Target Id
+       * Format: uuid
+       */
+      research_target_id: string;
+      /**
+       * Rights Status
+       * @constant
+       */
+      rights_status: "restricted";
+      /** Schema Version */
+      schema_version: number;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Source Provider */
+      source_provider: string | null;
+      /** Source Url */
+      source_url: string | null;
+    };
+    /**
+     * SocialEvidenceType
+     * @enum {string}
+     */
+    SocialEvidenceType:
+      | "ad"
+      | "post"
+      | "reel"
+      | "video"
+      | "screenshot"
+      | "exported_image"
+      | "exported_video"
+      | "other";
+    /**
+     * SocialPlatform
+     * @enum {string}
+     */
+    SocialPlatform: "facebook" | "instagram" | "tiktok" | "other";
+    /** SocialProviderQuery */
+    SocialProviderQuery: {
+      /** Capability */
+      capability: string;
     };
     /** SourceCreate */
     SourceCreate: {
@@ -4461,6 +4812,80 @@ export interface operations {
       };
     };
   };
+  list_targets_v1_products__product_id__research_targets_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResearchTargetResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_target_v1_products__product_id__research_targets_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ResearchTargetCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResearchTargetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_researcher_runs_v1_products__product_id__research_runs_get: {
     parameters: {
       query?: never;
@@ -4627,6 +5052,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SnapshotResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_social_evidence_v1_products__product_id__social_evidence_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialEvidenceResponse"][];
         };
       };
       /** @description Validation Error */
@@ -4815,6 +5275,119 @@ export interface operations {
       };
     };
   };
+  archive_target_v1_research_targets__target_id__archive_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ResearchTargetResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  query_social_provider_v1_research_targets__target_id__provider_query_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SocialProviderQuery"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialEvidenceResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  add_manual_social_evidence_v1_research_targets__target_id__social_evidence_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        target_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ManualSocialEvidenceCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialEvidenceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   get_research_snapshot_v1_research_snapshots__snapshot_id__get: {
     parameters: {
       query?: never;
@@ -4837,6 +5410,74 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["ResearchSnapshotResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_social_evidence_v1_social_evidence__evidence_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        evidence_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialEvidenceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  social_capabilities_v1_social_research_capabilities_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialCapabilityResponse"][];
         };
       };
       /** @description Validation Error */

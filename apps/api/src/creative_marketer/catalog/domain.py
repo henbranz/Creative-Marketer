@@ -193,7 +193,7 @@ class Audience:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", _required(self.name, "audience name", 120))
-        object.__setattr__(self, "description", _optional(self.description, 1000) or "")
+        object.__setattr__(self, "description", _optional(self.description, 8000) or "")
         for name in ("pain_points", "desires", "motivations", "objections"):
             object.__setattr__(self, name, _items(getattr(self, name), maximum=20))
 

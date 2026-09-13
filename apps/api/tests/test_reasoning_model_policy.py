@@ -55,7 +55,7 @@ def test_fresh_agent_configurations_create_new_sol_policy_versions() -> None:
     assert [
         configuration.prompt_revision for configuration in (researcher, creative, producer)
     ] == [
-        "researcher_v2_sol_policy",
+        "researcher_v3_social_evidence",
         "creative_strategist_v2_sol_policy",
         "producer_v3_sol_policy",
     ]

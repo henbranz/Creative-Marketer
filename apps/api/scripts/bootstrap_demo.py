@@ -606,6 +606,7 @@ async def run() -> None:
                                         "category": "audience",
                                         "statement": "Commuters value durable reusable products.",
                                         "confidence": "HIGH",
+                                        "basis": "OBSERVED",
                                         "citations": [
                                             {
                                                 "evidence_snapshot_id": str(

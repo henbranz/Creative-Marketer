@@ -60,7 +60,7 @@ class Contract(BaseModel):
 
 class AudienceContract(Contract):
     name: str = Field(min_length=1, max_length=120)
-    description: str = Field(default="", max_length=1000)
+    description: str = Field(default="", max_length=8000)
     pain_points: list[str] = Field(default_factory=list, max_length=20)
     desires: list[str] = Field(default_factory=list, max_length=20)
     motivations: list[str] = Field(default_factory=list, max_length=20)

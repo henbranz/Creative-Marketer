@@ -125,6 +125,7 @@ def test_cursor_is_tenant_bound_and_rejects_tampering() -> None:
 
 def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -> None:
     now, brand_id, product_id = datetime.now(UTC), uuid4(), uuid4()
+    target_id, social_id, research_snapshot_id = uuid4(), uuid4(), uuid4()
     historical_run_ids = [uuid4(), uuid4(), uuid4()]
     rows = {
         "brands": [
@@ -187,13 +188,80 @@ def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -
         ],
         "sources": [],
         "evidence": [],
-        "research_snapshots": [],
+        "research_targets": [
+            {
+                "id": target_id,
+                "product_id": product_id,
+                "display_name": "Competitor",
+                "status": "active",
+                "created_at": now,
+                "updated_at": now,
+                "kind": "competitor_brand",
+                "website_url": None,
+                "platform": "instagram",
+                "platform_handle": "competitor",
+                "platform_profile_url": "https://instagram.com/competitor",
+                "platform_identifier": None,
+            }
+        ],
+        "social_evidence": [
+            {
+                "id": social_id,
+                "research_target_id": target_id,
+                "product_id": product_id,
+                "captured_at": now,
+                "headline": "Observed ad",
+                "advertiser_name": "Competitor",
+                "platform": "instagram",
+                "evidence_type": "ad",
+                "provenance": "user_provided",
+                "source_url": "https://instagram.com/p/public",
+                "destination_url": None,
+                "platform_content_id": "public",
+                "body_text": None,
+                "cta": None,
+                "media_type": "image",
+                "placements": [],
+                "activity_status": None,
+                "region": None,
+                "reach_range": None,
+                "source_provider": None,
+                "rights_status": "restricted",
+                "allowed_uses": ["internal_analysis"],
+                "media_asset_id": None,
+                "semantic_digest": "sha256:" + "a" * 64,
+            }
+        ],
+        "research_snapshots": [
+            {
+                "id": research_snapshot_id,
+                "agent_run_id": historical_run_ids[0],
+                "product_snapshot_id": uuid4(),
+                "created_at": now,
+                "schema_version": 2,
+                "valid_until": None,
+                "research_gaps": [],
+                "recommended_next_sources": [],
+                "semantic_digest": "sha256:" + "b" * 64,
+                "findings": [
+                    {
+                        "key": "social-hook",
+                        "category": "competitor",
+                        "statement": "A hook was observed.",
+                        "confidence": "high",
+                        "scope": "OBSERVED",
+                        "implication": None,
+                        "citations": [{"evidence_snapshot_id": str(social_id)}],
+                    }
+                ],
+            }
+        ],
         "concept_sets": [],
         "concepts": [],
         "decisions": [],
     }
     graph = SqlAlchemyCanonicalKnowledgeReader(None)._build(rows)
-    assert len(graph.nodes) == 5
+    assert len(graph.nodes) == 9
     brand = next(item for item in graph.nodes if item.node_type is KnowledgeNodeType.BRAND)
     assert any(rel.target.canonical_id == str(product_id) for rel in brand.relationships)
     historical_runs = {
@@ -206,6 +274,14 @@ def test_canonical_reader_builds_only_supplied_tenant_rows_and_reverse_links() -
         str(historical_run_ids[1]): "gpt-5.6-terra",
         str(historical_run_ids[2]): "gpt-6-astra",
     }
+    finding = next(
+        item for item in graph.nodes if item.node_type is KnowledgeNodeType.RESEARCH_FINDING
+    )
+    assert any(
+        relationship.target
+        == KnowledgeNodeRef(KnowledgeNodeType.SOCIAL_EVIDENCE_SNAPSHOT, str(social_id))
+        for relationship in finding.relationships
+    )
 
 
 def endpoint(router, path: str):

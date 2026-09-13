@@ -20,6 +20,8 @@ class KnowledgeNodeType(StrEnum):
     AGENT_RUN = "agent_run"
     RESEARCH_SOURCE = "research_source"
     EVIDENCE_SNAPSHOT = "evidence_snapshot"
+    RESEARCH_TARGET = "research_target"
+    SOCIAL_EVIDENCE_SNAPSHOT = "social_evidence_snapshot"
     RESEARCH_SNAPSHOT = "research_snapshot"
     RESEARCH_FINDING = "research_finding"
     CREATIVE_CONCEPT_SET = "creative_concept_set"

@@ -64,6 +64,11 @@ def test_production_deep_link_golden_vectors_match_frontend() -> None:
     assert relative_note_path("asset", identity).as_posix() == (
         "Assets/asset--4b60dacb33a2049ec4da0d7d23f06760c66731b5463ee5eb140647ae5fd298fa.md"
     )
+    assert relative_note_path("research_target", identity).parent.as_posix() == "Research/Targets"
+    assert (
+        relative_note_path("social_evidence_snapshot", identity).parent.as_posix()
+        == "Research/Social Evidence"
+    )
 
 
 def test_markdown_frontmatter_wikilinks_and_escaping() -> None:

@@ -7,7 +7,12 @@ from uuid import uuid4
 
 import pytest
 
-from creative_marketer.agent_runtime.application import ModelRouter, select_evidence_blocks
+from creative_marketer.agent_runtime.application import (
+    ModelRouter,
+    ResearcherCapability,
+    load_output_schema,
+    select_evidence_blocks,
+)
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
     Citation,
@@ -33,6 +38,10 @@ from creative_marketer.research.domain import (
     EvidenceBlockKind,
     EvidenceSnapshot,
     ResearchCategory,
+    SocialEvidenceProvenance,
+    SocialEvidenceSnapshot,
+    SocialEvidenceType,
+    SocialPlatform,
     research_sha256_v1,
 )
 
@@ -101,6 +110,7 @@ def output(reference: EvidenceBlockRef) -> dict[str, object]:
                 "category": FindingCategory.PRICING.value,
                 "statement": "The competitor advertises a $20 price.",
                 "confidence": Confidence.HIGH.value,
+                "basis": "OBSERVED",
                 "citations": [
                     {
                         "evidence_snapshot_id": str(reference.evidence_snapshot_id),
@@ -153,6 +163,23 @@ def evidence(category: ResearchCategory, captured_at: datetime, text: str) -> Ev
     )
 
 
+def social_evidence(captured_at: datetime) -> SocialEvidenceSnapshot:
+    return SocialEvidenceSnapshot(
+        tenant_id=uuid4(),
+        product_id=uuid4(),
+        research_target_id=uuid4(),
+        platform=SocialPlatform.TIKTOK,
+        evidence_type=SocialEvidenceType.VIDEO,
+        provenance=SocialEvidenceProvenance.USER_PROVIDED,
+        source_url="https://www.tiktok.com/@public/video/123",
+        headline="Repeated hook",
+        body_text="Public caption supplied manually.",
+        captured_by=uuid4(),
+        captured_at=captured_at,
+        semantic_digest="",
+    )
+
+
 def test_pricing_routing_and_usage_are_bounded() -> None:
     assert route().pricing.cost(1000, 500) == Decimal("0.014000")
     router = ModelRouter((route(),))
@@ -171,6 +198,24 @@ def test_pricing_routing_and_usage_are_bounded() -> None:
         ModelUsage(4, 3, 6)
 
 
+def test_researcher_v2_requires_basis_while_historical_v1_remains_supported() -> None:
+    capability = ResearcherCapability()
+    assert capability.supports_output_contract("research.research_snapshot", 1)
+    assert capability.supports_output_contract("research.research_snapshot", 2)
+    assert (
+        "basis"
+        not in load_output_schema(1)["properties"]["findings"]["items"][  # type: ignore[index]
+            "properties"
+        ]
+    )
+    assert (
+        "basis"
+        in load_output_schema(2)["properties"]["findings"]["items"][  # type: ignore[index]
+            "required"
+        ]
+    )
+
+
 def test_context_selection_is_deterministic_prioritized_stale_and_bounded() -> None:
     now = datetime.now(UTC)
     recent = evidence(ResearchCategory.PRICING, now, "new")
@@ -185,6 +230,14 @@ def test_context_selection_is_deterministic_prioritized_stale_and_bounded() -> N
     assert [item.text for item in values] == ["old", "new"]
     assert values[0].stale is True
     assert values[1].stale is False
+    social = social_evidence(now)
+    social_blocks = select_evidence_blocks(
+        ((social, ResearchCategory.COMPETITOR, "TikTok competitor"),), now=now
+    )
+    assert social_blocks[0].evidence_snapshot_id == social.id
+    assert social_blocks[0].source_id == social.research_target_id
+    assert "Repeated hook" in social_blocks[0].text
+    assert social_blocks[0].block_digest.startswith("sha256:")
     assert (
         len(
             select_evidence_blocks(

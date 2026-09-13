@@ -15,6 +15,7 @@ import {
   type Workspace,
 } from "./catalog-api";
 import { ProductWorkspaceApp } from "./product-workspace";
+import { briefDraftKey } from "./brief-draft";
 
 const brand = {
   id: "10000000-0000-0000-0000-000000000001",
@@ -255,6 +256,7 @@ const researchSnapshot: ResearchSnapshot = {
       category: "pricing",
       statement: "The competitor advertises a $20 price.",
       confidence: "HIGH",
+      basis: "OBSERVED",
       citations: [
         {
           evidence_snapshot_id: researchEvidence.id,
@@ -463,6 +465,17 @@ function mocks() {
   vi.spyOn(catalogApi, "createProduct").mockResolvedValue(workspace);
   vi.spyOn(catalogApi, "listAssets").mockResolvedValue([]);
   vi.spyOn(catalogApi, "listResearchSources").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listResearchTargets").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listSocialEvidence").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "getSocialEvidence").mockRejectedValue(
+    new Error("not found"),
+  );
+  vi.spyOn(catalogApi, "listSocialCapabilities").mockResolvedValue([
+    { platform: "facebook", enabled: false, capabilities: [] },
+    { platform: "instagram", enabled: false, capabilities: [] },
+    { platform: "tiktok", enabled: false, capabilities: [] },
+    { platform: "other", enabled: false, capabilities: [] },
+  ]);
   vi.spyOn(catalogApi, "listResearchFetches").mockResolvedValue([]);
   vi.spyOn(catalogApi, "createResearchSource").mockResolvedValue({
     source: researchSource,
@@ -539,8 +552,9 @@ async function renderConnected() {
     "cm-session",
     JSON.stringify({ tenantId: brand.tenant_id, credential: "issuer|subject" }),
   );
-  render(<ProductWorkspaceApp />);
+  const rendered = render(<ProductWorkspaceApp />);
   await screen.findByText("Atlas");
+  return rendered;
 }
 
 describe("Product Workspace", () => {
@@ -569,7 +583,7 @@ describe("Product Workspace", () => {
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Brief" }));
     fireEvent.click(screen.getByRole("button", { name: /Audience/ }));
-    expect(screen.getByLabelText("Primary audience")).toBeInTheDocument();
+    expect(screen.getByLabelText("Audience name")).toBeInTheDocument();
     expect(
       screen.queryByLabelText("Positioning statement"),
     ).not.toBeInTheDocument();
@@ -585,6 +599,86 @@ describe("Product Workspace", () => {
     expect(screen.getByText("Saving…")).toBeInTheDocument();
     expect(await screen.findByText("Saved")).toBeInTheDocument();
     expect(catalogApi.saveBrief).toHaveBeenCalledOnce();
+    const body = vi.mocked(catalogApi.saveBrief).mock.calls[0]![2];
+    expect(body).not.toHaveProperty("product_id");
+    expect(body).not.toHaveProperty("revision");
+    expect(body).not.toHaveProperty("updated_at");
+    expect(body).not.toHaveProperty("can_edit");
+    expect(body).not.toHaveProperty("provenance");
+  });
+
+  it("debounces an exact local draft and restores it after remount", async () => {
+    const key = briefDraftKey(brand.tenant_id, product.id);
+    const first = await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    const exact = "First line  \n\n  third line";
+    fireEvent.change(screen.getByLabelText("Why does this product exist?"), {
+      target: { value: exact },
+    });
+    await waitFor(() =>
+      expect(window.localStorage.getItem(key)).not.toBeNull(),
+    );
+    expect(
+      JSON.parse(window.localStorage.getItem(key)!).draft.product_why,
+    ).toBe(exact);
+
+    const stored = JSON.parse(window.localStorage.getItem(key)!);
+    stored.baseRevision = 0;
+    window.localStorage.setItem(key, JSON.stringify(stored));
+    first.unmount();
+    const second = await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    expect(screen.getByText("Unsaved local draft found")).toBeInTheDocument();
+    expect(screen.getByText(/server is now revision 1/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Restore draft" }));
+    expect(screen.getByLabelText("Why does this product exist?")).toHaveValue(
+      exact,
+    );
+
+    second.unmount();
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Discard local draft" }),
+    );
+    expect(window.localStorage.getItem(key)).toBeNull();
+  });
+
+  it("retains a failed draft and clears it only after a successful save", async () => {
+    const key = briefDraftKey(brand.tenant_id, product.id);
+    vi.mocked(catalogApi.saveBrief).mockRejectedValueOnce(
+      new Error("Validation failed"),
+    );
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    fireEvent.change(screen.getByLabelText("Why does this product exist?"), {
+      target: { value: "Unsaved exact draft\n\n" },
+    });
+    await waitFor(() =>
+      expect(window.localStorage.getItem(key)).not.toBeNull(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Constraints/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save brief" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Validation failed",
+    );
+    expect(window.localStorage.getItem(key)).not.toBeNull();
+
+    vi.mocked(catalogApi.saveBrief).mockResolvedValueOnce({
+      ...brief,
+      revision: 2,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save brief" }));
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(window.localStorage.getItem(key)).toBeNull();
   });
 
   it("shows a validation or API error instead of fake success", async () => {
@@ -1048,6 +1142,7 @@ describe("Product Workspace", () => {
   });
 
   it("archives a research source", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(catalogApi.listResearchSources)
       .mockResolvedValueOnce([researchSource])
       .mockResolvedValueOnce([]);
@@ -1059,7 +1154,7 @@ describe("Product Workspace", () => {
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Research" }));
     await screen.findByText("Competitor page");
-    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove source" }));
     await waitFor(() =>
       expect(catalogApi.archiveResearchSource).toHaveBeenCalledOnce(),
     );

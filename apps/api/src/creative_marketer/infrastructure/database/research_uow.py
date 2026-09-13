@@ -9,16 +9,22 @@ from creative_marketer.identity.application.authentication import ExecutionConte
 from creative_marketer.infrastructure.database.audit import PostgresAuditWriter
 from creative_marketer.infrastructure.database.event_delivery import PostgresOutboxWriter
 from creative_marketer.infrastructure.database.research_repositories import (
+    SqlAlchemyAnalysisAssetReader,
     SqlAlchemyEvidenceRepository,
     SqlAlchemyFetchRepository,
     SqlAlchemyProductReferenceReader,
+    SqlAlchemyResearchTargetRepository,
+    SqlAlchemySocialEvidenceRepository,
     SqlAlchemySourceRepository,
 )
 from creative_marketer.research.application import (
+    AnalysisAssetReader,
     EvidenceRepository,
     FetchRepository,
     ProductReferenceReader,
+    ResearchTargetRepository,
     ResearchUnitOfWork,
+    SocialEvidenceRepository,
     SourceRepository,
 )
 
@@ -27,6 +33,9 @@ class SqlAlchemyResearchUnitOfWork:
     sources: SourceRepository
     fetches: FetchRepository
     evidence: EvidenceRepository
+    targets: ResearchTargetRepository
+    social_evidence: SocialEvidenceRepository
+    assets: AnalysisAssetReader
     products: ProductReferenceReader
     audit: AuditWriter
     outbox: OutboxWriter
@@ -48,6 +57,9 @@ class SqlAlchemyResearchUnitOfWork:
         self.sources = SqlAlchemySourceRepository(self._session)
         self.fetches = SqlAlchemyFetchRepository(self._session)
         self.evidence = SqlAlchemyEvidenceRepository(self._session)
+        self.targets = SqlAlchemyResearchTargetRepository(self._session)
+        self.social_evidence = SqlAlchemySocialEvidenceRepository(self._session)
+        self.assets = SqlAlchemyAnalysisAssetReader(self._session)
         self.products = SqlAlchemyProductReferenceReader(self._session)
         self.audit = PostgresAuditWriter(self._session)
         self.outbox = PostgresOutboxWriter(self._session)

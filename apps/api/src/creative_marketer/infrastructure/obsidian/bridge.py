@@ -23,6 +23,8 @@ TYPE_DIRECTORIES = {
     "agent_run": "Runs",
     "research_source": "Research",
     "evidence_snapshot": "Research/Evidence",
+    "research_target": "Research/Targets",
+    "social_evidence_snapshot": "Research/Social Evidence",
     "research_snapshot": "Research",
     "research_finding": "Research/Findings",
     "creative_concept_set": "Creative",
@@ -289,6 +291,8 @@ class ObsidianBridge:
             "Research.md": {
                 "research_source",
                 "evidence_snapshot",
+                "research_target",
+                "social_evidence_snapshot",
                 "research_snapshot",
                 "research_finding",
             },

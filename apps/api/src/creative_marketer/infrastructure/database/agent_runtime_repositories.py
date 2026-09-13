@@ -86,14 +86,26 @@ from creative_marketer.infrastructure.database.production_schema import (
     production_scenes,
     production_shots,
 )
-from creative_marketer.infrastructure.database.research_repositories import _evidence
-from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
+from creative_marketer.infrastructure.database.research_repositories import (
+    _evidence,
+    _social_evidence,
+)
+from creative_marketer.infrastructure.database.research_schema import (
+    evidence_snapshots,
+    research_targets,
+    social_evidence_snapshots,
+    sources,
+)
 from creative_marketer.production.application import production_context_from_payload
 from creative_marketer.production.domain import ProductionPlan, ProductionPlanningRequest
 from creative_marketer.research.domain import (
+    EvidenceSnapshot,
     ResearchCategory,
     ResearchContextManifest,
     ResearchEvidenceReference,
+    SocialEvidenceReference,
+    SocialEvidenceSnapshot,
+    SocialPlatform,
 )
 
 
@@ -373,7 +385,7 @@ class SqlAlchemyAgentRunRepository:
             .subquery()
         )
         evidence_rows = (await self._session.execute(select(ranked))).all()
-        evidence = tuple(
+        web_evidence = tuple(
             (
                 _evidence(row),
                 ResearchCategory(row._mapping["category"]),
@@ -381,15 +393,59 @@ class SqlAlchemyAgentRunRepository:
             )
             for row in evidence_rows
         )
+        social_rows = (
+            await self._session.execute(
+                select(social_evidence_snapshots, research_targets.c.display_name)
+                .join(
+                    research_targets,
+                    and_(
+                        research_targets.c.id == social_evidence_snapshots.c.research_target_id,
+                        research_targets.c.tenant_id == social_evidence_snapshots.c.tenant_id,
+                    ),
+                )
+                .where(
+                    social_evidence_snapshots.c.product_id == product_id,
+                    research_targets.c.status == "active",
+                )
+                .order_by(social_evidence_snapshots.c.captured_at.desc())
+                .limit(20)
+            )
+        ).all()
+        social_items: list[tuple[SocialEvidenceSnapshot, ResearchCategory, str]] = []
+        seen_social: set[tuple[UUID, str]] = set()
+        for row in social_rows:
+            item = _social_evidence(row)
+            key = (
+                item.research_target_id,
+                item.platform_content_id or item.source_url or str(item.id),
+            )
+            if key in seen_social:
+                continue
+            seen_social.add(key)
+            social_items.append((item, ResearchCategory.COMPETITOR, row._mapping["display_name"]))
+        social_evidence = tuple(social_items)
+        evidence = web_evidence + social_evidence
         if not evidence:
             return None
         references = tuple(
             ResearchEvidenceReference(
                 item.source_id, item.id, item.semantic_digest, category, item.captured_at
             )
-            for item, category, _label in evidence
+            for item, category, _label in web_evidence
         )
-        manifest = ResearchContextManifest.build(s["tenant_id"], product_id, references)
+        social_references = tuple(
+            SocialEvidenceReference(
+                item.research_target_id,
+                item.id,
+                item.semantic_digest,
+                item.platform,
+                item.captured_at,
+            )
+            for item, _category, _label in social_evidence
+        )
+        manifest = ResearchContextManifest.build(
+            s["tenant_id"], product_id, references, social_references
+        )
         researcher = ResolvedResearcher(
             requested["id"],
             resolved_id,
@@ -1263,10 +1319,36 @@ class SqlAlchemyAgentRunRepository:
                     )
                     .where(evidence_snapshots.c.id == evidence_id)
                 )
-            ).one()
-            snapshot = _evidence(row)
+            ).first()
+            snapshot: EvidenceSnapshot | SocialEvidenceSnapshot
+            if row is not None:
+                snapshot = _evidence(row)
+                source_id = snapshot.source_id
+                source_label = row._mapping["display_name"]
+                source_blocks = snapshot.blocks
+            else:
+                social_row = (
+                    await self._session.execute(
+                        select(social_evidence_snapshots, research_targets.c.display_name)
+                        .join(
+                            research_targets,
+                            and_(
+                                research_targets.c.id
+                                == social_evidence_snapshots.c.research_target_id,
+                                research_targets.c.tenant_id
+                                == social_evidence_snapshots.c.tenant_id,
+                            ),
+                        )
+                        .where(social_evidence_snapshots.c.id == evidence_id)
+                    )
+                ).one()
+                social_snapshot = _social_evidence(social_row)
+                snapshot = social_snapshot
+                source_id = social_snapshot.research_target_id
+                source_label = social_row._mapping["display_name"]
+                source_blocks = social_snapshot.analysis_blocks()
             index = cast(int, identity["block_index"])
-            source_block = next((item for item in snapshot.blocks if item.ordinal == index), None)
+            source_block = next((item for item in source_blocks if item.ordinal == index), None)
             if source_block is None:
                 raise ValueError("bound evidence block is unavailable")
             expected = canonical_digest(
@@ -1282,8 +1364,8 @@ class SqlAlchemyAgentRunRepository:
             blocks.append(
                 EvidenceBlockRef(
                     snapshot.id,
-                    snapshot.source_id,
-                    row._mapping["display_name"],
+                    source_id,
+                    source_label,
                     index,
                     source_block.kind.value,
                     expected,
@@ -2019,8 +2101,56 @@ class SqlAlchemyAgentRunRepository:
             )
             for row in rows
         )
+        social_rows = (
+            await self._session.execute(
+                select(
+                    social_evidence_snapshots.c.research_target_id,
+                    social_evidence_snapshots.c.id.label("social_evidence_snapshot_id"),
+                    social_evidence_snapshots.c.semantic_digest,
+                    social_evidence_snapshots.c.platform,
+                    social_evidence_snapshots.c.captured_at,
+                    social_evidence_snapshots.c.platform_content_id,
+                    social_evidence_snapshots.c.source_url,
+                )
+                .join(
+                    research_targets,
+                    and_(
+                        research_targets.c.id == social_evidence_snapshots.c.research_target_id,
+                        research_targets.c.tenant_id == social_evidence_snapshots.c.tenant_id,
+                    ),
+                )
+                .where(
+                    social_evidence_snapshots.c.product_id == snapshot.product_id,
+                    research_targets.c.status == "active",
+                )
+                .order_by(social_evidence_snapshots.c.captured_at.desc())
+                .limit(20)
+            )
+        ).all()
+        social_reference_values: list[SocialEvidenceReference] = []
+        seen_social_refs: set[tuple[UUID, str]] = set()
+        for row in social_rows:
+            identity = (
+                row._mapping["platform_content_id"]
+                or row._mapping["source_url"]
+                or str(row._mapping["social_evidence_snapshot_id"])
+            )
+            key = (row._mapping["research_target_id"], identity)
+            if key in seen_social_refs:
+                continue
+            seen_social_refs.add(key)
+            social_reference_values.append(
+                SocialEvidenceReference(
+                    row._mapping["research_target_id"],
+                    row._mapping["social_evidence_snapshot_id"],
+                    row._mapping["semantic_digest"],
+                    SocialPlatform(row._mapping["platform"]),
+                    row._mapping["captured_at"],
+                )
+            )
+        social_references = tuple(social_reference_values)
         current_manifest = ResearchContextManifest.build(
-            snapshot.tenant_id, snapshot.product_id, references
+            snapshot.tenant_id, snapshot.product_id, references, social_references
         )
         return (
             "current" if current_manifest.digest == snapshot.research_context_digest else "outdated"

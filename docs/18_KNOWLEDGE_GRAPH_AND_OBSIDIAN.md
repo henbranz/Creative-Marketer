@@ -22,7 +22,14 @@ local Obsidian Bridge → Markdown Properties + wikilinks
 
 The provider-neutral contract includes `KnowledgeNode`, `KnowledgeEdge`, `KnowledgeNodeRef`, `KnowledgeRelationship`, `KnowledgeProjectionRevision`, and tombstoned `KnowledgeChange`. Node identity is `(node_type, canonical_id)`; display titles do not participate in identity. Obsidian syntax is confined to the local adapter.
 
-Implemented node types are Brand, Product, ProductKnowledgeSnapshot, AgentDefinition, AgentVersion, AgentRun, ResearchSource, EvidenceSnapshot, ResearchSnapshot, ResearchFinding, CreativeConceptSet, CreativeConcept, CreativeConceptDecision, Asset, ProductionPlan, ProductionShot, GenerationSegment, and GenerationJob. FinalCreative, Publication, Experiment, and Insight remain extension types for their future owning contexts.
+Implemented node types also include ResearchTarget and SocialEvidenceSnapshot. These nodes expose
+only safe public metadata, analysis summaries, rights state, and canonical relationships; raw
+provider payloads and credentials are never projected. The remaining types are Brand, Product,
+ProductKnowledgeSnapshot, AgentDefinition, AgentVersion, AgentRun, ResearchSource,
+EvidenceSnapshot, ResearchSnapshot, ResearchFinding, CreativeConceptSet, CreativeConcept,
+CreativeConceptDecision, Asset, ProductionPlan, ProductionShot, GenerationSegment, GenerationJob,
+AssemblyPlan, AssemblyJob, FinalCreative, and FinalCreativeDecision. Publication, Experiment, and
+Insight remain future extension types.
 
 Relationships make the Product snapshot → Researcher run → Research snapshot/findings/evidence → Creative Strategist run → Concept set/concept/assets/decision chain navigable. ResearchFinding IDs are deterministic UUIDv5 identities derived from immutable ResearchSnapshot ID and finding key. Product claim support points to the exact ProductKnowledgeSnapshot; it is not represented as Research authority.
 
@@ -47,7 +54,10 @@ The current development credential is the same explicit local authenticated iden
 
 The server never receives the vault path. The bridge resolves every target beneath the configured root and rejects absolute paths, `..`, and symlink escape. Atomic local cursor state lives at `.creative-marketer/state.json`; it contains node paths/titles and no token. Tombstones move managed notes to `.creative-marketer/archive/` rather than destroying user content.
 
-Vault folders are `Products/`, `Agents/`, `Runs/`, `Research/`, `Research/Findings/`, `Research/Evidence/`, `Creative/`, `Assets/`, `Production/`, `Production/Shots/`, `Production/Segments/`, and `Production/Jobs/`; `Insights/` remains reserved until its domain exists. Root maps of content are `Creative Marketer.md`, `Agents.md`, `Products.md`, `Research.md`, `Creative.md`, and `Production.md`.
+Research targets and social snapshots project to `Research/Targets/` and
+`Research/Social Evidence/` alongside the existing Research folders. `Insights/` remains reserved
+until its domain exists. Root maps of content remain `Creative Marketer.md`, `Agents.md`,
+`Products.md`, `Research.md`, `Creative.md`, and `Production.md`.
 
 Every managed artifact note has YAML Properties, an explicit generated region, and a persistent `## My Notes` section. Resync replaces generated content and managed Properties while retaining everything under `My Notes`. Arbitrary user Markdown is not uploaded or parsed. Filenames are type plus the full SHA-256 of stable type/ID identity, so display-name changes cannot break links.
 

@@ -48,7 +48,12 @@ from creative_marketer.infrastructure.database.production_schema import (
     production_plans,
     production_shots,
 )
-from creative_marketer.infrastructure.database.research_schema import evidence_snapshots, sources
+from creative_marketer.infrastructure.database.research_schema import (
+    evidence_snapshots,
+    research_targets,
+    social_evidence_snapshots,
+    sources,
+)
 from creative_marketer.knowledge.domain import (
     KnowledgeChange,
     KnowledgeGraph,
@@ -128,6 +133,12 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 "evidence": select(evidence_snapshots).where(
                     evidence_snapshots.c.tenant_id == tenant
                 ),
+                "research_targets": select(research_targets).where(
+                    research_targets.c.tenant_id == tenant
+                ),
+                "social_evidence": select(social_evidence_snapshots).where(
+                    social_evidence_snapshots.c.tenant_id == tenant
+                ),
                 "research_snapshots": select(research_snapshots).where(
                     research_snapshots.c.tenant_id == tenant
                 ),
@@ -182,6 +193,7 @@ class SqlAlchemyCanonicalKnowledgeReader:
             decisions_by_concept.setdefault(row["concept_id"], []).append(row)
         concept_sets_by_id = {row["id"]: row for row in rows["concept_sets"]}
         evidence_by_finding: dict[tuple[str, str], tuple[str, ...]] = {}
+        social_evidence_ids = {str(row["id"]) for row in rows.get("social_evidence", [])}
         for snapshot in rows["research_snapshots"]:
             for finding in snapshot["findings"] or []:
                 evidence_by_finding[(str(snapshot["id"]), finding["key"])] = tuple(
@@ -748,6 +760,82 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     row["semantic_digest"],
                 )
             )
+        for row in rows.get("research_targets", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.RESEARCH_TARGET,
+                    str(row["id"]),
+                    row["display_name"],
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    {
+                        "kind": row["kind"],
+                        "website_url": row["website_url"],
+                        "platform": row["platform"],
+                        "platform_handle": row["platform_handle"],
+                        "platform_profile_url": row["platform_profile_url"],
+                        "platform_identifier": row["platform_identifier"],
+                    },
+                    (_rel(KnowledgeNodeType.PRODUCT, row["product_id"], "researches_product"),),
+                )
+            )
+        for row in rows.get("social_evidence", []):
+            title = (
+                row["headline"]
+                or row["advertiser_name"]
+                or (f"{str(row['platform']).title()} evidence {str(row['id'])[:8]}")
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.SOCIAL_EVIDENCE_SNAPSHOT,
+                    str(row["id"]),
+                    title[:500],
+                    "immutable",
+                    row["captured_at"],
+                    row["captured_at"],
+                    {
+                        "platform": row["platform"],
+                        "evidence_type": row["evidence_type"],
+                        "provenance": row["provenance"],
+                        "source_url": row["source_url"],
+                        "destination_url": row["destination_url"],
+                        "advertiser_name": row["advertiser_name"],
+                        "platform_content_id": row["platform_content_id"],
+                        "headline": row["headline"],
+                        "body_text": row["body_text"],
+                        "cta": row["cta"],
+                        "media_type": row["media_type"],
+                        "placements": row["placements"],
+                        "activity_status": row["activity_status"],
+                        "region": row["region"],
+                        "reach_range": row["reach_range"],
+                        "source_provider": row["source_provider"],
+                        "rights_status": row["rights_status"],
+                        "allowed_uses": row["allowed_uses"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.RESEARCH_TARGET,
+                            row["research_target_id"],
+                            "evidence_from_target",
+                        ),
+                        _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "evidence_for_product"),
+                        *(
+                            (
+                                _rel(
+                                    KnowledgeNodeType.ASSET,
+                                    row["media_asset_id"],
+                                    "references_asset",
+                                ),
+                            )
+                            if row["media_asset_id"]
+                            else ()
+                        ),
+                    ),
+                    row["semantic_digest"],
+                )
+            )
         for row in rows["research_snapshots"]:
             findings = row["findings"] or []
             finding_rels = tuple(
@@ -787,7 +875,11 @@ class SqlAlchemyCanonicalKnowledgeReader:
             for finding in findings:
                 evidence_rels = tuple(
                     _rel(
-                        KnowledgeNodeType.EVIDENCE_SNAPSHOT,
+                        (
+                            KnowledgeNodeType.SOCIAL_EVIDENCE_SNAPSHOT
+                            if str(citation["evidence_snapshot_id"]) in social_evidence_ids
+                            else KnowledgeNodeType.EVIDENCE_SNAPSHOT
+                        ),
                         citation["evidence_snapshot_id"],
                         "supported_by_evidence",
                     )
@@ -887,7 +979,15 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     )
                 )
                 relationships.extend(
-                    _rel(KnowledgeNodeType.EVIDENCE_SNAPSHOT, evidence_id, "supported_by_evidence")
+                    _rel(
+                        (
+                            KnowledgeNodeType.SOCIAL_EVIDENCE_SNAPSHOT
+                            if str(evidence_id) in social_evidence_ids
+                            else KnowledgeNodeType.EVIDENCE_SNAPSHOT
+                        ),
+                        evidence_id,
+                        "supported_by_evidence",
+                    )
                     for evidence_id in evidence_by_finding.get(
                         (str(ref["research_snapshot_id"]), ref["finding_key"]), ()
                     )

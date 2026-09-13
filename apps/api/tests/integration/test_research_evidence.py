@@ -17,7 +17,13 @@ from creative_marketer.infrastructure.database.research_uow import (
 )
 from creative_marketer.infrastructure.research.safe_web import HttpResponse, SafeWebFetcher
 from creative_marketer.research.application import FetchedPage, ResearchNotFound, ResearchService
-from creative_marketer.research.domain import FetchStatus, ResearchCategory
+from creative_marketer.research.domain import (
+    FetchStatus,
+    ResearchCategory,
+    ResearchTargetKind,
+    SocialEvidenceType,
+    SocialPlatform,
+)
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
 from tests.integration.test_asset_library import product_setup, storage
@@ -164,6 +170,60 @@ async def test_known_ids_do_not_bypass_cross_tenant_research_rls(
             await operation
     manifest = await service.manifest(context_b, product_b.id)
     assert not manifest.evidence
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_social_evidence_is_tenant_private_immutable_and_archive_safe(
+    admin_engine: AsyncEngine,
+    catalog_factory: SqlAlchemyCatalogUnitOfWorkFactory,
+    research_factory: SqlAlchemyResearchUnitOfWorkFactory,
+    runtime_engine: AsyncEngine,
+) -> None:
+    context_a, _, product_a = await product_setup(admin_engine, catalog_factory)
+    context_b, _, product_b = await product_setup(admin_engine, catalog_factory)
+    service = ResearchService(research_factory, StaticFetcher(b"unused"), MemoryStore())
+    target = await service.create_target(
+        context_a,
+        product_id=product_a.id,
+        kind=ResearchTargetKind.COMPETITOR_BRAND,
+        display_name="Public competitor",
+        platform=SocialPlatform.TIKTOK,
+        platform_profile_url="https://www.tiktok.com/@public-competitor",
+    )
+    evidence = await service.add_manual_social_evidence(
+        context_a,
+        target_id=target.id,
+        platform=SocialPlatform.TIKTOK,
+        evidence_type=SocialEvidenceType.VIDEO,
+        source_url="https://www.tiktok.com/@public-competitor/video/123",
+        headline="Public creative",
+        body_text="User supplied evidence, not provider verified.",
+    )
+    assert evidence.provenance.value == "user_provided"
+    assert evidence.allowed_uses == ("internal_analysis",)
+    assert (await service.manifest(context_a, product_a.id)).social_evidence
+    assert not (await service.manifest(context_b, product_b.id)).social_evidence
+    with pytest.raises(ResearchNotFound):
+        await service.get_social_evidence(context_b, evidence.id)
+    with pytest.raises(ResearchNotFound):
+        await service.archive_target(context_b, target.id)
+
+    for statement in (
+        "UPDATE research.social_evidence_snapshots SET headline='tampered' WHERE id=:id",
+        "DELETE FROM research.social_evidence_snapshots WHERE id=:id",
+    ):
+        with pytest.raises(DBAPIError):
+            async with runtime_engine.begin() as connection:
+                await connection.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": str(context_a.tenant_id)},
+                )
+                await connection.execute(text(statement), {"id": evidence.id})
+
+    await service.archive_target(context_a, target.id)
+    assert not (await service.manifest(context_a, product_a.id)).social_evidence
+    assert (await service.get_social_evidence(context_a, evidence.id)).id == evidence.id
 
 
 class MemoryStore:
@@ -343,6 +403,70 @@ async def test_authorized_research_api_has_no_raw_or_proxy_surface(
             },
         )
         assert invalid.status_code == 422
+        target = await client.post(
+            f"/v1/products/{product.id}/research-targets",
+            headers=auth,
+            json={
+                "kind": "advertiser",
+                "display_name": "Public advertiser",
+                "platform": "facebook",
+            },
+        )
+        assert target.status_code == 201
+        target_id = target.json()["id"]
+        social = await client.post(
+            f"/v1/research-targets/{target_id}/social-evidence",
+            headers=auth,
+            json={
+                "platform": "facebook",
+                "evidence_type": "ad",
+                "source_url": "https://www.facebook.com/ads/library/?id=123",
+                "headline": "Manually supplied public ad",
+            },
+        )
+        assert social.status_code == 201
+        social_payload = social.json()
+        assert social_payload["provenance"] == "user_provided"
+        assert social_payload["allowed_uses"] == ["internal_analysis"]
+        assert "raw_provider_metadata_digest" not in social_payload
+        listed_targets = await client.get(
+            f"/v1/products/{product.id}/research-targets", headers=auth
+        )
+        assert listed_targets.status_code == 200
+        assert listed_targets.json()[0]["id"] == target_id
+        listed_social = await client.get(f"/v1/products/{product.id}/social-evidence", headers=auth)
+        assert listed_social.status_code == 200
+        assert listed_social.json()[0]["id"] == social_payload["id"]
+        fetched_social = await client.get(
+            f"/v1/social-evidence/{social_payload['id']}", headers=auth
+        )
+        assert fetched_social.status_code == 200
+        assert fetched_social.json() == social_payload
+        assert (
+            await client.get(f"/v1/products/{unknown}/research-targets", headers=auth)
+        ).status_code == 404
+        assert (
+            await client.get(f"/v1/products/{unknown}/social-evidence", headers=auth)
+        ).status_code == 404
+        assert (await client.get(f"/v1/social-evidence/{unknown}", headers=auth)).status_code == 404
+        capabilities = await client.get("/v1/social-research/capabilities", headers=auth)
+        assert capabilities.status_code == 200
+        assert not any(item["enabled"] for item in capabilities.json())
+        unsupported = await client.post(
+            f"/v1/research-targets/{target_id}/provider-query",
+            headers=auth,
+            json={"capability": "search_ads"},
+        )
+        assert unsupported.status_code == 422
+        assert unsupported.json()["detail"] == "CAPABILITY_NOT_SUPPORTED"
+        archived_target = await client.post(
+            f"/v1/research-targets/{target_id}/archive", headers=auth
+        )
+        assert archived_target.status_code == 200
+        assert archived_target.json()["status"] == "archived"
+        assert (
+            await client.post(f"/v1/research-targets/{unknown}/archive", headers=auth)
+        ).status_code == 404
         archived = await client.post(f"/v1/research-sources/{source_id}/archive", headers=auth)
         assert archived.status_code == 200 and archived.json()["status"] == "archived"
         assert (

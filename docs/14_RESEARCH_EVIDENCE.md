@@ -87,9 +87,14 @@ blocks, keep it out of system/developer instructions, and give it no tool or per
 ## Context, privacy, and facts
 
 `ResearchContextManifest` is built on demand from the latest successful EvidenceSnapshot for each
-active Product Source. It contains at most 50 deterministically ordered references and digests—not
+active Product Source and the latest distinct SocialEvidenceSnapshot for each active ResearchTarget.
+Version 2 contains at most 50 deterministically ordered references, including at most 20 social
+references, and digests—not
 raw HTML or concatenated evidence. Future retrieval may add indexing only after AgentRuntime needs
 are defined; pgvector/full-text search is intentionally absent.
+
+Social evidence follows the separate immutable, analysis-only model and official-capability policy
+defined in `23_PRODUCT_DATA_SAFETY_AND_SOCIAL_RESEARCH.md` and ADR-035.
 
 Evidence completion, compact Audit, and `research.evidence.captured.v1` commit atomically. Source
 creation/archive emit `research.source.created.v1` and `research.source.archived.v1`. Events and

@@ -59,7 +59,7 @@ async def run() -> None:
         selected_evidence=(evidence.identity(),),
         model_profile_key=route.profile_key,
         output_contract_key="research.research_snapshot",
-        output_contract_version=1,
+        output_contract_version=2,
         correlation_id=uuid4(),
         initiated_by_actor_kind="user",
         initiated_by_actor_id=uuid4(),

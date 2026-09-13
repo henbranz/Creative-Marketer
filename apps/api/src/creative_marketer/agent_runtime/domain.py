@@ -638,7 +638,11 @@ def parse_research_output(
                     )
                     for citation in item["citations"]
                 ),
-                scope=str(item["scope"]),
+                scope=(
+                    f"{str(item.get('basis', 'OBSERVED')).upper()}: {item['scope']!s}"
+                    if not str(item["scope"]).startswith(("OBSERVED: ", "INFERRED: "))
+                    else str(item["scope"])
+                ),
                 implication=(
                     str(item["implication"]) if item.get("implication") is not None else None
                 ),

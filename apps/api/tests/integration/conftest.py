@@ -79,6 +79,7 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
                 "creative.concept_sets, research.research_snapshots, "
                 "agent_runtime.model_cost_reconciliations, agent_runtime.model_attempts, "
                 "agent_runtime.agent_budget_usage, agent_runtime.agent_runs, "
+                "research.social_evidence_snapshots, research.research_targets, "
                 "research.evidence_snapshots, research.source_fetches, "
                 "research.sources, catalog.assets, catalog.product_knowledge_snapshots, "
                 "catalog.product_briefs, catalog.product_profiles, catalog.products, "

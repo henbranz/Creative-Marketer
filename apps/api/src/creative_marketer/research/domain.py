@@ -47,6 +47,36 @@ class ResearchSourceStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class ResearchTargetKind(StrEnum):
+    COMPETITOR_BRAND = "competitor_brand"
+    ADVERTISER = "advertiser"
+    SOCIAL_PROFILE = "social_profile"
+    PRODUCT = "product"
+
+
+class SocialPlatform(StrEnum):
+    FACEBOOK = "facebook"
+    INSTAGRAM = "instagram"
+    TIKTOK = "tiktok"
+    OTHER = "other"
+
+
+class SocialEvidenceProvenance(StrEnum):
+    USER_PROVIDED = "user_provided"
+    PROVIDER_FETCHED = "provider_fetched"
+
+
+class SocialEvidenceType(StrEnum):
+    AD = "ad"
+    POST = "post"
+    REEL = "reel"
+    VIDEO = "video"
+    SCREENSHOT = "screenshot"
+    EXPORTED_IMAGE = "exported_image"
+    EXPORTED_VIDEO = "exported_video"
+    OTHER = "other"
+
+
 class FetchStatus(StrEnum):
     PENDING = "pending"
     FETCHING = "fetching"
@@ -153,6 +183,69 @@ class ResearchSource:
             raise ResearchValidationError("source timestamps must be timezone-aware")
 
     def archive(self, now: datetime | None = None) -> ResearchSource:
+        if self.status is ResearchSourceStatus.ARCHIVED:
+            return self
+        return replace(
+            self, status=ResearchSourceStatus.ARCHIVED, updated_at=now or datetime.now(UTC)
+        )
+
+
+def _bounded_optional(value: str | None, maximum: int, label: str) -> str | None:
+    if value is None or not value.strip():
+        return None
+    if len(value) > maximum:
+        raise ResearchValidationError(f"{label} exceeds {maximum} characters")
+    return value.strip()
+
+
+def _optional_public_url(value: str | None) -> str | None:
+    if value is None or not value.strip():
+        return None
+    return canonicalize_url(value.strip())
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchTarget:
+    tenant_id: UUID
+    product_id: UUID
+    kind: ResearchTargetKind
+    display_name: str
+    created_by: UUID
+    id: UUID = field(default_factory=uuid4)
+    website_url: str | None = None
+    platform: SocialPlatform | None = None
+    platform_handle: str | None = None
+    platform_profile_url: str | None = None
+    platform_identifier: str | None = None
+    status: ResearchSourceStatus = ResearchSourceStatus.ACTIVE
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        name = self.display_name.strip()
+        if not name or len(name) > 200:
+            raise ResearchValidationError("research target display name is required and bounded")
+        object.__setattr__(self, "display_name", name)
+        object.__setattr__(self, "website_url", _optional_public_url(self.website_url))
+        object.__setattr__(
+            self, "platform_profile_url", _optional_public_url(self.platform_profile_url)
+        )
+        object.__setattr__(
+            self, "platform_handle", _bounded_optional(self.platform_handle, 200, "platform handle")
+        )
+        object.__setattr__(
+            self,
+            "platform_identifier",
+            _bounded_optional(self.platform_identifier, 200, "platform identifier"),
+        )
+        if self.platform is None and any(
+            (self.platform_handle, self.platform_profile_url, self.platform_identifier)
+        ):
+            raise ResearchValidationError("platform metadata requires a platform")
+        if self.created_at.tzinfo is None or self.updated_at.tzinfo is None:
+            raise ResearchValidationError("target timestamps must be timezone-aware")
+
+    def archive(self, now: datetime | None = None) -> ResearchTarget:
         if self.status is ResearchSourceStatus.ARCHIVED:
             return self
         return replace(
@@ -295,6 +388,143 @@ class EvidenceSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class SocialEvidenceSnapshot:
+    tenant_id: UUID
+    product_id: UUID
+    research_target_id: UUID
+    platform: SocialPlatform
+    evidence_type: SocialEvidenceType
+    provenance: SocialEvidenceProvenance
+    captured_by: UUID
+    captured_at: datetime
+    semantic_digest: str
+    id: UUID = field(default_factory=uuid4)
+    source_url: str | None = None
+    destination_url: str | None = None
+    advertiser_name: str | None = None
+    advertiser_platform_id: str | None = None
+    platform_content_id: str | None = None
+    headline: str | None = None
+    body_text: str | None = None
+    cta: str | None = None
+    ad_objective: str | None = None
+    media_type: str | None = None
+    placements: tuple[str, ...] = ()
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    activity_status: str | None = None
+    region: str | None = None
+    reach_range: str | None = None
+    source_provider: str | None = None
+    media_asset_id: UUID | None = None
+    raw_provider_metadata_digest: str | None = None
+    schema_version: int = 1
+    rights_status: str = "restricted"
+    allowed_uses: tuple[str, ...] = ("internal_analysis",)
+
+    def __post_init__(self) -> None:
+        for name, maximum in (
+            ("advertiser_name", 300),
+            ("advertiser_platform_id", 200),
+            ("platform_content_id", 200),
+            ("headline", 1000),
+            ("body_text", 8000),
+            ("cta", 300),
+            ("ad_objective", 200),
+            ("media_type", 100),
+            ("activity_status", 100),
+            ("region", 200),
+            ("reach_range", 200),
+            ("source_provider", 100),
+        ):
+            object.__setattr__(self, name, _bounded_optional(getattr(self, name), maximum, name))
+        object.__setattr__(self, "source_url", _optional_public_url(self.source_url))
+        object.__setattr__(self, "destination_url", _optional_public_url(self.destination_url))
+        normalized_placements = tuple(item.strip() for item in self.placements if item.strip())
+        if len(normalized_placements) > 20 or any(
+            len(item) > 100 for item in normalized_placements
+        ):
+            raise ResearchValidationError("placements are not bounded")
+        object.__setattr__(self, "placements", normalized_placements)
+        if self.captured_at.tzinfo is None or any(
+            value is not None and value.tzinfo is None
+            for value in (self.first_seen_at, self.last_seen_at)
+        ):
+            raise ResearchValidationError("social evidence timestamps must be timezone-aware")
+        if self.provenance is SocialEvidenceProvenance.USER_PROVIDED and self.source_provider:
+            raise ResearchValidationError("manual evidence cannot claim a provider")
+        if (
+            self.provenance is SocialEvidenceProvenance.PROVIDER_FETCHED
+            and not self.source_provider
+        ):
+            raise ResearchValidationError("provider evidence must identify its provider")
+        if self.rights_status != "restricted" or self.allowed_uses != ("internal_analysis",):
+            raise ResearchValidationError("competitor evidence is restricted to internal analysis")
+        if not any((self.source_url, self.headline, self.body_text, self.media_asset_id)):
+            raise ResearchValidationError("social evidence requires a source, text, or media")
+        computed_digest = research_sha256_v1(self.digest_input())
+        if not self.semantic_digest:
+            object.__setattr__(self, "semantic_digest", computed_digest)
+        elif self.semantic_digest != computed_digest:
+            raise ResearchValidationError("social evidence semantic digest does not match content")
+
+    def digest_input(self) -> dict[str, object]:
+        return {
+            "schema_version": self.schema_version,
+            "product_id": str(self.product_id),
+            "research_target_id": str(self.research_target_id),
+            "platform": self.platform.value,
+            "evidence_type": self.evidence_type.value,
+            "provenance": self.provenance.value,
+            "source_url": self.source_url,
+            "destination_url": self.destination_url,
+            "advertiser_name": self.advertiser_name,
+            "advertiser_platform_id": self.advertiser_platform_id,
+            "platform_content_id": self.platform_content_id,
+            "headline": self.headline,
+            "body_text": self.body_text,
+            "cta": self.cta,
+            "ad_objective": self.ad_objective,
+            "media_type": self.media_type,
+            "placements": list(self.placements),
+            "first_seen_at": self.first_seen_at.astimezone(UTC).isoformat()
+            if self.first_seen_at
+            else None,
+            "last_seen_at": self.last_seen_at.astimezone(UTC).isoformat()
+            if self.last_seen_at
+            else None,
+            "activity_status": self.activity_status,
+            "region": self.region,
+            "reach_range": self.reach_range,
+            "source_provider": self.source_provider,
+            "media_asset_id": str(self.media_asset_id) if self.media_asset_id else None,
+            "raw_provider_metadata_digest": self.raw_provider_metadata_digest,
+            "rights_status": self.rights_status,
+            "allowed_uses": list(self.allowed_uses),
+        }
+
+    def analysis_blocks(self) -> tuple[EvidenceBlock, ...]:
+        values = (
+            ("Advertiser", self.advertiser_name),
+            ("Headline", self.headline),
+            ("Body or caption", self.body_text),
+            ("Call to action", self.cta),
+            ("Objective", self.ad_objective),
+            ("Media type", self.media_type),
+            ("Placements", ", ".join(self.placements) or None),
+            ("Status", self.activity_status),
+            ("Region", self.region),
+            ("Officially supplied reach", self.reach_range),
+            ("Source URL", self.source_url),
+            ("Destination URL", self.destination_url),
+        )
+        text = "\n".join(f"{label}: {value}" for label, value in values if value)
+        if not text:
+            text = f"User-provided {self.platform.value} {self.evidence_type.value} media evidence."
+        return (EvidenceBlock(EvidenceBlockKind.PARAGRAPH, text, 0),)
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchEvidenceReference:
     source_id: UUID
     evidence_snapshot_id: UUID
@@ -313,23 +543,57 @@ class ResearchEvidenceReference:
 
 
 @dataclass(frozen=True, slots=True)
+class SocialEvidenceReference:
+    research_target_id: UUID
+    social_evidence_snapshot_id: UUID
+    semantic_digest: str
+    platform: SocialPlatform
+    captured_at: datetime
+
+    def semantic(self) -> dict[str, object]:
+        return {
+            "research_target_id": str(self.research_target_id),
+            "social_evidence_snapshot_id": str(self.social_evidence_snapshot_id),
+            "semantic_digest": self.semantic_digest,
+            "platform": self.platform.value,
+            "captured_at": self.captured_at.astimezone(UTC).isoformat(),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchContextManifest:
     tenant_id: UUID
     product_id: UUID
     evidence: tuple[ResearchEvidenceReference, ...]
     digest: str
-    schema_version: int = 1
+    social_evidence: tuple[SocialEvidenceReference, ...] = ()
+    schema_version: int = 2
 
     @classmethod
     def build(
-        cls, tenant_id: UUID, product_id: UUID, values: tuple[ResearchEvidenceReference, ...]
+        cls,
+        tenant_id: UUID,
+        product_id: UUID,
+        values: tuple[ResearchEvidenceReference, ...],
+        social_values: tuple[SocialEvidenceReference, ...] = (),
     ) -> ResearchContextManifest:
+        social_ordered = tuple(
+            sorted(
+                social_values,
+                key=lambda item: (
+                    item.platform.value,
+                    -item.captured_at.timestamp(),
+                    str(item.social_evidence_snapshot_id),
+                ),
+            )
+        )[:20]
         ordered = tuple(
             sorted(values, key=lambda item: (item.category.value, str(item.source_id)))
-        )[:50]
+        )[: 50 - len(social_ordered)]
         content = {
-            "schema_version": 1,
+            "schema_version": 2,
             "product_id": str(product_id),
             "evidence": [item.semantic() for item in ordered],
+            "social_evidence": [item.semantic() for item in social_ordered],
         }
-        return cls(tenant_id, product_id, ordered, event_sha256_v1(content))
+        return cls(tenant_id, product_id, ordered, event_sha256_v1(content), social_ordered)

@@ -68,7 +68,8 @@ loop.
 
 ## Context and injection isolation
 
-Selection is deterministic: no more than 20 latest active sources, 10 blocks per source, 120 total
+Selection is deterministic across Web and Social EvidenceSnapshots: no more than 20 latest active
+evidence snapshots, 10 blocks per source, 120 total
 blocks, or 120,000 evidence characters. Category, capture time, and stable IDs determine order.
 Evidence older than 30 days is marked stale. Each selected block binds EvidenceSnapshot ID, Source
 ID, block index/kind, a content digest, and stale flag. Product context is drawn only from the exact
@@ -81,8 +82,10 @@ binds configuration, Product, manifest, and selected block identities.
 
 ## Output, freshness, privacy
 
-`research.research_snapshot.v1.json` limits findings, citations, gaps, suggestions, and string
-lengths. Every finding has category, statement, model-assessed confidence, scope, implication, and
+`research.research_snapshot.v2.json` adds the required basis field while V1 remains available for
+historical in-flight execution. It limits findings, citations, gaps, suggestions, and string
+lengths. Every new finding has category, statement, model-assessed confidence, an `OBSERVED` or
+`INFERRED` basis, scope, implication, and
 one or more exact citations. Unknowns belong in `research_gaps`; suggested sources are proposals and
 are never fetched automatically. The semantic digest excludes row IDs, timestamps, and provider
 metadata.

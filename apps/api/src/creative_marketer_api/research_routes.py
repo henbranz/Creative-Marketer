@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -30,13 +30,20 @@ from creative_marketer.research.application import (
     ResearchNotFound,
     ResearchPermissionDenied,
     ResearchService,
+    SocialCapabilityNotSupported,
 )
 from creative_marketer.research.domain import (
     EvidenceSnapshot,
     ResearchCategory,
     ResearchContextManifest,
     ResearchSource,
+    ResearchTarget,
+    ResearchTargetKind,
     ResearchValidationError,
+    SocialEvidenceProvenance,
+    SocialEvidenceSnapshot,
+    SocialEvidenceType,
+    SocialPlatform,
     SourceFetch,
 )
 
@@ -118,11 +125,107 @@ class EvidenceReferenceResponse(Contract):
     captured_at: datetime
 
 
+class SocialEvidenceReferenceResponse(Contract):
+    research_target_id: UUID
+    social_evidence_snapshot_id: UUID
+    semantic_digest: str
+    platform: str
+    captured_at: datetime
+
+
 class ManifestResponse(Contract):
     product_id: UUID
     schema_version: int
     digest: str
     evidence: list[EvidenceReferenceResponse]
+    social_evidence: list[SocialEvidenceReferenceResponse] = Field(default_factory=list)
+
+
+class ResearchTargetCreate(Contract):
+    kind: ResearchTargetKind
+    display_name: str = Field(min_length=1, max_length=200)
+    website_url: str | None = Field(default=None, max_length=2048)
+    platform: SocialPlatform | None = None
+    platform_handle: str | None = Field(default=None, max_length=200)
+    platform_profile_url: str | None = Field(default=None, max_length=2048)
+    platform_identifier: str | None = Field(default=None, max_length=200)
+
+
+class ResearchTargetResponse(Contract):
+    id: UUID
+    product_id: UUID
+    kind: ResearchTargetKind
+    display_name: str
+    website_url: str | None
+    platform: SocialPlatform | None
+    platform_handle: str | None
+    platform_profile_url: str | None
+    platform_identifier: str | None
+    status: Literal["active", "archived"]
+    created_at: datetime
+    updated_at: datetime
+    can_edit: bool
+
+
+class ManualSocialEvidenceCreate(Contract):
+    platform: SocialPlatform
+    evidence_type: SocialEvidenceType
+    source_url: str | None = Field(default=None, max_length=2048)
+    destination_url: str | None = Field(default=None, max_length=2048)
+    advertiser_name: str | None = Field(default=None, max_length=300)
+    platform_content_id: str | None = Field(default=None, max_length=200)
+    headline: str | None = Field(default=None, max_length=1000)
+    body_text: str | None = Field(default=None, max_length=8000)
+    cta: str | None = Field(default=None, max_length=300)
+    media_type: str | None = Field(default=None, max_length=100)
+    placements: list[str] = Field(default_factory=list, max_length=20)
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    activity_status: str | None = Field(default=None, max_length=100)
+    region: str | None = Field(default=None, max_length=200)
+    media_asset_id: UUID | None = None
+
+
+class SocialEvidenceResponse(Contract):
+    id: UUID
+    product_id: UUID
+    research_target_id: UUID
+    platform: SocialPlatform
+    evidence_type: SocialEvidenceType
+    provenance: SocialEvidenceProvenance
+    source_url: str | None
+    destination_url: str | None
+    advertiser_name: str | None
+    advertiser_platform_id: str | None
+    platform_content_id: str | None
+    headline: str | None
+    body_text: str | None
+    cta: str | None
+    ad_objective: str | None
+    media_type: str | None
+    placements: list[str]
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    activity_status: str | None
+    region: str | None
+    reach_range: str | None
+    source_provider: str | None
+    media_asset_id: UUID | None
+    semantic_digest: str
+    schema_version: int
+    rights_status: Literal["restricted"]
+    allowed_uses: list[str]
+    captured_at: datetime
+
+
+class SocialCapabilityResponse(Contract):
+    platform: SocialPlatform
+    enabled: bool
+    capabilities: list[str]
+
+
+class SocialProviderQuery(Contract):
+    capability: str = Field(min_length=1, max_length=100)
 
 
 class AgentRunStart(Contract):
@@ -178,6 +281,7 @@ class ResearchFindingResponse(Contract):
     category: str
     statement: str
     confidence: str
+    basis: str
     citations: list[ResearchCitationResponse]
     scope: str
     implication: str | None
@@ -282,6 +386,68 @@ def _manifest(value: ResearchContextManifest) -> ManifestResponse:
             )
             for item in value.evidence
         ],
+        social_evidence=[
+            SocialEvidenceReferenceResponse(
+                research_target_id=item.research_target_id,
+                social_evidence_snapshot_id=item.social_evidence_snapshot_id,
+                semantic_digest=item.semantic_digest,
+                platform=item.platform.value,
+                captured_at=item.captured_at,
+            )
+            for item in value.social_evidence
+        ],
+    )
+
+
+def _target(value: ResearchTarget, editable: bool) -> ResearchTargetResponse:
+    return ResearchTargetResponse(
+        id=value.id,
+        product_id=value.product_id,
+        kind=value.kind,
+        display_name=value.display_name,
+        website_url=value.website_url,
+        platform=value.platform,
+        platform_handle=value.platform_handle,
+        platform_profile_url=value.platform_profile_url,
+        platform_identifier=value.platform_identifier,
+        status=value.status.value,
+        created_at=value.created_at,
+        updated_at=value.updated_at,
+        can_edit=editable,
+    )
+
+
+def _social_evidence(value: SocialEvidenceSnapshot) -> SocialEvidenceResponse:
+    return SocialEvidenceResponse(
+        id=value.id,
+        product_id=value.product_id,
+        research_target_id=value.research_target_id,
+        platform=value.platform,
+        evidence_type=value.evidence_type,
+        provenance=value.provenance,
+        source_url=value.source_url,
+        destination_url=value.destination_url,
+        advertiser_name=value.advertiser_name,
+        advertiser_platform_id=value.advertiser_platform_id,
+        platform_content_id=value.platform_content_id,
+        headline=value.headline,
+        body_text=value.body_text,
+        cta=value.cta,
+        ad_objective=value.ad_objective,
+        media_type=value.media_type,
+        placements=list(value.placements),
+        first_seen_at=value.first_seen_at,
+        last_seen_at=value.last_seen_at,
+        activity_status=value.activity_status,
+        region=value.region,
+        reach_range=value.reach_range,
+        source_provider=value.source_provider,
+        media_asset_id=value.media_asset_id,
+        semantic_digest=value.semantic_digest,
+        schema_version=value.schema_version,
+        rights_status=value.rights_status,
+        allowed_uses=list(value.allowed_uses),
+        captured_at=value.captured_at,
     )
 
 
@@ -339,6 +505,7 @@ def _research_snapshot(value: ResearchSnapshot, freshness: str) -> ResearchSnaps
                 category=item.category.value,
                 statement=item.statement,
                 confidence=item.confidence.value,
+                basis="INFERRED" if item.scope.startswith("INFERRED: ") else "OBSERVED",
                 citations=[
                     ResearchCitationResponse(
                         evidence_snapshot_id=c.evidence_snapshot_id,
@@ -347,7 +514,7 @@ def _research_snapshot(value: ResearchSnapshot, freshness: str) -> ResearchSnaps
                     )
                     for c in item.citations
                 ],
-                scope=item.scope,
+                scope=item.scope.removeprefix("INFERRED: ").removeprefix("OBSERVED: "),
                 implication=item.implication,
             )
             for item in value.findings
@@ -410,7 +577,146 @@ def create_research_router(
             return HTTPException(status_code=403, detail="research_mutation_denied")
         if isinstance(error, ResearchConflict):
             return HTTPException(status_code=409, detail=str(error).replace(" ", "_"))
+        if isinstance(error, SocialCapabilityNotSupported):
+            return HTTPException(status_code=422, detail=error.code)
         return HTTPException(status_code=422, detail=str(error))
+
+    @router.post(
+        "/products/{product_id}/research-targets",
+        response_model=ResearchTargetResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def create_target(
+        product_id: UUID, value: ResearchTargetCreate, ctx: Context
+    ) -> ResearchTargetResponse:
+        try:
+            target = await service.create_target(
+                ctx,
+                product_id=product_id,
+                kind=value.kind,
+                display_name=value.display_name,
+                website_url=value.website_url,
+                platform=value.platform,
+                platform_handle=value.platform_handle,
+                platform_profile_url=value.platform_profile_url,
+                platform_identifier=value.platform_identifier,
+            )
+            return _target(target, True)
+        except (
+            ResearchNotFound,
+            ResearchPermissionDenied,
+            ResearchConflict,
+            ResearchValidationError,
+        ) as error:
+            raise map_error(error) from error
+
+    @router.get(
+        "/products/{product_id}/research-targets", response_model=list[ResearchTargetResponse]
+    )
+    async def list_targets(product_id: UUID, ctx: Context) -> list[ResearchTargetResponse]:
+        try:
+            return [
+                _target(value, _editable(ctx))
+                for value in await service.list_targets(ctx, product_id)
+            ]
+        except ResearchNotFound as error:
+            raise map_error(error) from error
+
+    @router.post("/research-targets/{target_id}/archive", response_model=ResearchTargetResponse)
+    async def archive_target(target_id: UUID, ctx: Context) -> ResearchTargetResponse:
+        try:
+            return _target(await service.archive_target(ctx, target_id), True)
+        except (ResearchNotFound, ResearchPermissionDenied, ResearchConflict) as error:
+            raise map_error(error) from error
+
+    @router.post(
+        "/research-targets/{target_id}/social-evidence",
+        response_model=SocialEvidenceResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def add_manual_social_evidence(
+        target_id: UUID, value: ManualSocialEvidenceCreate, ctx: Context
+    ) -> SocialEvidenceResponse:
+        try:
+            evidence = await service.add_manual_social_evidence(
+                ctx,
+                target_id=target_id,
+                platform=value.platform,
+                evidence_type=value.evidence_type,
+                source_url=value.source_url,
+                destination_url=value.destination_url,
+                advertiser_name=value.advertiser_name,
+                platform_content_id=value.platform_content_id,
+                headline=value.headline,
+                body_text=value.body_text,
+                cta=value.cta,
+                media_type=value.media_type,
+                placements=tuple(value.placements),
+                first_seen_at=value.first_seen_at,
+                last_seen_at=value.last_seen_at,
+                activity_status=value.activity_status,
+                region=value.region,
+                media_asset_id=value.media_asset_id,
+            )
+            return _social_evidence(evidence)
+        except (
+            ResearchNotFound,
+            ResearchPermissionDenied,
+            ResearchConflict,
+            ResearchValidationError,
+        ) as error:
+            raise map_error(error) from error
+
+    @router.get(
+        "/products/{product_id}/social-evidence", response_model=list[SocialEvidenceResponse]
+    )
+    async def list_social_evidence(product_id: UUID, ctx: Context) -> list[SocialEvidenceResponse]:
+        try:
+            return [
+                _social_evidence(value)
+                for value in await service.list_social_evidence(ctx, product_id)
+            ]
+        except ResearchNotFound as error:
+            raise map_error(error) from error
+
+    @router.get("/social-evidence/{evidence_id}", response_model=SocialEvidenceResponse)
+    async def get_social_evidence(evidence_id: UUID, ctx: Context) -> SocialEvidenceResponse:
+        try:
+            return _social_evidence(await service.get_social_evidence(ctx, evidence_id))
+        except ResearchNotFound as error:
+            raise map_error(error) from error
+
+    @router.get("/social-research/capabilities", response_model=list[SocialCapabilityResponse])
+    async def social_capabilities(ctx: Context) -> list[SocialCapabilityResponse]:
+        del ctx
+        return [
+            SocialCapabilityResponse(
+                platform=platform,
+                enabled=bool(capabilities),
+                capabilities=sorted(capabilities),
+            )
+            for platform, capabilities in service.social_capabilities().items()
+        ]
+
+    @router.post(
+        "/research-targets/{target_id}/provider-query",
+        response_model=list[SocialEvidenceResponse],
+    )
+    async def query_social_provider(
+        target_id: UUID, value: SocialProviderQuery, ctx: Context
+    ) -> list[SocialEvidenceResponse]:
+        try:
+            return [
+                _social_evidence(item)
+                for item in await service.query_social_provider(ctx, target_id, value.capability)
+            ]
+        except (
+            ResearchNotFound,
+            ResearchPermissionDenied,
+            ResearchConflict,
+            SocialCapabilityNotSupported,
+        ) as error:
+            raise map_error(error) from error
 
     @router.post(
         "/products/{product_id}/research-sources",

@@ -16,11 +16,14 @@ from creative_marketer.identity.application.authentication import (
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.observability.ports import NullTelemetry, SafeScalar
 from creative_marketer.research.application import (
+    DisabledSocialResearchProvider,
     FetchedPage,
     FetchPolicyError,
     ResearchConflict,
+    ResearchNotFound,
     ResearchPermissionDenied,
     ResearchService,
+    SocialCapabilityNotSupported,
 )
 from creative_marketer.research.domain import (
     EvidenceSnapshot,
@@ -29,6 +32,12 @@ from creative_marketer.research.domain import (
     ResearchCategory,
     ResearchSource,
     ResearchSourceStatus,
+    ResearchTarget,
+    ResearchTargetKind,
+    SocialEvidenceProvenance,
+    SocialEvidenceSnapshot,
+    SocialEvidenceType,
+    SocialPlatform,
     SourceFetch,
 )
 
@@ -145,9 +154,64 @@ class Products:
         return product_id == self.product_id
 
 
+class Targets:
+    def __init__(self) -> None:
+        self.values: dict[UUID, ResearchTarget] = {}
+
+    async def add(self, value: ResearchTarget) -> None:
+        self.values[value.id] = value
+
+    async def get(self, value_id: UUID) -> ResearchTarget | None:
+        return self.values.get(value_id)
+
+    async def list_for_product(self, product_id: UUID) -> tuple[ResearchTarget, ...]:
+        return tuple(item for item in self.values.values() if item.product_id == product_id)
+
+    async def update(self, value: ResearchTarget, expected_status: ResearchSourceStatus) -> None:
+        assert self.values[value.id].status is expected_status
+        self.values[value.id] = value
+
+
+class SocialEvidence:
+    def __init__(self) -> None:
+        self.values: dict[UUID, SocialEvidenceSnapshot] = {}
+
+    async def add(self, value: SocialEvidenceSnapshot) -> None:
+        self.values[value.id] = value
+
+    async def get(self, value_id: UUID) -> SocialEvidenceSnapshot | None:
+        return self.values.get(value_id)
+
+    async def list_for_product(self, product_id: UUID) -> tuple[SocialEvidenceSnapshot, ...]:
+        return tuple(item for item in self.values.values() if item.product_id == product_id)
+
+    async def latest_matching(
+        self, target_id: UUID, platform_content_id: str | None, semantic_digest: str
+    ) -> SocialEvidenceSnapshot | None:
+        del platform_content_id
+        return next(
+            (
+                item
+                for item in self.values.values()
+                if item.research_target_id == target_id and item.semantic_digest == semantic_digest
+            ),
+            None,
+        )
+
+
+class Assets:
+    def __init__(self) -> None:
+        self.allowed: set[UUID] = set()
+
+    async def is_restricted_analysis_asset(self, asset_id: UUID, product_id: UUID) -> bool:
+        del product_id
+        return asset_id in self.allowed
+
+
 class Uow:
     def __init__(self, product_id: UUID) -> None:
         self.sources, self.fetches, self.evidence = Sources(), Fetches(), Evidence()
+        self.targets, self.social_evidence, self.assets = Targets(), SocialEvidence(), Assets()
         self.products = Products(product_id)
         self.audit, self.outbox = Sink(), Sink()
         self.commits = 0
@@ -209,6 +273,43 @@ class Store:
         self.values[key] = body
 
 
+@dataclass
+class SocialProvider:
+    context: ExecutionContext
+    product_id: UUID
+    target_id: UUID
+    headlines: list[str]
+    platform: SocialPlatform = SocialPlatform.FACEBOOK
+    calls: int = 0
+
+    def capabilities(self) -> frozenset[str]:
+        return frozenset({"search_ads"})
+
+    async def query(
+        self, capability: str, target: ResearchTarget
+    ) -> tuple[SocialEvidenceSnapshot, ...]:
+        assert capability == "search_ads" and target.id == self.target_id
+        headline = self.headlines[min(self.calls, len(self.headlines) - 1)]
+        self.calls += 1
+        return (
+            SocialEvidenceSnapshot(
+                tenant_id=self.context.tenant_id,
+                product_id=self.product_id,
+                research_target_id=self.target_id,
+                platform=self.platform,
+                evidence_type=SocialEvidenceType.AD,
+                provenance=SocialEvidenceProvenance.PROVIDER_FETCHED,
+                source_provider="official-meta-ad-library",
+                platform_content_id="public-ad-1",
+                source_url="https://www.facebook.com/ads/library/?id=public-ad-1",
+                headline=headline,
+                captured_by=self.context.user_id,
+                captured_at=datetime.now(UTC),
+                semantic_digest="",
+            ),
+        )
+
+
 def setup(
     role: MembershipRole = MembershipRole.OWNER,
 ) -> tuple[ExecutionContext, UUID, Uow]:
@@ -223,6 +324,193 @@ def setup(
         AuthenticationAssurance(datetime.now(UTC), "test", "high"),
     )
     return context, product_id, Uow(product_id)
+
+
+@pytest.mark.asyncio
+async def test_manual_social_evidence_is_restricted_deduplicated_and_manifest_bounded() -> None:
+    context, product_id, uow = setup()
+    service = ResearchService(Factory(uow), Fetcher([b"<p>unused</p>"]), Store())
+    target = await service.create_target(
+        context,
+        product_id=product_id,
+        kind=ResearchTargetKind.COMPETITOR_BRAND,
+        display_name="Competitor",
+        platform=SocialPlatform.INSTAGRAM,
+        platform_profile_url="https://instagram.com/competitor",
+    )
+    media_asset_id = uuid4()
+    with pytest.raises(ResearchConflict, match="restricted analysis-only"):
+        await service.add_manual_social_evidence(
+            context,
+            target_id=target.id,
+            platform=SocialPlatform.INSTAGRAM,
+            evidence_type=SocialEvidenceType.REEL,
+            source_url="https://instagram.com/reel/unsafe-media",
+            media_asset_id=media_asset_id,
+        )
+    uow.assets.allowed.add(media_asset_id)
+    first = await service.add_manual_social_evidence(
+        context,
+        target_id=target.id,
+        platform=SocialPlatform.INSTAGRAM,
+        evidence_type=SocialEvidenceType.REEL,
+        source_url="https://instagram.com/reel/public",
+        headline="A repeated hook",
+        body_text="Public caption supplied by the user.",
+        media_asset_id=media_asset_id,
+    )
+    second = await service.add_manual_social_evidence(
+        context,
+        target_id=target.id,
+        platform=SocialPlatform.INSTAGRAM,
+        evidence_type=SocialEvidenceType.REEL,
+        source_url="https://instagram.com/reel/public",
+        headline="A repeated hook",
+        body_text="Public caption supplied by the user.",
+        media_asset_id=media_asset_id,
+    )
+    assert second.id == first.id
+    changed = await service.add_manual_social_evidence(
+        context,
+        target_id=target.id,
+        platform=SocialPlatform.INSTAGRAM,
+        evidence_type=SocialEvidenceType.REEL,
+        source_url="https://instagram.com/reel/public",
+        headline="A repeated hook",
+        body_text="The public caption changed.",
+    )
+    assert changed.id != first.id
+    assert len(uow.social_evidence.values) == 2
+    assert first.rights_status == "restricted"
+    assert first.allowed_uses == ("internal_analysis",)
+    assert first.provenance.value == "user_provided"
+    manifest = await service.manifest(context, product_id)
+    assert manifest.schema_version == 2
+    assert manifest.social_evidence[0].social_evidence_snapshot_id == changed.id
+    assert len(manifest.evidence) + len(manifest.social_evidence) <= 50
+    for index in range(25):
+        await service.add_manual_social_evidence(
+            context,
+            target_id=target.id,
+            platform=SocialPlatform.INSTAGRAM,
+            evidence_type=SocialEvidenceType.POST,
+            source_url=f"https://instagram.com/p/public-{index}",
+            platform_content_id=f"public-{index}",
+        )
+    bounded = await service.manifest(context, product_id)
+    assert len(bounded.social_evidence) == 20
+    assert len(bounded.evidence) + len(bounded.social_evidence) <= 50
+    archived = await service.archive_target(context, target.id)
+    assert archived.status is ResearchSourceStatus.ARCHIVED
+    assert not (await service.manifest(context, product_id)).social_evidence
+    assert (await service.get_social_evidence(context, first.id)).id == first.id
+
+
+@pytest.mark.asyncio
+async def test_social_provider_is_disabled_without_scraping_fallback() -> None:
+    context, product_id, uow = setup()
+    service = ResearchService(Factory(uow), Fetcher([b"<p>unused</p>"]), Store())
+    target = await service.create_target(
+        context,
+        product_id=product_id,
+        kind=ResearchTargetKind.ADVERTISER,
+        display_name="Advertiser",
+        platform=SocialPlatform.FACEBOOK,
+    )
+    assert not service.social_capabilities()[SocialPlatform.FACEBOOK]
+    with pytest.raises(SocialCapabilityNotSupported) as error:
+        await service.query_social_provider(context, target.id, "search_ads")
+    assert error.value.code == "CAPABILITY_NOT_SUPPORTED"
+
+
+@pytest.mark.asyncio
+async def test_social_boundaries_fail_closed_for_missing_archived_and_ungoverned_data() -> None:
+    context, product_id, uow = setup()
+    service = ResearchService(Factory(uow), Fetcher([b"<p>unused</p>"]), Store())
+    unknown = uuid4()
+    with pytest.raises(ResearchNotFound):
+        await service.create_target(
+            context,
+            product_id=unknown,
+            kind=ResearchTargetKind.COMPETITOR_BRAND,
+            display_name="Missing product",
+        )
+    with pytest.raises(ResearchNotFound):
+        await service.list_targets(context, unknown)
+    with pytest.raises(ResearchNotFound):
+        await service.list_social_evidence(context, unknown)
+    with pytest.raises(ResearchNotFound):
+        await service.get_social_evidence(context, unknown)
+    with pytest.raises(ResearchNotFound):
+        await service.add_manual_social_evidence(
+            context,
+            target_id=unknown,
+            platform=SocialPlatform.INSTAGRAM,
+            evidence_type=SocialEvidenceType.POST,
+            source_url="https://instagram.com/p/missing",
+        )
+    with pytest.raises(ResearchNotFound):
+        await service.query_social_provider(context, unknown, "search_ads")
+
+    website_target = await service.create_target(
+        context,
+        product_id=product_id,
+        kind=ResearchTargetKind.COMPETITOR_BRAND,
+        display_name="Website only",
+    )
+    with pytest.raises(SocialCapabilityNotSupported, match="no social platform"):
+        await service.query_social_provider(context, website_target.id, "search_ads")
+
+    target = await service.create_target(
+        context,
+        product_id=product_id,
+        kind=ResearchTargetKind.ADVERTISER,
+        display_name="Advertiser",
+        platform=SocialPlatform.FACEBOOK,
+    )
+    with pytest.raises(ResearchConflict, match="platform does not match"):
+        await service.add_manual_social_evidence(
+            context,
+            target_id=target.id,
+            platform=SocialPlatform.TIKTOK,
+            evidence_type=SocialEvidenceType.AD,
+            source_url="https://tiktok.com/public",
+        )
+    archived = await service.archive_target(context, target.id)
+    assert await service.archive_target(context, target.id) is archived
+    with pytest.raises(ResearchConflict, match="archived"):
+        await service.add_manual_social_evidence(
+            context,
+            target_id=target.id,
+            platform=SocialPlatform.FACEBOOK,
+            evidence_type=SocialEvidenceType.AD,
+            source_url="https://facebook.com/public",
+        )
+
+    with pytest.raises(SocialCapabilityNotSupported):
+        await DisabledSocialResearchProvider(SocialPlatform.FACEBOOK).query("search_ads", target)
+
+
+@pytest.mark.asyncio
+async def test_provider_evidence_is_governed_deduplicated_and_versioned() -> None:
+    context, product_id, uow = setup()
+    service = ResearchService(Factory(uow), Fetcher([b"<p>unused</p>"]), Store())
+    target = await service.create_target(
+        context,
+        product_id=product_id,
+        kind=ResearchTargetKind.ADVERTISER,
+        display_name="Advertiser",
+        platform=SocialPlatform.FACEBOOK,
+    )
+    provider = SocialProvider(context, product_id, target.id, ["Hook one", "Hook one", "Hook two"])
+    service.social_providers[SocialPlatform.FACEBOOK] = provider
+    first = (await service.query_social_provider(context, target.id, "search_ads"))[0]
+    repeated = (await service.query_social_provider(context, target.id, "search_ads"))[0]
+    changed = (await service.query_social_provider(context, target.id, "search_ads"))[0]
+    assert repeated.id == first.id
+    assert changed.id != first.id
+    assert len(uow.social_evidence.values) == 2
+    assert all(item.allowed_uses == ("internal_analysis",) for item in (first, changed))
 
 
 @pytest.mark.asyncio

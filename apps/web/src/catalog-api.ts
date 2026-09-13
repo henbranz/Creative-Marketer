@@ -1,6 +1,7 @@
 import type { components } from "@creative-marketer/contracts";
 
 import { getPublicConfig } from "./config";
+import { readApiError } from "./api-errors";
 
 export type Brand = components["schemas"]["BrandResponse"];
 export type BrandWrite = components["schemas"]["BrandWrite"];
@@ -18,6 +19,14 @@ export type ResearchSourceCreate = components["schemas"]["SourceCreate"];
 export type ResearchFetch = components["schemas"]["FetchResponse"];
 export type ResearchEvidence = components["schemas"]["EvidenceResponse"];
 export type ResearchManifest = components["schemas"]["ManifestResponse"];
+export type ResearchTarget = components["schemas"]["ResearchTargetResponse"];
+export type ResearchTargetCreate =
+  components["schemas"]["ResearchTargetCreate"];
+export type SocialEvidence = components["schemas"]["SocialEvidenceResponse"];
+export type ManualSocialEvidenceCreate =
+  components["schemas"]["ManualSocialEvidenceCreate"];
+export type SocialCapability =
+  components["schemas"]["SocialCapabilityResponse"];
 export type AgentRun = components["schemas"]["AgentRunResponse"];
 export type ResearchSnapshot =
   components["schemas"]["ResearchSnapshotResponse"];
@@ -193,13 +202,7 @@ async function request<T>(
     },
   });
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as {
-      detail?: string;
-    } | null;
-    throw new ApiError(
-      response.status,
-      error?.detail ?? "The request could not be completed.",
-    );
+    throw new ApiError(response.status, await readApiError(response));
   }
   return (await response.json()) as T;
 }
@@ -288,6 +291,58 @@ export const catalogApi = {
     request<ResearchManifest>(
       session,
       `/v1/products/${productId}/research-context-manifest`,
+    ),
+  listResearchTargets: (session: Session, productId: string) =>
+    request<ResearchTarget[]>(
+      session,
+      `/v1/products/${productId}/research-targets`,
+    ),
+  createResearchTarget: (
+    session: Session,
+    productId: string,
+    value: ResearchTargetCreate,
+  ) =>
+    request<ResearchTarget>(
+      session,
+      `/v1/products/${productId}/research-targets`,
+      { method: "POST", body: JSON.stringify(value) },
+    ),
+  archiveResearchTarget: (session: Session, targetId: string) =>
+    request<ResearchTarget>(
+      session,
+      `/v1/research-targets/${targetId}/archive`,
+      {
+        method: "POST",
+      },
+    ),
+  listSocialEvidence: (session: Session, productId: string) =>
+    request<SocialEvidence[]>(
+      session,
+      `/v1/products/${productId}/social-evidence`,
+    ),
+  getSocialEvidence: (session: Session, evidenceId: string) =>
+    request<SocialEvidence>(session, `/v1/social-evidence/${evidenceId}`),
+  addManualSocialEvidence: (
+    session: Session,
+    targetId: string,
+    value: ManualSocialEvidenceCreate,
+  ) =>
+    request<SocialEvidence>(
+      session,
+      `/v1/research-targets/${targetId}/social-evidence`,
+      { method: "POST", body: JSON.stringify(value) },
+    ),
+  listSocialCapabilities: (session: Session) =>
+    request<SocialCapability[]>(session, "/v1/social-research/capabilities"),
+  querySocialProvider: (
+    session: Session,
+    targetId: string,
+    capability: string,
+  ) =>
+    request<SocialEvidence[]>(
+      session,
+      `/v1/research-targets/${targetId}/provider-query`,
+      { method: "POST", body: JSON.stringify({ capability }) },
     ),
   startResearcher: (
     session: Session,
@@ -471,6 +526,8 @@ export async function obsidianOpenUrl(
     agent_run: "Runs",
     research_source: "Research",
     evidence_snapshot: "Research/Evidence",
+    research_target: "Research/Targets",
+    social_evidence_snapshot: "Research/Social Evidence",
     research_snapshot: "Research",
     research_finding: "Research/Findings",
     creative_concept_set: "Creative",

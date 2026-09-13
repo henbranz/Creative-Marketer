@@ -60,6 +60,7 @@ from creative_marketer.research.domain import (
     EvidenceSnapshot,
     ResearchCategory,
     ResearchContextManifest,
+    SocialEvidenceSnapshot,
 )
 
 from .domain import (
@@ -100,7 +101,7 @@ MAX_EVIDENCE_TEXT_CHARACTERS = 120_000
 MAX_PROVIDER_TRANSPORT_ATTEMPTS = 2
 MODEL_ATTEMPT_LEASE = timedelta(minutes=15)
 RESEARCH_CONTRACT_KEY = "research.research_snapshot"
-RESEARCH_CONTRACT_VERSION = 1
+RESEARCH_CONTRACT_VERSION = 2
 _CATEGORY_PRIORITY = {
     ResearchCategory.COMPETITOR: 0,
     ResearchCategory.PRODUCT_PAGE: 1,
@@ -135,7 +136,9 @@ class AgentCapabilityHandler(Protocol):
     output_contract_key: str
     output_contract_version: int
 
-    def output_schema(self) -> Mapping[str, object]: ...
+    def supports_output_contract(self, key: str, version: int) -> bool: ...
+
+    def output_schema(self, version: int) -> Mapping[str, object]: ...
 
     def invocation(
         self, run: AgentRun, route: ModelRoute, context: ModelContext
@@ -167,8 +170,11 @@ class ResearcherCapability:
     output_contract_key: str = RESEARCH_CONTRACT_KEY
     output_contract_version: int = RESEARCH_CONTRACT_VERSION
 
-    def output_schema(self) -> Mapping[str, object]:
-        return load_output_schema()
+    def supports_output_contract(self, key: str, version: int) -> bool:
+        return key == self.output_contract_key and version in {1, 2}
+
+    def output_schema(self, version: int) -> Mapping[str, object]:
+        return load_output_schema(version)
 
     def invocation(
         self, run: AgentRun, route: ModelRoute, context: ModelContext
@@ -178,7 +184,7 @@ class ResearcherCapability:
             context.system_instructions,
             context.product_context,
             context.evidence_blocks,
-            self.output_schema(),
+            self.output_schema(run.output_contract_version),
             run.output_contract_key,
             run.output_contract_version,
             route.max_output_tokens,
@@ -217,7 +223,12 @@ class CreativeStrategistCapability:
     output_contract_key: str = CREATIVE_CONTRACT_KEY
     output_contract_version: int = CREATIVE_CONTRACT_VERSION
 
-    def output_schema(self) -> Mapping[str, object]:
+    def supports_output_contract(self, key: str, version: int) -> bool:
+        return key == self.output_contract_key and version == self.output_contract_version
+
+    def output_schema(self, version: int) -> Mapping[str, object]:
+        if version != self.output_contract_version:
+            raise AgentCapabilityUnavailable("Creative Strategist output contract is unsupported")
         return load_creative_output_schema()
 
     def invocation(
@@ -228,7 +239,7 @@ class CreativeStrategistCapability:
             context.system_instructions,
             {},
             (),
-            self.output_schema(),
+            self.output_schema(run.output_contract_version),
             run.output_contract_key,
             run.output_contract_version,
             route.max_output_tokens,
@@ -320,7 +331,12 @@ class ProducerCapability:
     output_contract_key: str = PRODUCTION_CONTRACT_KEY
     output_contract_version: int = PRODUCTION_CONTRACT_VERSION
 
-    def output_schema(self) -> Mapping[str, object]:
+    def supports_output_contract(self, key: str, version: int) -> bool:
+        return key == self.output_contract_key and version == self.output_contract_version
+
+    def output_schema(self, version: int) -> Mapping[str, object]:
+        if version != self.output_contract_version:
+            raise AgentCapabilityUnavailable("Producer output contract is unsupported")
         return load_production_plan_schema()
 
     def invocation(
@@ -334,7 +350,7 @@ class ProducerCapability:
             context.system_instructions,
             {},
             (),
-            self.output_schema(),
+            self.output_schema(run.output_contract_version),
             run.output_contract_key,
             run.output_contract_version,
             route.max_output_tokens,
@@ -470,7 +486,7 @@ class ResearcherPreparation:
     researcher: ResolvedResearcher
     product_snapshot: ProductKnowledgeSnapshot
     manifest: ResearchContextManifest
-    evidence: tuple[tuple[EvidenceSnapshot, ResearchCategory, str], ...]
+    evidence: tuple[tuple[EvidenceSnapshot | SocialEvidenceSnapshot, ResearchCategory, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -642,7 +658,7 @@ def _period_start(now: datetime, period: BudgetPeriod) -> datetime:
 
 
 def select_evidence_blocks(
-    evidence: tuple[tuple[EvidenceSnapshot, ResearchCategory, str], ...],
+    evidence: tuple[tuple[EvidenceSnapshot | SocialEvidenceSnapshot, ResearchCategory, str], ...],
     *,
     now: datetime | None = None,
 ) -> tuple[EvidenceBlockRef, ...]:
@@ -652,13 +668,27 @@ def select_evidence_blocks(
         key=lambda item: (
             _CATEGORY_PRIORITY.get(item[1], 99),
             -item[0].captured_at.timestamp(),
-            str(item[0].source_id),
+            str(
+                item[0].source_id
+                if isinstance(item[0], EvidenceSnapshot)
+                else item[0].research_target_id
+            ),
         ),
     )[:MAX_EVIDENCE_SOURCES]
     selected: list[EvidenceBlockRef] = []
     characters = 0
     for snapshot, _category, source_label in ordered:
-        for block in snapshot.blocks[:MAX_BLOCKS_PER_SOURCE]:
+        source_id = (
+            snapshot.source_id
+            if isinstance(snapshot, EvidenceSnapshot)
+            else snapshot.research_target_id
+        )
+        blocks = (
+            snapshot.blocks
+            if isinstance(snapshot, EvidenceSnapshot)
+            else snapshot.analysis_blocks()
+        )
+        for block in blocks[:MAX_BLOCKS_PER_SOURCE]:
             if len(selected) >= MAX_EVIDENCE_BLOCKS:
                 return tuple(selected)
             remaining = MAX_EVIDENCE_TEXT_CHARACTERS - characters
@@ -678,7 +708,7 @@ def select_evidence_blocks(
             selected.append(
                 EvidenceBlockRef(
                     snapshot.id,
-                    snapshot.source_id,
+                    source_id,
                     source_label,
                     block.ordinal,
                     block.kind.value,
@@ -711,8 +741,10 @@ def build_context(
     return ModelContext(configuration.system_instructions, product, blocks, digest)
 
 
-def load_output_schema() -> Mapping[str, object]:
-    path = Path(__file__).with_name("schemas") / "research.research_snapshot.v1.json"
+def load_output_schema(version: int = RESEARCH_CONTRACT_VERSION) -> Mapping[str, object]:
+    if version not in {1, 2}:
+        raise AgentCapabilityUnavailable("Researcher output contract is unsupported")
+    path = Path(__file__).with_name("schemas") / f"research.research_snapshot.v{version}.json"
     return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
@@ -955,7 +987,9 @@ class AgentRunService:
                 or set(cfg.read_scopes) != {"catalog.product", "research.evidence"}
                 or set(cfg.write_scopes) != {"research.snapshot"}
             ):
-                raise AgentRunNotReady("active Researcher configuration violates v1 invariants")
+                raise AgentRunNotReady(
+                    "active Researcher configuration violates current invariants"
+                )
             route = self.router.resolve(
                 cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
             )
@@ -1488,12 +1522,11 @@ class AgentRunService:
                 await uow.commit()
                 claim_committed = True
             capability = self.capabilities.resolve(run.agent_type)
-            if (
-                capability.output_contract_key != run.output_contract_key
-                or capability.output_contract_version != run.output_contract_version
+            if not capability.supports_output_contract(
+                run.output_contract_key, run.output_contract_version
             ):
                 raise AgentCapabilityUnavailable("AgentRun contract does not match capability")
-            schema = capability.output_schema()
+            schema = capability.output_schema(run.output_contract_version)
             provider = self.providers.resolve(route.provider)
             invocation = capability.invocation(run, route, context)
             async with self.uow_factory(tenant_id) as uow:

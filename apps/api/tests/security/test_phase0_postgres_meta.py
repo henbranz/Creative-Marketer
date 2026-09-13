@@ -251,6 +251,8 @@ async def test_missing_tenant_context_fails_closed_across_every_implemented_cont
         "research.sources",
         "research.source_fetches",
         "research.evidence_snapshots",
+        "research.research_targets",
+        "research.social_evidence_snapshots",
     )
     for table in tables:
         try:
