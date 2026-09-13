@@ -287,7 +287,13 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         await catalog_uow.assets.add(ready_asset)
         await catalog_uow.commit()
     catalog = CatalogService(catalog_factory)
-    audience = Audience("Commuters", pain_points=("Disposable bottle waste",))
+    audience = Audience(
+        "Commuters",
+        description="People carrying drinks through daily routines",
+        pain_points=("Disposable bottle waste",),
+        desires=("A dependable lower-waste routine",),
+        objections=("Upfront price",),
+    )
     await catalog.update_product(
         context,
         product,
@@ -312,9 +318,17 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             context.tenant_id,
             product.id,
             product_why="Reduce disposable bottle waste.",
+            emotional_benefits=("Feel prepared",),
             primary_audience=audience,
             positioning_statement="A repairable bottle for daily routines.",
+            competitive_alternatives=("Disposable bottles",),
+            why_choose_us=("Repairable design",),
+            priority_channels=("TikTok",),
+            conversion_goal="Purchase",
+            cta_preferences=("Shop now",),
             desired_creative_style="Editorial utility",
+            tones_to_explore=("Direct",),
+            mandatory_messaging=("Made from recycled steel",),
             prohibited_messaging=("Magic cure",),
             required_disclaimers=("Results vary",),
         ),
@@ -470,6 +484,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     async with uows(context.tenant_id) as uow:
         prepared = await uow.runs.prepare_creative(product.id)
         assert prepared is not None
+        assert prepared.brief_completeness >= 80
         creative_context = build_creative_model_context(
             prepared, CreativeStrategyRequest(3, ChannelIntent.TIKTOK)
         )[0]

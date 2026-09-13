@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from dataclasses import replace
 from decimal import Decimal
 from uuid import uuid4
@@ -14,6 +15,7 @@ from creative_marketer.catalog.domain import (
     ProductKnowledgeSnapshot,
     ProductProfile,
     evaluate_completeness,
+    evaluate_semantic_completeness,
 )
 
 
@@ -30,7 +32,12 @@ def product_brain() -> tuple[Brand, BrandProfile, Product, ProductProfile, Produ
         created_by=user_id,
     )
     audience = Audience(
-        name="Urban commuters", pain_points=("Disposable waste",), objections=("Price",)
+        name="Urban commuters",
+        description="People moving through cities",
+        pain_points=("Disposable waste",),
+        desires=("Feel prepared",),
+        motivations=("Reduce waste",),
+        objections=("Price",),
     )
     profile = ProductProfile(
         tenant_id=tenant_id,
@@ -48,9 +55,24 @@ def product_brain() -> tuple[Brand, BrandProfile, Product, ProductProfile, Produ
         tenant_id=tenant_id,
         product_id=product.id,
         product_why="Make daily hydration durable",
+        emotional_benefits=("Confidence",),
         primary_audience=audience,
+        secondary_audiences=(Audience(name="Students", description="Campus commuters"),),
         positioning_statement="The repairable everyday bottle",
+        competitive_alternatives=("Disposable bottles",),
+        why_choose_us=("Repairable lid",),
+        current_channels=("Retail",),
+        priority_channels=("Instagram",),
+        conversion_goal="Purchase",
+        offers=("Free shipping",),
+        cta_preferences=("Shop now",),
         desired_creative_style="Editorial utility",
+        tones_to_explore=("Direct",),
+        tones_to_avoid=("Alarmist",),
+        creative_references=("Customer demos",),
+        mandatory_messaging=("Repairable",),
+        prohibited_messaging=("Health cure",),
+        required_disclaimers=("Results vary",),
     )
     return brand, brand_profile, product, profile, brief
 
@@ -135,10 +157,41 @@ def test_completeness_is_deterministic_and_actionable() -> None:
     assert first == second
     assert first.score == 100
     incomplete = evaluate_completeness(
-        replace(profile, benefits=()), replace(brief, positioning_statement="")
+        replace(profile, benefits=()),
+        replace(brief, emotional_benefits=(), positioning_statement=""),
     )
-    assert incomplete.score == 80
-    assert incomplete.missing_fields == ("brief.positioning_statement", "profile.benefits")
+    assert incomplete.score == 88
+    assert incomplete.missing_fields == (
+        "brief.emotional_benefits",
+        "brief.positioning_statement",
+    )
+
+
+def test_core_brief_reaches_creative_readiness_without_advanced_details() -> None:
+    *_, profile, full = product_brain()
+    core = replace(
+        full,
+        secondary_audiences=(),
+        current_channels=(),
+        tones_to_avoid=(),
+        offers=(),
+        creative_references=(),
+        required_disclaimers=(),
+        legal_safety_constraints=(),
+        geographical_restrictions=(),
+    )
+    completeness = evaluate_completeness(profile, core)
+    assert completeness.score == 82
+    assert evaluate_semantic_completeness(profile.semantic(), core.semantic()) == completeness
+    assert completeness.missing_fields == ()
+    assert completeness.missing_sections == ()
+
+
+def test_advanced_brief_details_enrich_the_score_without_becoming_required() -> None:
+    *_, profile, full = product_brain()
+    without_advanced = replace(full, secondary_audiences=(), current_channels=(), tones_to_avoid=())
+    assert evaluate_completeness(profile, without_advanced).score == 88
+    assert evaluate_completeness(profile, full).score == 100
 
 
 def test_snapshot_digest_is_order_stable_and_excludes_timestamps() -> None:
@@ -196,3 +249,23 @@ def test_provenance_is_explicit_in_agent_ready_semantics() -> None:
     *_, profile, brief = product_brain()
     assert profile.semantic()["provenance"] == "user_provided"
     assert brief.semantic()["provenance"] == "user_provided"
+
+
+def test_agent_snapshot_keeps_primary_optional_and_advanced_brief_fields() -> None:
+    brand, brand_profile, product, profile, brief = product_brain()
+    snapshot = ProductKnowledgeSnapshot.create(
+        brand=brand,
+        brand_profile=brand_profile,
+        product=product,
+        profile=profile,
+        brief=brief,
+        created_by=product.created_by,
+    )
+    saved = snapshot.content["brief"]
+    assert isinstance(saved, Mapping)
+    assert set(saved) == set(brief.semantic())
+    secondary = saved["secondary_audiences"]
+    assert isinstance(secondary, tuple) and isinstance(secondary[0], Mapping)
+    assert secondary[0]["name"] == "Students"
+    assert saved["current_channels"] == ("Retail",)
+    assert saved["tones_to_avoid"] == ("Alarmist",)

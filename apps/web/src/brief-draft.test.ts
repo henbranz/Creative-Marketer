@@ -135,4 +135,25 @@ describe("BriefDraftV1", () => {
       /credential|authorization|api_key/i,
     );
   });
+
+  it("round-trips every advanced field without changing BriefDraftV1", () => {
+    const enriched: BriefWrite = {
+      ...write,
+      secondary_audiences: [
+        {
+          name: "Students",
+          description: "Campus commuters",
+          pain_points: ["Budget"],
+          desires: ["Prepared drinks"],
+          motivations: ["Lower waste"],
+          objections: ["Price"],
+        },
+      ],
+      current_channels: ["Retail", "Email"],
+      tones_to_avoid: ["Alarmist"],
+    };
+    const draft = toBriefDraft(enriched);
+    expect(draft.version).toBe(1);
+    expect(serializeBriefDraft(draft)).toEqual(enriched);
+  });
 });

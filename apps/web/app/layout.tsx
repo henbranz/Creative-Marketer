@@ -7,6 +7,10 @@ import "./styles.css";
 export const metadata: Metadata = {
   title: "Creative Manager",
   description: "Creative intelligence for modern growth.",
+  icons: {
+    icon: "/brand/creative-manager-app-icon.png",
+    apple: "/brand/creative-manager-app-icon.png",
+  },
 };
 
 export default function RootLayout({

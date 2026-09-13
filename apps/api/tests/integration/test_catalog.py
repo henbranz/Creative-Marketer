@@ -154,22 +154,31 @@ def product_body() -> dict[str, object]:
             "product_why": "Reduce disposable bottle use",
             "emotional_benefits": ["Prepared"],
             "primary_audience": audience,
-            "secondary_audiences": [],
+            "secondary_audiences": [
+                {
+                    "name": "Students",
+                    "description": "Campus commuters",
+                    "pain_points": ["Disposable waste"],
+                    "desires": ["Prepared drinks"],
+                    "motivations": ["Lower waste"],
+                    "objections": ["Price"],
+                }
+            ],
             "positioning_statement": "The repairable commuter bottle",
             "competitive_alternatives": ["Disposable bottles"],
             "why_choose_us": ["Repairable"],
-            "current_channels": [],
+            "current_channels": ["Retail"],
             "priority_channels": ["Instagram"],
             "conversion_goal": "Purchase",
-            "offers": [],
+            "offers": ["Free shipping"],
             "cta_preferences": ["Shop now"],
             "desired_creative_style": "Editorial utility",
             "tones_to_explore": ["Direct"],
             "tones_to_avoid": ["Alarmist"],
-            "creative_references": [],
-            "mandatory_messaging": [],
+            "creative_references": ["Customer demos"],
+            "mandatory_messaging": ["Repairable"],
             "prohibited_messaging": ["Health cure"],
-            "required_disclaimers": [],
+            "required_disclaimers": ["Results vary"],
             "legal_safety_constraints": [],
             "geographical_restrictions": [],
         },
@@ -211,7 +220,13 @@ async def test_catalog_service_lifecycle_is_explicitly_covered(
     updated_brand = replace(brand, website_url="https://service.example")
     assert await service.update_brand(context, updated_brand, brand_profile) == updated_brand
 
-    audience = Audience(name="Operators", pain_points=("Manual work",))
+    audience = Audience(
+        name="Operators",
+        description="Teams running governed operations",
+        pain_points=("Manual work",),
+        desires=("Confidence",),
+        objections=("Migration effort",),
+    )
     product = Product(
         tenant_id=tenant_id,
         brand_id=brand.id,
@@ -234,9 +249,24 @@ async def test_catalog_service_lifecycle_is_explicitly_covered(
         tenant_id=tenant_id,
         product_id=product.id,
         product_why="Make operations dependable",
+        emotional_benefits=("Confidence",),
         primary_audience=audience,
+        secondary_audiences=(Audience(name="Auditors", description="Control reviewers"),),
         positioning_statement="The governed workspace",
+        competitive_alternatives=("Spreadsheets",),
+        why_choose_us=("Auditable",),
+        current_channels=("Partners",),
+        priority_channels=("LinkedIn",),
+        conversion_goal="Request a demo",
+        offers=("Guided onboarding",),
+        cta_preferences=("Book a demo",),
         desired_creative_style="Editorial",
+        tones_to_explore=("Direct",),
+        tones_to_avoid=("Hyped",),
+        creative_references=("Product walkthrough",),
+        mandatory_messaging=("Governed",),
+        prohibited_messaging=("Perfect",),
+        legal_safety_constraints=("Do not promise zero risk",),
     )
     assert await service.create_product(context, product, profile, brief) == product
     assert await service.list_products(context, brand.id) == (product,)

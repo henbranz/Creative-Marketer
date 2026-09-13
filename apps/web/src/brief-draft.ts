@@ -31,6 +31,9 @@ const listFields = [
 ] as const;
 
 export type BriefListField = (typeof listFields)[number];
+type SecondaryAudienceWrite = NonNullable<
+  BriefWrite["secondary_audiences"]
+>[number];
 
 export interface AudienceDraftV1 {
   name: string;
@@ -46,7 +49,7 @@ export interface BriefDraftV1 {
   product_why: string;
   emotional_benefits: string;
   primary_audience: AudienceDraftV1 | null;
-  secondary_audiences: BriefWrite["secondary_audiences"];
+  secondary_audiences: NonNullable<BriefWrite["secondary_audiences"]>;
   positioning_statement: string;
   competitive_alternatives: string;
   why_choose_us: string;
@@ -248,6 +251,53 @@ function serializeAudience(value: AudienceDraftV1, field: string) {
   };
 }
 
+function serializeSecondaryAudience(
+  value: SecondaryAudienceWrite,
+  index: number,
+) {
+  const field = `secondary_audiences.${index}`;
+  const name = value.name.trim();
+  if (!name)
+    throw new BriefDraftValidationError(
+      `${field}.name`,
+      "Audience name is required.",
+    );
+  if (name.length > AUDIENCE_NAME_MAX)
+    throw new BriefDraftValidationError(
+      `${field}.name`,
+      `Audience name must be ${AUDIENCE_NAME_MAX} characters or fewer.`,
+    );
+  if (value.description.length > AUDIENCE_DESCRIPTION_MAX)
+    throw new BriefDraftValidationError(
+      `${field}.description`,
+      `Audience description must be ${AUDIENCE_DESCRIPTION_MAX} characters or fewer.`,
+    );
+  return {
+    name,
+    description: value.description,
+    pain_points: normalizeList(
+      (value.pain_points ?? []).join("\n"),
+      `${field}.pain_points`,
+      20,
+    ),
+    desires: normalizeList(
+      (value.desires ?? []).join("\n"),
+      `${field}.desires`,
+      20,
+    ),
+    motivations: normalizeList(
+      (value.motivations ?? []).join("\n"),
+      `${field}.motivations`,
+      20,
+    ),
+    objections: normalizeList(
+      (value.objections ?? []).join("\n"),
+      `${field}.objections`,
+      20,
+    ),
+  };
+}
+
 export function serializeBriefDraft(draft: BriefDraftV1): BriefWrite {
   for (const [field, maximum] of Object.entries(proseLimits)) {
     if (draft[field as keyof typeof proseLimits].length > maximum)
@@ -268,7 +318,9 @@ export function serializeBriefDraft(draft: BriefDraftV1): BriefWrite {
     primary_audience: draft.primary_audience
       ? serializeAudience(draft.primary_audience, "primary_audience")
       : null,
-    secondary_audiences: draft.secondary_audiences ?? [],
+    secondary_audiences: (draft.secondary_audiences ?? []).map(
+      serializeSecondaryAudience,
+    ),
     positioning_statement: draft.positioning_statement,
     conversion_goal: draft.conversion_goal,
     desired_creative_style: draft.desired_creative_style,

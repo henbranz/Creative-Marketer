@@ -1363,74 +1363,39 @@ p {
 
 .cm-brand-mark {
   align-items: center;
-  background: var(--brand-navy);
-  border-radius: 15px;
-  box-shadow: 0 9px 25px rgba(82, 65, 212, 0.25);
   display: inline-flex;
   height: 50px;
   justify-content: center;
-  overflow: hidden;
-  position: relative;
   width: 50px;
 }
-
-.cm-brand-mark::before {
-  background: var(--gradient-brand-main);
-  border-radius: 50%;
-  content: "";
-  inset: 7px;
-  position: absolute;
-}
-
-.cm-brand-mark span {
-  color: white;
-  font-size: 1.35rem;
-  font-weight: 900;
-  position: relative;
-  z-index: 1;
-}
-.cm-brand-mark i {
-  background: var(--brand-orange);
-  border-radius: 2px;
-  height: 7px;
-  position: absolute;
-  right: 5px;
-  top: 5px;
-  transform: rotate(45deg);
-  width: 7px;
+.cm-brand-mark img {
+  height: auto;
+  max-height: 100%;
+  object-fit: contain;
+  width: 100%;
 }
 .cm-brand-mark.compact {
-  border-radius: 9px;
   height: 34px;
   width: 34px;
-}
-.cm-brand-mark.compact::before {
-  inset: 5px;
-}
-.cm-brand-mark.compact span {
-  font-size: 0.9rem;
 }
 
 .cm-brand-lockup {
   align-items: center;
   display: inline-flex;
-  gap: 0.8rem;
+  max-width: min(100%, 390px);
 }
-.cm-brand-lockup > span:last-child {
-  display: grid;
-  gap: 0.1rem;
+.cm-brand-lockup > img {
+  height: auto;
+  width: 100%;
 }
-.cm-brand-lockup strong {
-  font-size: 1.15rem;
-  letter-spacing: -0.035em;
-}
-.cm-brand-lockup small {
-  color: var(--text-muted);
-  font-size: 0.68rem;
+.cm-brand-lockup.compact {
+  gap: 0.58rem;
+  max-width: none;
 }
 .cm-brand-lockup.compact strong {
   color: white;
   font-size: 0.92rem;
+  letter-spacing: -0.035em;
 }
 
 .cm-status-badge {
@@ -1921,6 +1886,124 @@ p {
 }
 .brief-card fieldset {
   gap: 1.35rem;
+}
+.section-nav .section-nav-copy {
+  align-items: start;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  flex: 1;
+  gap: 0.12rem;
+  height: auto;
+  justify-content: start;
+  min-width: 0;
+  width: auto;
+}
+.section-nav-copy b {
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+.section-nav-copy small {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  font-weight: 500;
+}
+.section-nav button.active .section-nav-copy {
+  background: transparent;
+  color: var(--brand-purple);
+}
+.brief-card header > div:first-child > p:last-child {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  margin: 0;
+  max-width: 520px;
+}
+.brief-question {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 0.38rem;
+  padding: 1.15rem;
+}
+.brief-question > h3 {
+  font-size: 1rem;
+  margin: 0;
+}
+.brief-question > p {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin: 0;
+}
+.brief-question-fields {
+  display: grid;
+  gap: 0.9rem;
+}
+.brief-question-fields > .field {
+  margin-top: 0.25rem;
+}
+.brief-question .field textarea {
+  min-height: 94px;
+}
+.advanced-details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.advanced-toggle {
+  align-items: center;
+  background: var(--surface-muted);
+  border: 0;
+  color: var(--text-primary);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 0.8rem 1rem;
+  text-align: left;
+  width: 100%;
+}
+.advanced-toggle span {
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+.advanced-toggle small {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+}
+.advanced-toggle::after {
+  content: "+";
+  font-size: 1rem;
+  margin-left: 0.7rem;
+}
+.advanced-toggle[aria-expanded="true"]::after {
+  content: "−";
+}
+.advanced-content {
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+.advanced-content[hidden] {
+  display: none;
+}
+.secondary-audience {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+}
+.brief-card .secondary-audience > header {
+  background: none;
+  border: 0;
+  padding: 0;
+}
+.secondary-audience h3 {
+  font-size: 0.9rem;
+  margin: 0;
 }
 .field textarea {
   min-height: 128px;

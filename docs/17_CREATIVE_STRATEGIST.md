@@ -36,8 +36,11 @@ system authority; raw web evidence never enters this context. Only READY Asset m
 include `generation_input` may be returned as an existing input. No Asset is required: missing shots
 are first-class requirements.
 
-Brief completeness below 80 fails with `CREATIVE_BRIEF_INCOMPLETE`. Missing, stale, expired, or
-outdated Research fails with `CREATIVE_RESEARCH_REFRESH_REQUIRED` before provider execution.
+Brief completeness below 80 fails with `CREATIVE_BRIEF_INCOMPLETE`. The deterministic Catalog
+scoring model allows the required default Brief questions to reach 82 without Advanced enrichment,
+and AgentRuntime evaluates the frozen Product snapshot with that same scoring function. Missing,
+stale, expired, or outdated Research fails with `CREATIVE_RESEARCH_REFRESH_REQUIRED` before
+provider execution.
 
 ## Output and validation
 

@@ -4,7 +4,11 @@
 surfaces, radii, and elevation. `components.tsx` contains deliberately small presentation
 primitives; domain behavior remains in the Product Workspace.
 
-`BrandMark` is a temporary geometric placeholder, not a recreation of the reference-board logo.
-When approved vector artwork is available, place it at
-`apps/web/public/brand/creative-manager-mark.svg` and replace only the internals of `BrandMark` so
-the lockup API and accessible treatment remain stable.
+The approved Creative Manager artwork lives under `apps/web/public/brand/`. `BrandMark` uses the
+dark app icon for compact navigation surfaces and retains the transparent standalone mark for
+larger unframed placements. `BrandLockup` uses the horizontal light-surface lockup on the access
+screen and pairs the app icon with readable text in the dark sidebar. The supplied app icon is
+also the browser and Apple touch icon.
+
+Keep the component APIs and accessible names stable if the raster artwork is replaced with final
+production SVG exports later.

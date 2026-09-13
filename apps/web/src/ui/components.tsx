@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import Image from "next/image";
 
 import { statusVariant, type StatusVariant } from "./status";
 
@@ -7,25 +8,58 @@ function classes(...values: Array<string | undefined | false>) {
 }
 
 export function BrandMark({ compact = false }: { compact?: boolean }) {
+  const artwork = compact
+    ? {
+        src: "/brand/creative-manager-app-icon.png",
+        width: 512,
+        height: 512,
+      }
+    : {
+        src: "/brand/creative-manager-mark.png",
+        width: 640,
+        height: 546,
+      };
+
   return (
     <span
       className={classes("cm-brand-mark", compact && "compact")}
       aria-hidden="true"
     >
-      <span>C</span>
-      <i />
+      <Image
+        src={artwork.src}
+        alt=""
+        width={artwork.width}
+        height={artwork.height}
+        sizes={compact ? "34px" : "50px"}
+      />
     </span>
   );
 }
 
 export function BrandLockup({ compact = false }: { compact?: boolean }) {
-  return (
-    <span className={classes("cm-brand-lockup", compact && "compact")}>
-      <BrandMark compact={compact} />
-      <span>
-        <strong>Creative Manager</strong>
-        {!compact && <small>Creative intelligence for modern growth.</small>}
+  if (!compact) {
+    return (
+      <span
+        className="cm-brand-lockup"
+        role="img"
+        aria-label="Creative Manager"
+      >
+        <Image
+          src="/brand/creative-manager-lockup-light.png"
+          alt=""
+          width={1320}
+          height={430}
+          sizes="(max-width: 520px) 82vw, 390px"
+          priority
+        />
       </span>
+    );
+  }
+
+  return (
+    <span className="cm-brand-lockup compact">
+      <BrandMark compact />
+      <strong>Creative Manager</strong>
     </span>
   );
 }

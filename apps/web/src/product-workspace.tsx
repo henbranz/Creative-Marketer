@@ -1,7 +1,13 @@
 /* eslint-disable @next/next/no-img-element -- private signed asset grants cannot use Next Image */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import {
   ApiError,
@@ -2875,12 +2881,14 @@ function ListArea({
   onChange,
   hint,
   maxItems = 30,
+  error,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   hint?: string;
   maxItems?: number;
+  error?: string;
 }) {
   const itemCount = value.split("\n").filter((item) => item.trim()).length;
   return (
@@ -2892,11 +2900,104 @@ function ListArea({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         rows={4}
+        aria-invalid={Boolean(error)}
       />
       <small>
         {itemCount}/{maxItems} items
       </small>
+      {error && <small className="field-error">{error}</small>}
     </label>
+  );
+}
+
+function QuestionCard({
+  title,
+  helper,
+  children,
+}: {
+  title?: string;
+  helper?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="brief-question" data-primary-question>
+      {title && <h3>{title}</h3>}
+      {helper && <p>{helper}</p>}
+      <div className="brief-question-fields">{children}</div>
+    </section>
+  );
+}
+
+function hasLines(value: string | undefined): boolean {
+  return Boolean(value?.split("\n").some((item) => item.trim()));
+}
+
+function briefSectionState(section: number, brief: BriefDraftV1) {
+  const audience = brief.primary_audience;
+  const checks = [
+    [hasLines(brief.product_why), hasLines(brief.emotional_benefits)],
+    [
+      Boolean(audience?.name.trim() && audience.description.trim()),
+      hasLines(audience?.pain_points),
+      hasLines(audience?.desires) || hasLines(audience?.motivations),
+      hasLines(audience?.objections),
+    ],
+    [
+      hasLines(brief.positioning_statement),
+      hasLines(brief.competitive_alternatives),
+      hasLines(brief.why_choose_us),
+    ],
+    [
+      hasLines(brief.priority_channels),
+      hasLines(brief.conversion_goal),
+      hasLines(brief.cta_preferences),
+    ],
+    [hasLines(brief.desired_creative_style), hasLines(brief.tones_to_explore)],
+    [hasLines(brief.mandatory_messaging), hasLines(brief.prohibited_messaging)],
+  ][section]!;
+  const completed = checks.filter(Boolean).length;
+  if (completed === 0) return "Not started";
+  if (completed === checks.length) return "Complete";
+  return "In progress";
+}
+
+function advancedAnswerCount(section: number, brief: BriefDraftV1): number {
+  if (section === 1) return brief.secondary_audiences.length;
+  if (section === 3) return hasLines(brief.current_channels) ? 1 : 0;
+  if (section === 4) return hasLines(brief.tones_to_avoid) ? 1 : 0;
+  return 0;
+}
+
+function advancedFieldSection(field: string): number | null {
+  if (field.startsWith("secondary_audiences")) return 1;
+  if (field === "current channels") return 3;
+  if (field === "tones to avoid") return 4;
+  return null;
+}
+
+function missingBriefLabel(field: string): string {
+  return (
+    {
+      "brief.product_why": "Why the product exists",
+      "brief.emotional_benefits": "Main customer benefits",
+      "brief.primary_audience.identity":
+        "Primary audience name and description",
+      "brief.primary_audience.pain_points": "Audience problems or frustrations",
+      "brief.primary_audience.goals":
+        "Audience desired outcomes or motivations",
+      "brief.primary_audience.objections": "Purchase objections",
+      "brief.positioning_statement":
+        "How customers should understand the product",
+      "brief.competitive_alternatives": "What customers choose instead",
+      "brief.why_choose_us": "Why customers should choose this product",
+      "brief.priority_channels": "Where to reach customers",
+      "brief.conversion_goal": "The action customers should take",
+      "brief.cta_preferences": "Preferred calls to action",
+      "brief.desired_creative_style": "How the content should feel",
+      "brief.tones_to_explore": "Tone to use",
+      "brief.mandatory_messaging": "What content must mention",
+      "brief.prohibited_messaging": "What content must never say",
+    }[field] ?? field.replaceAll("_", " ").replace(/^brief\./, "")
   );
 }
 
@@ -2910,6 +3011,9 @@ function BriefEditor({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [section, setSection] = useState(0);
+  const [advancedOpen, setAdvancedOpen] = useState<Set<number>>(
+    () => new Set(),
+  );
   const canonicalDraft = useMemo(
     () => toBriefDraft(toBriefWrite(workspace.brief)),
     [workspace.brief],
@@ -2956,6 +3060,25 @@ function BriefEditor({
       ...brief.primary_audience,
       ...value,
     });
+  const setSecondaryAudience = (
+    index: number,
+    value: Partial<BriefDraftV1["secondary_audiences"][number]>,
+  ) =>
+    set(
+      "secondary_audiences",
+      brief.secondary_audiences.map((audience, audienceIndex) =>
+        audienceIndex === index ? { ...audience, ...value } : audience,
+      ),
+    );
+  const openAdvanced = (index: number) =>
+    setAdvancedOpen((current) => new Set(current).add(index));
+  const toggleAdvanced = (index: number) =>
+    setAdvancedOpen((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => {
@@ -2994,8 +3117,20 @@ function BriefEditor({
         workspace.product.id,
         serializeBriefDraft(brief),
       );
-      onSaved({ ...workspace, brief: saved });
       const session = readSession();
+      let refreshedCompleteness = workspace.completeness;
+      try {
+        refreshedCompleteness = (
+          await catalogApi.getWorkspace(session, workspace.product.id)
+        ).completeness;
+      } catch {
+        // The Brief save is already acknowledged. Keep the prior guidance until refresh.
+      }
+      onSaved({
+        ...workspace,
+        brief: saved,
+        completeness: refreshedCompleteness,
+      });
       window.localStorage.removeItem(
         briefDraftKey(session.tenantId, workspace.product.id),
       );
@@ -3006,6 +3141,11 @@ function BriefEditor({
     } catch (caught) {
       if (caught instanceof BriefDraftValidationError) {
         setFieldError({ field: caught.field, message: caught.message });
+        const advancedSection = advancedFieldSection(caught.field);
+        if (advancedSection !== null) {
+          setSection(advancedSection);
+          openAdvanced(advancedSection);
+        }
       }
       setError(caught instanceof Error ? caught.message : "Save failed");
       setSaveState("error");
@@ -3021,7 +3161,10 @@ function BriefEditor({
             onClick={() => setSection(index)}
           >
             <span>{index + 1}</span>
-            {name}
+            <span className="section-nav-copy">
+              <b>{name}</b>
+              <small>{briefSectionState(index, brief)}</small>
+            </span>
           </button>
         ))}
       </nav>
@@ -3040,6 +3183,13 @@ function BriefEditor({
                 setBrief(recovery.draft);
                 setBaseRevision(recovery.baseRevision);
                 setMigrationNotice(recovery.draft.legacyAudienceMigrated);
+                setAdvancedOpen(
+                  new Set(
+                    [1, 3, 4].filter(
+                      (index) => advancedAnswerCount(index, recovery.draft) > 0,
+                    ),
+                  ),
+                );
                 setRecovery(null);
               }}
             >
@@ -3068,9 +3218,13 @@ function BriefEditor({
         <header>
           <div>
             <p className="eyebrow">
-              Section {section + 1} of {briefSections.length}
+              Brief · {section + 1} of {briefSections.length}
             </p>
             <h2>{briefSections[section]}</h2>
+            <p>
+              Build the minimum context Creative Manager needs to create strong
+              work.
+            </p>
           </div>
           <div className={`save-state ${saveState}`}>
             {saveState === "idle"
@@ -3085,175 +3239,371 @@ function BriefEditor({
         <fieldset disabled={readOnly}>
           {section === 0 && (
             <>
-              <TextArea
-                label="Why does this product exist?"
-                value={brief.product_why ?? ""}
-                maxLength={3000}
-                onChange={(v) => set("product_why", v)}
-              />
-              <ListArea
-                label="Emotional benefits"
-                value={brief.emotional_benefits}
-                onChange={(v) => set("emotional_benefits", v)}
-              />
+              <QuestionCard>
+                <TextArea
+                  label="Why does this product exist?"
+                  hint="Describe the problem it solves and its core value."
+                  value={brief.product_why ?? ""}
+                  maxLength={3000}
+                  onChange={(v) => set("product_why", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What are the main benefits?"
+                  hint="One per line. Focus on the value customers experience."
+                  value={brief.emotional_benefits}
+                  onChange={(v) => set("emotional_benefits", v)}
+                />
+              </QuestionCard>
             </>
           )}
           {section === 1 && (
             <>
-              <label className="field">
-                <span>Audience name</span>
-                <input
-                  aria-label="Audience name"
-                  value={brief.primary_audience?.name ?? ""}
-                  aria-invalid={fieldError?.field === "primary_audience.name"}
-                  onChange={(event) =>
-                    setAudience({ name: event.target.value })
-                  }
+              <QuestionCard
+                title="Who is the primary audience?"
+                helper="Give this audience a short name and a useful description."
+              >
+                <label className="field">
+                  <span>Audience name</span>
+                  <input
+                    aria-label="Audience name"
+                    value={brief.primary_audience?.name ?? ""}
+                    aria-invalid={fieldError?.field === "primary_audience.name"}
+                    onChange={(event) =>
+                      setAudience({ name: event.target.value })
+                    }
+                  />
+                  <small>
+                    {brief.primary_audience?.name.length ?? 0}/
+                    {AUDIENCE_NAME_MAX}
+                  </small>
+                  {fieldError?.field === "primary_audience.name" && (
+                    <small className="field-error">{fieldError.message}</small>
+                  )}
+                </label>
+                <TextArea
+                  label="Audience description"
+                  value={brief.primary_audience?.description ?? ""}
+                  maxLength={AUDIENCE_DESCRIPTION_MAX}
+                  {...(fieldError?.field === "primary_audience.description"
+                    ? { error: fieldError.message }
+                    : {})}
+                  onChange={(v) => setAudience({ description: v })}
                 />
-                <small>
-                  {brief.primary_audience?.name.length ?? 0}/{AUDIENCE_NAME_MAX}
-                </small>
-                {fieldError?.field === "primary_audience.name" && (
-                  <small className="field-error">{fieldError.message}</small>
-                )}
-              </label>
-              <TextArea
-                label="Audience description"
-                value={brief.primary_audience?.description ?? ""}
-                maxLength={AUDIENCE_DESCRIPTION_MAX}
-                {...(fieldError?.field === "primary_audience.description"
-                  ? { error: fieldError.message }
-                  : {})}
-                onChange={(v) => setAudience({ description: v })}
-              />
-              <ListArea
-                label="Pain points"
-                value={brief.primary_audience?.pain_points ?? ""}
-                maxItems={20}
-                onChange={(v) => setAudience({ pain_points: v })}
-              />
-              <ListArea
-                label="Desires"
-                value={brief.primary_audience?.desires ?? ""}
-                maxItems={20}
-                onChange={(v) => setAudience({ desires: v })}
-              />
-              <ListArea
-                label="Motivations"
-                value={brief.primary_audience?.motivations ?? ""}
-                maxItems={20}
-                onChange={(v) => setAudience({ motivations: v })}
-              />
-              <ListArea
-                label="Purchase objections"
-                value={brief.primary_audience?.objections ?? ""}
-                maxItems={20}
-                onChange={(v) => setAudience({ objections: v })}
-              />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What problems or frustrations do they have?"
+                  hint="One per line. Focus on problems the product can realistically solve."
+                  value={brief.primary_audience?.pain_points ?? ""}
+                  maxItems={20}
+                  onChange={(v) => setAudience({ pain_points: v })}
+                />
+              </QuestionCard>
+              <QuestionCard
+                title="What do they want to achieve or feel?"
+                helper="Capture desired outcomes, motivations, or both."
+              >
+                <ListArea
+                  label="Desired outcomes"
+                  value={brief.primary_audience?.desires ?? ""}
+                  maxItems={20}
+                  onChange={(v) => setAudience({ desires: v })}
+                />
+                <ListArea
+                  label="Motivations"
+                  value={brief.primary_audience?.motivations ?? ""}
+                  maxItems={20}
+                  onChange={(v) => setAudience({ motivations: v })}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What could stop them from buying?"
+                  value={brief.primary_audience?.objections ?? ""}
+                  maxItems={20}
+                  onChange={(v) => setAudience({ objections: v })}
+                />
+              </QuestionCard>
+              <section className="advanced-details">
+                <button
+                  type="button"
+                  className="advanced-toggle"
+                  aria-expanded={advancedOpen.has(1)}
+                  onClick={() => toggleAdvanced(1)}
+                >
+                  <span>Advanced audience details</span>
+                  <small>
+                    {advancedAnswerCount(1, brief)
+                      ? `${advancedAnswerCount(1, brief)} advanced audience${advancedAnswerCount(1, brief) === 1 ? "" : "s"} saved`
+                      : "Optional"}
+                  </small>
+                </button>
+                <div className="advanced-content" hidden={!advancedOpen.has(1)}>
+                  {brief.secondary_audiences.map((audience, index) => (
+                    <article className="secondary-audience" key={index}>
+                      <header>
+                        <h3>Secondary audience {index + 1}</h3>
+                        <button
+                          type="button"
+                          className="text-danger"
+                          onClick={() =>
+                            set(
+                              "secondary_audiences",
+                              brief.secondary_audiences.filter(
+                                (_, audienceIndex) => audienceIndex !== index,
+                              ),
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                      </header>
+                      <label className="field">
+                        <span>Name</span>
+                        <input
+                          aria-label={`Secondary audience ${index + 1} name`}
+                          value={audience.name}
+                          onChange={(event) =>
+                            setSecondaryAudience(index, {
+                              name: event.target.value,
+                            })
+                          }
+                        />
+                        {fieldError?.field ===
+                          `secondary_audiences.${index}.name` && (
+                          <small className="field-error">
+                            {fieldError.message}
+                          </small>
+                        )}
+                      </label>
+                      <TextArea
+                        label={`Secondary audience ${index + 1} description`}
+                        value={audience.description}
+                        maxLength={AUDIENCE_DESCRIPTION_MAX}
+                        onChange={(value) =>
+                          setSecondaryAudience(index, { description: value })
+                        }
+                      />
+                      {(
+                        [
+                          ["Pain points", "pain_points"],
+                          ["Desired outcomes", "desires"],
+                          ["Motivations", "motivations"],
+                          ["Objections", "objections"],
+                        ] as const
+                      ).map(([label, field]) => (
+                        <ListArea
+                          key={field}
+                          label={`Secondary audience ${index + 1} ${label.toLowerCase()}`}
+                          value={(audience[field] ?? []).join("\n")}
+                          maxItems={20}
+                          onChange={(value) =>
+                            setSecondaryAudience(index, {
+                              [field]: value.split("\n"),
+                            })
+                          }
+                        />
+                      ))}
+                    </article>
+                  ))}
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() =>
+                      set("secondary_audiences", [
+                        ...brief.secondary_audiences,
+                        {
+                          name: "",
+                          description: "",
+                          pain_points: [],
+                          desires: [],
+                          motivations: [],
+                          objections: [],
+                        },
+                      ])
+                    }
+                  >
+                    Add secondary audience
+                  </button>
+                </div>
+              </section>
             </>
           )}
           {section === 2 && (
             <>
-              <TextArea
-                label="Positioning statement"
-                value={brief.positioning_statement ?? ""}
-                maxLength={3000}
-                onChange={(v) => set("positioning_statement", v)}
-              />
-              <ListArea
-                label="Competitive alternatives"
-                value={brief.competitive_alternatives}
-                onChange={(v) => set("competitive_alternatives", v)}
-              />
-              <ListArea
-                label="Why choose us?"
-                value={brief.why_choose_us}
-                onChange={(v) => set("why_choose_us", v)}
-              />
+              <QuestionCard>
+                <TextArea
+                  label="How should customers understand this product?"
+                  value={brief.positioning_statement ?? ""}
+                  maxLength={3000}
+                  onChange={(v) => set("positioning_statement", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What are customers choosing instead?"
+                  value={brief.competitive_alternatives}
+                  onChange={(v) => set("competitive_alternatives", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="Why should they choose us?"
+                  value={brief.why_choose_us}
+                  onChange={(v) => set("why_choose_us", v)}
+                />
+              </QuestionCard>
             </>
           )}
           {section === 3 && (
             <>
-              <TextArea
-                label="Primary conversion goal"
-                value={brief.conversion_goal ?? ""}
-                maxLength={500}
-                onChange={(v) => set("conversion_goal", v)}
-              />
-              <ListArea
-                label="Priority channels"
-                value={brief.priority_channels}
-                onChange={(v) => set("priority_channels", v)}
-              />
-              <ListArea
-                label="Current channels"
-                value={brief.current_channels}
-                onChange={(v) => set("current_channels", v)}
-              />
-              <ListArea
-                label="Offers & promotions"
-                value={brief.offers}
-                onChange={(v) => set("offers", v)}
-              />
-              <ListArea
-                label="CTA preferences"
-                value={brief.cta_preferences}
-                onChange={(v) => set("cta_preferences", v)}
-              />
+              <QuestionCard>
+                <ListArea
+                  label="Where do you want to reach customers?"
+                  value={brief.priority_channels}
+                  onChange={(v) => set("priority_channels", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <TextArea
+                  label="What action do you want customers to take?"
+                  value={brief.conversion_goal ?? ""}
+                  maxLength={500}
+                  onChange={(v) => set("conversion_goal", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What offer are you promoting?"
+                  hint="Optional. Add one offer per line."
+                  value={brief.offers}
+                  onChange={(v) => set("offers", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What CTA should we use?"
+                  value={brief.cta_preferences}
+                  onChange={(v) => set("cta_preferences", v)}
+                />
+              </QuestionCard>
+              <section className="advanced-details">
+                <button
+                  type="button"
+                  className="advanced-toggle"
+                  aria-expanded={advancedOpen.has(3)}
+                  onClick={() => toggleAdvanced(3)}
+                >
+                  <span>Advanced details</span>
+                  <small>
+                    {advancedAnswerCount(3, brief)
+                      ? "1 advanced answer saved"
+                      : "Optional"}
+                  </small>
+                </button>
+                <div className="advanced-content" hidden={!advancedOpen.has(3)}>
+                  <ListArea
+                    label="Where are you currently reaching customers?"
+                    value={brief.current_channels}
+                    {...(fieldError?.field === "current channels"
+                      ? { error: fieldError.message }
+                      : {})}
+                    onChange={(v) => set("current_channels", v)}
+                  />
+                </div>
+              </section>
             </>
           )}
           {section === 4 && (
             <>
-              <TextArea
-                label="Desired creative style"
-                value={brief.desired_creative_style ?? ""}
-                maxLength={2000}
-                onChange={(v) => set("desired_creative_style", v)}
-              />
-              <ListArea
-                label="Tones to explore"
-                value={brief.tones_to_explore}
-                onChange={(v) => set("tones_to_explore", v)}
-              />
-              <ListArea
-                label="Tones to avoid"
-                value={brief.tones_to_avoid}
-                onChange={(v) => set("tones_to_avoid", v)}
-              />
-              <ListArea
-                label="Creative references"
-                value={brief.creative_references}
-                onChange={(v) => set("creative_references", v)}
-              />
+              <QuestionCard>
+                <TextArea
+                  label="What should the content feel like?"
+                  value={brief.desired_creative_style ?? ""}
+                  maxLength={2000}
+                  onChange={(v) => set("desired_creative_style", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What tone should we use?"
+                  value={brief.tones_to_explore}
+                  onChange={(v) => set("tones_to_explore", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="Do you have creative references?"
+                  hint="Optional. Add examples, links, or descriptions one per line."
+                  value={brief.creative_references}
+                  onChange={(v) => set("creative_references", v)}
+                />
+              </QuestionCard>
+              <section className="advanced-details">
+                <button
+                  type="button"
+                  className="advanced-toggle"
+                  aria-expanded={advancedOpen.has(4)}
+                  onClick={() => toggleAdvanced(4)}
+                >
+                  <span>Advanced details</span>
+                  <small>
+                    {advancedAnswerCount(4, brief)
+                      ? "1 advanced answer saved"
+                      : "Optional"}
+                  </small>
+                </button>
+                <div className="advanced-content" hidden={!advancedOpen.has(4)}>
+                  <ListArea
+                    label="What tones should we avoid?"
+                    value={brief.tones_to_avoid}
+                    {...(fieldError?.field === "tones to avoid"
+                      ? { error: fieldError.message }
+                      : {})}
+                    onChange={(v) => set("tones_to_avoid", v)}
+                  />
+                </div>
+              </section>
             </>
           )}
           {section === 5 && (
             <>
-              <ListArea
-                label="Mandatory messaging"
-                value={brief.mandatory_messaging}
-                onChange={(v) => set("mandatory_messaging", v)}
-              />
-              <ListArea
-                label="Prohibited messaging"
-                value={brief.prohibited_messaging}
-                onChange={(v) => set("prohibited_messaging", v)}
-              />
-              <ListArea
-                label="Required disclaimers"
-                value={brief.required_disclaimers}
-                onChange={(v) => set("required_disclaimers", v)}
-              />
-              <ListArea
-                label="Legal & safety constraints"
-                value={brief.legal_safety_constraints}
-                onChange={(v) => set("legal_safety_constraints", v)}
-              />
-              <ListArea
-                label="Geographical restrictions"
-                value={brief.geographical_restrictions}
-                onChange={(v) => set("geographical_restrictions", v)}
-              />
+              <QuestionCard>
+                <ListArea
+                  label="What must the content always mention?"
+                  value={brief.mandatory_messaging}
+                  onChange={(v) => set("mandatory_messaging", v)}
+                />
+              </QuestionCard>
+              <QuestionCard>
+                <ListArea
+                  label="What must the content never say?"
+                  value={brief.prohibited_messaging}
+                  onChange={(v) => set("prohibited_messaging", v)}
+                />
+              </QuestionCard>
+              <QuestionCard
+                title="Are there legal, safety or geographic restrictions?"
+                helper="These are optional, but keep each type separate for reliable downstream use."
+              >
+                <ListArea
+                  label="Required disclaimers"
+                  value={brief.required_disclaimers}
+                  onChange={(v) => set("required_disclaimers", v)}
+                />
+                <ListArea
+                  label="Legal and safety restrictions"
+                  value={brief.legal_safety_constraints}
+                  onChange={(v) => set("legal_safety_constraints", v)}
+                />
+                <ListArea
+                  label="Geographic restrictions"
+                  value={brief.geographical_restrictions}
+                  onChange={(v) => set("geographical_restrictions", v)}
+                />
+              </QuestionCard>
             </>
           )}
         </fieldset>
@@ -3306,7 +3656,7 @@ function BriefEditor({
         {workspace.completeness.missing_fields.length ? (
           <ul>
             {workspace.completeness.missing_fields.map((field) => (
-              <li key={field}>{field.replaceAll("_", " ")}</li>
+              <li key={field}>{missingBriefLabel(field)}</li>
             ))}
           </ul>
         ) : (

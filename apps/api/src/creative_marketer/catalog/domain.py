@@ -403,37 +403,123 @@ class BriefCompleteness:
 
 
 def evaluate_completeness(profile: ProductProfile, brief: ProductBrief) -> BriefCompleteness:
-    groups: Mapping[str, tuple[tuple[str, bool], ...]] = {
-        "Product basics": (
-            ("profile.description", bool(profile.description)),
-            ("brief.product_why", bool(brief.product_why)),
-        ),
-        "Audience": (
-            ("profile.target_audiences", bool(profile.target_audiences)),
+    return evaluate_semantic_completeness(profile.semantic(), brief.semantic())
+
+
+def evaluate_semantic_completeness(
+    profile: Mapping[str, object], brief: Mapping[str, object]
+) -> BriefCompleteness:
+    """Score the canonical Product Brain without requiring optional enrichment.
+
+    Required default Brief answers contribute 82 points, optional default answers contribute six,
+    and the three progressive-disclosure fields contribute the final twelve. Missing-field guidance
+    reports only required default context.
+    """
+
+    primary_value = brief.get("primary_audience")
+    primary = primary_value if isinstance(primary_value, Mapping) else {}
+    profile_audiences_value = profile.get("target_audiences")
+    profile_audiences = (
+        tuple(item for item in profile_audiences_value if isinstance(item, Mapping))
+        if isinstance(profile_audiences_value, (tuple, list))
+        else ()
+    )
+
+    def audience_has(field: str) -> bool:
+        return bool(primary.get(field)) or any(bool(item.get(field)) for item in profile_audiences)
+
+    audience_identity = bool(primary.get("name") and primary.get("description")) or any(
+        bool(item.get("name") and item.get("description")) for item in profile_audiences
+    )
+    audience_goals = audience_has("desires") or audience_has("motivations")
+    restrictions = bool(
+        brief.get("required_disclaimers")
+        or brief.get("legal_safety_constraints")
+        or brief.get("geographical_restrictions")
+    )
+    groups: Mapping[str, tuple[tuple[str, int, bool, bool], ...]] = {
+        "Product": (
+            ("brief.product_why", 6, bool(brief.get("product_why")), True),
             (
-                "brief.primary_audience.pain_points",
-                bool(brief.primary_audience and brief.primary_audience.pain_points),
+                "brief.emotional_benefits",
+                6,
+                bool(brief.get("emotional_benefits") or profile.get("benefits")),
+                True,
             ),
         ),
+        "Audience": (
+            ("brief.primary_audience.identity", 5, audience_identity, True),
+            ("brief.primary_audience.pain_points", 5, audience_has("pain_points"), True),
+            ("brief.primary_audience.goals", 5, audience_goals, True),
+            ("brief.primary_audience.objections", 5, audience_has("objections"), True),
+            ("brief.secondary_audiences", 4, bool(brief.get("secondary_audiences")), False),
+        ),
         "Positioning": (
-            ("brief.positioning_statement", bool(brief.positioning_statement)),
-            ("profile.differentiators", bool(profile.differentiators)),
+            ("brief.positioning_statement", 6, bool(brief.get("positioning_statement")), True),
+            (
+                "brief.competitive_alternatives",
+                5,
+                bool(brief.get("competitive_alternatives")),
+                True,
+            ),
+            (
+                "brief.why_choose_us",
+                6,
+                bool(brief.get("why_choose_us") or profile.get("differentiators")),
+                True,
+            ),
         ),
-        "Benefits and features": (
-            ("profile.features", bool(profile.features)),
-            ("profile.benefits", bool(profile.benefits)),
+        "Marketing": (
+            ("brief.priority_channels", 5, bool(brief.get("priority_channels")), True),
+            ("brief.conversion_goal", 5, bool(brief.get("conversion_goal")), True),
+            ("brief.cta_preferences", 5, bool(brief.get("cta_preferences")), True),
+            ("brief.offers", 2, bool(brief.get("offers")), False),
+            ("brief.current_channels", 4, bool(brief.get("current_channels")), False),
         ),
-        "Creative and claims": (
-            ("brief.desired_creative_style", bool(brief.desired_creative_style)),
-            ("claims.prohibited", bool(profile.prohibited_claims or brief.prohibited_messaging)),
+        "Creative Direction": (
+            (
+                "brief.desired_creative_style",
+                5,
+                bool(brief.get("desired_creative_style")),
+                True,
+            ),
+            ("brief.tones_to_explore", 5, bool(brief.get("tones_to_explore")), True),
+            ("brief.creative_references", 2, bool(brief.get("creative_references")), False),
+            ("brief.tones_to_avoid", 4, bool(brief.get("tones_to_avoid")), False),
+        ),
+        "Constraints": (
+            (
+                "brief.mandatory_messaging",
+                4,
+                bool(brief.get("mandatory_messaging") or profile.get("allowed_claims")),
+                True,
+            ),
+            (
+                "brief.prohibited_messaging",
+                4,
+                bool(brief.get("prohibited_messaging") or profile.get("prohibited_claims")),
+                True,
+            ),
+            ("brief.restrictions", 2, restrictions, False),
         ),
     }
-    missing = tuple(field for fields in groups.values() for field, present in fields if not present)
+    missing = tuple(
+        field
+        for fields in groups.values()
+        for field, _, present, required in fields
+        if required and not present
+    )
     sections = tuple(
-        section for section, fields in groups.items() if any(not present for _, present in fields)
+        section
+        for section, fields in groups.items()
+        if any(required and not present for _, _, present, required in fields)
     )
     return BriefCompleteness(
-        score=100 - len(missing) * 10, missing_sections=sections, missing_fields=missing
+        score=sum(
+            weight for fields in groups.values() for _, weight, present, _ in fields if present
+        ),
+        missing_sections=sections,
+        missing_fields=missing,
     )
 
 

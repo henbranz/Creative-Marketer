@@ -22,6 +22,13 @@ configuration. Recovery is opt-in. A revision mismatch is displayed and never au
 saves retain the draft; successful PUT acknowledgement clears only that Product's matching draft.
 Navigation and browser unload warn while edits are dirty.
 
+The six-stage editor uses progressive disclosure only at the presentation boundary. Primary
+question cards serialize into the same `BriefContract`; secondary audiences, current channels, and
+tones to avoid remain editable under Advanced details and are never removed from drafts, saves, or
+snapshots. `BriefDraftV1` already contains every affected canonical field, so no draft-version or
+storage-key migration is required. Restoring a V1 draft opens Advanced sections that contain saved
+information, and validation opens the Advanced section containing an invalid field.
+
 Frontend API failures use one defensive formatter for plain detail, FastAPI validation arrays,
 nested locations, structured detail, malformed JSON, and empty bodies. It ignores validation
 `input` and credential-shaped keys and does not stringify unknown objects.

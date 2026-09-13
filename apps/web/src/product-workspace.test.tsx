@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -618,9 +624,28 @@ describe("Product Workspace", () => {
     expect(screen.getByText("Atlas")).toBeInTheDocument();
     expect(screen.getByText("Creative Manager")).toBeInTheDocument();
     expect(
+      document.querySelector(".cm-brand-lockup.compact img"),
+    ).toHaveAttribute(
+      "src",
+      expect.stringContaining("creative-manager-app-icon.png"),
+    );
+    expect(
       screen.getByRole("button", { name: /Command Center/ }),
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Products" })).toBeEnabled();
+  });
+
+  it("uses the approved Creative Manager lockup on the access screen", () => {
+    sessionStorage.clear();
+    render(<ProductWorkspaceApp />);
+    expect(
+      screen
+        .getByRole("img", { name: "Creative Manager" })
+        .querySelector("img"),
+    ).toHaveAttribute(
+      "src",
+      expect.stringContaining("creative-manager-lockup-light.png"),
+    );
   });
 
   it("opens a real overview with completeness progress", async () => {
@@ -642,7 +667,123 @@ describe("Product Workspace", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("limits every default Brief stage to the intended primary questions", async () => {
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    const briefNavigation = within(
+      screen.getByRole("navigation", { name: "Brief sections" }),
+    );
+
+    for (const [name, count] of [
+      ["Product", 2],
+      ["Audience", 4],
+      ["Positioning", 3],
+      ["Marketing", 4],
+      ["Creative Direction", 3],
+      ["Constraints", 3],
+    ] as const) {
+      fireEvent.click(
+        briefNavigation.getByRole("button", { name: new RegExp(name) }),
+      );
+      expect(document.querySelectorAll("[data-primary-question]")).toHaveLength(
+        count,
+      );
+    }
+  });
+
+  it("keeps existing advanced answers visible, editable, and in the canonical save", async () => {
+    vi.mocked(catalogApi.getWorkspace).mockResolvedValue({
+      ...workspace,
+      brief: {
+        ...brief,
+        secondary_audiences: [
+          {
+            name: "Students",
+            description: "Campus commuters",
+            pain_points: ["Disposable waste"],
+            desires: ["Feel prepared"],
+            motivations: ["Reduce waste"],
+            objections: ["Price"],
+          },
+        ],
+        current_channels: ["Retail"],
+        tones_to_avoid: ["Alarmist"],
+      },
+    });
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+
+    fireEvent.click(screen.getByRole("button", { name: /Audience/ }));
+    expect(screen.getByText("1 advanced audience saved")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Advanced audience details/ }),
+    );
+    expect(screen.getByLabelText("Secondary audience 1 name")).toHaveValue(
+      "Students",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Marketing/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced details/ }));
+    expect(
+      screen.getByLabelText("Where are you currently reaching customers?"),
+    ).toHaveValue("Retail");
+
+    fireEvent.click(screen.getByRole("button", { name: /Creative Direction/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced details/ }));
+    expect(screen.getByLabelText("What tones should we avoid?")).toHaveValue(
+      "Alarmist",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Constraints/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save brief" }));
+    await screen.findByText("Saved");
+    const body = vi.mocked(catalogApi.saveBrief).mock.calls.at(-1)![2];
+    expect(body.secondary_audiences).toHaveLength(1);
+    expect(body.current_channels).toEqual(["Retail"]);
+    expect(body.tones_to_avoid).toEqual(["Alarmist"]);
+  });
+
+  it("opens the Advanced section containing a validation error", async () => {
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Brief" }));
+    fireEvent.click(screen.getByRole("button", { name: /Marketing/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced details/ }));
+    fireEvent.change(
+      screen.getByLabelText("Where are you currently reaching customers?"),
+      { target: { value: "Retail\nretail" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Constraints/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Save brief" }));
+    expect(
+      await screen.findByLabelText(
+        "Where are you currently reaching customers?",
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /contains a duplicate item/i,
+    );
+    expect(
+      screen.getByRole("button", { name: /Advanced details/ }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("saves only after server acknowledgement", async () => {
+    vi.mocked(catalogApi.getWorkspace)
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce({
+        ...workspace,
+        completeness: {
+          score: 82,
+          missing_sections: [],
+          missing_fields: [],
+        },
+      });
     await renderConnected();
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
@@ -651,6 +792,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save brief" }));
     expect(screen.getByText("Saving…")).toBeInTheDocument();
     expect(await screen.findByText("Saved")).toBeInTheDocument();
+    expect(screen.getByText("82%")).toBeInTheDocument();
     expect(catalogApi.saveBrief).toHaveBeenCalledOnce();
     const body = vi.mocked(catalogApi.saveBrief).mock.calls[0]![2];
     expect(body).not.toHaveProperty("product_id");

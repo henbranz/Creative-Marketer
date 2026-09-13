@@ -52,17 +52,18 @@ the operational burden of field-level provenance for every scalar.
 
 ## Completeness
 
-Completeness is deterministic and has five equally weighted sections:
+Completeness is deterministic and follows the six user-facing Brief sections: Product, Audience,
+Positioning, Marketing, Creative Direction, and Constraints. Required default answers contribute
+82 points, so a meaningfully completed core Brief clears the Creative Strategist's unchanged
+80-point readiness threshold without requiring hidden fields. Optional default answers contribute
+six additional points. Secondary audiences, current channels, and tones to avoid are Advanced
+enrichment worth twelve points together.
 
-- Product basics
-- Audience
-- Positioning
-- Benefits and features
-- Creative and claims
-
-Each section contains two required checks. Every satisfied check contributes ten points. The
-result includes the 0–100 score plus stable missing-section and missing-field identifiers. It is
-guidance for readiness, not authorization and not an AI judgment.
+Only missing required default answers appear in `missing_sections` and `missing_fields`; empty
+optional or Advanced fields are never described as critical omissions. Existing Product Profile
+benefits, audiences, differentiators, and claims may satisfy the corresponding canonical Brief
+checks where they carry equivalent trusted context. The result remains guidance for readiness, not
+authorization and not an AI judgment.
 
 ## Authority, tenancy, and privacy
 
@@ -106,9 +107,11 @@ OpenAPI is generated into `packages/contracts/openapi.json`; TypeScript types ar
 that artifact and checked for drift.
 
 The Next.js Products workspace provides the application shell, real Brand/Product navigation,
-Overview, structured Brief sections, save/error/read-only states, completeness guidance, and
-intentional empty states for future workspace tabs. Production authentication remains dependent
-on the deferred identity-provider adapter; local development uses the explicit Phase-0 adapter.
+Overview, six progressive-disclosure Brief sections, save/error/read-only states, completeness
+guidance, and intentional empty states for future workspace tabs. Each Brief section exposes two
+to four primary question cards. Less frequent canonical fields remain editable under Advanced
+details with saved-data indicators. Production authentication remains dependent on the deferred
+identity-provider adapter; local development uses the explicit Phase-0 adapter.
 
 ## Product assets and Snapshot V2
 

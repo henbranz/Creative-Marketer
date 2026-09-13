@@ -46,7 +46,10 @@ from creative_marketer.agent_runtime.domain import (
     canonical_digest,
     classify_stranded_attempt,
 )
-from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
+from creative_marketer.catalog.domain import (
+    ProductKnowledgeSnapshot,
+    evaluate_semantic_completeness,
+)
 from creative_marketer.creative.domain import (
     ApprovedCreativeConcept,
     ChannelIntent,
@@ -549,21 +552,7 @@ class SqlAlchemyAgentRunRepository:
         if not isinstance(profile, Mapping) or not isinstance(brief, Mapping):
             completeness = 0
         else:
-            primary = brief.get("primary_audience")
-            pain_points = primary.get("pain_points") if isinstance(primary, Mapping) else ()
-            checks = (
-                profile.get("description"),
-                brief.get("product_why"),
-                profile.get("target_audiences"),
-                pain_points,
-                brief.get("positioning_statement"),
-                profile.get("differentiators"),
-                profile.get("features"),
-                profile.get("benefits"),
-                brief.get("desired_creative_style"),
-                profile.get("prohibited_claims") or brief.get("prohibited_messaging"),
-            )
-            completeness = 100 - 10 * sum(not bool(item) for item in checks)
+            completeness = evaluate_semantic_completeness(profile, brief).score
         strategist = ResolvedResearcher(
             requested["id"],
             resolved_id,
