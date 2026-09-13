@@ -1,4 +1,4 @@
-.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -77,19 +77,25 @@ demo-bootstrap:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.bootstrap_demo
 
 live-provider-preflight:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/live_validation.py preflight
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation preflight
 
 live-openai-smoke:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/live_validation.py openai-smoke
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation openai-smoke
 
 live-image-smoke:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/live_validation.py image-smoke
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation image-smoke
 
 live-seedance-smoke:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/live_validation.py seedance-smoke
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation seedance-smoke
 
 live-e2e:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/live_validation.py e2e
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation e2e
+
+live-e2e-reset:
+	cd apps/api && uv run python -m scripts.live_validation reset
+
+live-e2e-status:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation status
 
 researcher-live-smoke:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/researcher_live_smoke.py

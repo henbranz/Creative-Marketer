@@ -83,15 +83,31 @@ inside infrastructure processes; agents receive neither keys nor media tools.
 
 ## 5. Controlled smoke flow
 
+Start a fresh acceptance session before the first paid run:
+
+```bash
+make live-e2e-reset
+make live-e2e-status
+```
+
+The reset removes only the ignored local `.creative-marketer/live-validation.json` checkpoint; it
+never deletes database records. The checkpoint contains safe UUID identifiers only and is bound to
+the exact `CM_TENANT_ID` and `LIVE_E2E_PRODUCT_ID`. If either changes, reset explicitly. Historical
+demo or live records are never adopted into a new session.
+
 ```bash
 make live-openai-smoke
 ```
 
-The command advances one governed step at a time against `LIVE_E2E_PRODUCT_ID`: Researcher, then
+The command advances one newly requested, session-bound governed step at a time against
+`LIVE_E2E_PRODUCT_ID`: Researcher, then
 Creative Strategist, then Producer, all through their current GPT-5.6 Sol routes. Re-run after
 workers finish. It pauses for a human
 to approve one Creative Concept in the UI. Successful runs report only route/model, token usage,
-cost, and schema status—never prompts or provider payloads.
+cost, and schema status—never prompts or provider payloads. Re-running resumes the exact persisted
+run IDs and does not create duplicates. `MODEL_PROVIDER_BACKEND=openai` is required before a run can
+be created or accepted. The approved Concept must belong to the exact session Creative run, and the
+Production Plan must belong to the exact session Producer run.
 
 Review the exact Production Plan and cost in the UI. Human approval creates route-bound
 GenerationJobs. These commands inspect and continue that governed path; they never call a provider
@@ -102,7 +118,9 @@ make live-image-smoke
 make live-seedance-smoke
 ```
 
-The Seedance command derives a 4-second 720p no-input-video preview from versioned pricing before
+The smoke commands persist and inspect only the exact live-provider GenerationJob IDs created for
+the session-bound plan; fake and historical jobs cannot satisfy acceptance. The Seedance command
+derives a 4-second 720p no-input-video preview from versioned pricing before
 approval. The approved plan's immutable reservation remains authoritative. Unknown actual spend is
 reported as reserved/unknown, never as zero.
 
@@ -120,6 +138,11 @@ sources are ready. Keep the Assembly worker running, preview the final MP4, appr
 publishing, and run `make obsidian-sync` (or keep `make obsidian-watch` active). The command returns
 success only after the current Sol-linked FinalCreative is approved for publishing; browser
 playback and Obsidian projection remain explicit operator checks.
+
+At any point, `make live-e2e-status` reports safe stage status and cost for only the exact persisted
+AgentRuns and GenerationJobs. It prints no credentials. Assembly and final acceptance are likewise
+bound to the persisted ProductionPlan, generated assets, AssemblyPlan, and FinalCreative IDs; an
+older successful final cannot satisfy the current session.
 
 `LIVE_E2E_MAX_USD` covers reserved/actual Agent and media cost for the selected Product. The media
 authority locks and recomputes cumulative committed spend immediately before provider I/O. It
