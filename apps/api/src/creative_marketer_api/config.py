@@ -1,7 +1,7 @@
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, model_validator
@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=REPOSITORY_ROOT / ".env",
         env_file_encoding="utf-8",
+        env_ignore_empty=True,
         extra="ignore",
         frozen=True,
     )
@@ -55,7 +56,13 @@ class Settings(BaseSettings):
     media_image_provider: Literal["disabled", "fake", "openai"] = "disabled"
     media_video_provider: Literal["disabled", "fake", "byteplus"] = "disabled"
     byteplus_las_api_key: SecretStr | None = None
+    byteplus_las_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://operator.las.ap-southeast-1.bytepluses.com"
+    )
     allow_billable_media: bool = False
+    run_live_e2e: str = ""
+    live_e2e_max_usd: Decimal = Field(default=Decimal("10"), gt=0)
+    live_e2e_product_id: UUID | None = None
     media_workload_actor_id: UUID | None = None
     media_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
     assembly_workload_actor_id: UUID | None = None
@@ -64,6 +71,16 @@ class Settings(BaseSettings):
     agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
     agent_recovery_tenant_id: UUID | None = None
+
+    def __init__(self, **values: Any) -> None:
+        # Explicit programmatic construction (tests/composition) is hermetic. Ordinary
+        # `Settings()` process startup still consumes the one repository-root .env.
+        if values and "_env_file" not in values:
+            values["_env_file"] = None
+            for name, field in self.__class__.model_fields.items():
+                if name not in values and not field.is_required():
+                    values[name] = field.get_default(call_default_factory=True)
+        super().__init__(**values)
 
     @model_validator(mode="after")
     def reject_development_identity_in_deployed_environments(self) -> "Settings":
@@ -83,6 +100,9 @@ class Settings(BaseSettings):
             )
             if not key or key.startswith(("disabled-", "test-", "fake-", "replace-")):
                 raise ValueError("BytePlus video provider requires a non-placeholder API key")
+            host = self.byteplus_las_base_url.host or ""
+            if self.byteplus_las_base_url.scheme != "https" or not host.endswith(".bytepluses.com"):
+                raise ValueError("BytePlus LAS BaseURL must be an HTTPS BytePlus regional origin")
         media_enabled = (
             self.media_image_provider != "disabled" or self.media_video_provider != "disabled"
         )
@@ -137,6 +157,13 @@ class Settings(BaseSettings):
         ):
             raise ValueError("deployed recovery requires deployment-issued operator identity")
         return self
+
+    def require_live_spend_authorization(self) -> None:
+        if not self.allow_billable_media or self.run_live_e2e != "I_UNDERSTAND_THIS_SPENDS_MONEY":
+            raise RuntimeError(
+                "live providers require ALLOW_BILLABLE_MEDIA=true and explicit "
+                "RUN_LIVE_E2E acknowledgement"
+            )
 
 
 @lru_cache

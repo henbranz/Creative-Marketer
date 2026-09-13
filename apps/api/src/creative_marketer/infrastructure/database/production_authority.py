@@ -7,7 +7,7 @@ from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, insert, select, text, update
+from sqlalchemy import case, func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from creative_marketer.agent_runtime.domain import canonical_digest
@@ -57,6 +57,7 @@ from .production_schema import (
     generation_jobs,
     generation_segments,
     media_budget_usage,
+    production_plans,
     production_shots,
 )
 from .schema import memberships, tenants, users
@@ -90,11 +91,15 @@ class SqlAlchemyGenerationAuthority:
         workload: MediaWorkloadIdentity,
         *,
         maximum_reference_bytes: int = 25 * 1024 * 1024,
+        live_spend_cap: Decimal | None = None,
+        live_product_id: UUID | None = None,
     ) -> None:
         self._factory = session_factory
         self._store = object_store
         self._workload = workload
         self._maximum_reference_bytes = maximum_reference_bytes
+        self._live_spend_cap = live_spend_cap
+        self._live_product_id = live_product_id
         self._prepared: dict[UUID, _Prepared] = {}
 
     async def authorize_resource(self, tenant_id: UUID, job_id: UUID) -> None:
@@ -135,6 +140,7 @@ class SqlAlchemyGenerationAuthority:
                 or decision.estimated_max_cost != plan.cost.estimated_total_cost
             ):
                 raise ProductionPermissionDenied("ProductionPlan approval binding is stale")
+            await self._enforce_live_spend_cap(session, tenant_id, plan.product_id)
             route = initial_media_router().resolve(job.media_profile)
             expected_route = (
                 decision.image_route_version
@@ -211,6 +217,73 @@ class SqlAlchemyGenerationAuthority:
                 plan.product_id,
                 requested_agent,
             )
+
+    async def _enforce_live_spend_cap(
+        self, session: AsyncSession, tenant_id: UUID, product_id: UUID
+    ) -> None:
+        if self._live_spend_cap is None:
+            return
+        if self._live_product_id is not None and product_id != self._live_product_id:
+            raise ProductionPermissionDenied("GenerationJob is outside LIVE_E2E_PRODUCT_ID")
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"live-e2e-spend:{tenant_id}:{product_id}"},
+        )
+        model_amount = await session.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                agent_runs.c.status.in_(("SUCCEEDED", "FAILED")),
+                                agent_runs.c.estimated_cost,
+                            ),
+                            else_=agent_runs.c.reserved_cost,
+                        )
+                    ),
+                    0,
+                )
+            ).where(
+                agent_runs.c.tenant_id == tenant_id,
+                agent_runs.c.product_id == product_id,
+                agent_runs.c.currency == "USD",
+            )
+        )
+        media_amount = await session.scalar(
+            select(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                generation_jobs.c.status == "SUCCEEDED",
+                                generation_jobs.c.actual_cost,
+                            ),
+                            (
+                                generation_jobs.c.status == "OUTCOME_UNKNOWN",
+                                generation_jobs.c.unknown_cost,
+                            ),
+                            (generation_jobs.c.status == "FAILED", Decimal(0)),
+                            else_=generation_jobs.c.reserved_cost,
+                        )
+                    ),
+                    0,
+                )
+            )
+            .select_from(
+                generation_jobs.join(
+                    production_plans,
+                    generation_jobs.c.production_plan_id == production_plans.c.id,
+                )
+            )
+            .where(
+                generation_jobs.c.tenant_id == tenant_id,
+                production_plans.c.product_id == product_id,
+                generation_jobs.c.currency == "USD",
+            )
+        )
+        committed = Decimal(model_amount or 0) + Decimal(media_amount or 0)
+        if committed > self._live_spend_cap:
+            raise ProductionPermissionDenied("LIVE_E2E_MAX_USD spend cap reached")
 
     @staticmethod
     async def _tenant(session: AsyncSession, tenant_id: UUID) -> None:

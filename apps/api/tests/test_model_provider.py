@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -27,6 +28,7 @@ from creative_marketer.infrastructure.model_providers.execution_process_only imp
 from creative_marketer.infrastructure.model_providers.openai_responses import (
     OpenAIResponsesModelProvider,
 )
+from creative_marketer.production.application import initial_producer_route
 from tests.test_agent_runtime_domain import block, output, route
 
 
@@ -70,6 +72,35 @@ async def test_openai_adapter_separates_untrusted_evidence_and_disables_tools_an
     assert parameters["text"]["format"]["strict"] is True
     assert "untrusted data" in parameters["instructions"]
     assert "The advertised price" in parameters["input"][0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_astra_producer_maps_exact_responses_contract_with_zero_tools() -> None:
+    call = replace(
+        invocation(),
+        route=initial_producer_route(),
+        max_output_tokens=12_000,
+        reasoning_effort="high",
+        output_contract_key="production.production_plan",
+    )
+    response = SimpleNamespace(
+        status="completed",
+        output_text="{}",
+        output=(),
+        usage=SimpleNamespace(input_tokens=20, output_tokens=10, total_tokens=30),
+        id="resp_astra",
+        model="gpt-6-astra",
+    )
+    client, create = client_with(response)
+    await OpenAIResponsesModelProvider("unit-live-credential", client=client).generate_structured(
+        call
+    )
+    parameters = create.await_args.kwargs
+    assert parameters["model"] == "gpt-6-astra"
+    assert parameters["reasoning"] == {"effort": "high"}
+    assert parameters["text"]["format"]["strict"] is True
+    assert parameters["max_output_tokens"] == 12_000
+    assert parameters["tools"] == []
 
 
 @pytest.mark.parametrize("key", ["", "disabled-key", "test-key", "fake-key", "replace-key"])

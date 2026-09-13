@@ -636,7 +636,7 @@ async def run() -> None:
                         f"local-demo-{invocation.output_contract_key}",
                         ModelUsage(100, 100, 200),
                         "openai",
-                        "gpt-5.6-sol"
+                        "gpt-6-astra"
                         if invocation.output_contract_key == "production.production_plan"
                         else "gpt-5.6-terra",
                     )

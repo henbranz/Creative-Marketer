@@ -2,7 +2,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ARG NEXT_PUBLIC_OBSIDIAN_VAULT_NAME
 ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL
+ENV NEXT_PUBLIC_OBSIDIAN_VAULT_NAME=$NEXT_PUBLIC_OBSIDIAN_VAULT_NAME
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY packages/contracts/package.json packages/contracts/package.json

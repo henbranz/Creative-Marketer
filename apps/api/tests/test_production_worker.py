@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
 
 import asyncio
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -106,6 +107,31 @@ async def test_generation_authority_job_lookup_and_prepared_state_fail_closed(mo
     authority._transition = AsyncMock()  # type: ignore[method-assign]
     await authority.outcome_unknown(job_id)
     authority._transition.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_live_spend_cap_is_product_scoped_and_checked_under_lock() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    session = SimpleNamespace(execute=AsyncMock(), scalar=AsyncMock(side_effect=["0.8", "1.2"]))
+    authority = SqlAlchemyGenerationAuthority(
+        object(),
+        object(),
+        MediaWorkloadIdentity(uuid4(), "test-media-worker", "test"),
+        live_spend_cap=Decimal("2.00"),
+        live_product_id=product_id,
+    )
+    await authority._enforce_live_spend_cap(session, tenant_id, product_id)
+    session.execute.assert_awaited_once()
+    with pytest.raises(ProductionPermissionDenied, match="outside LIVE_E2E_PRODUCT_ID"):
+        await authority._enforce_live_spend_cap(session, tenant_id, uuid4())
+    session.scalar = AsyncMock(side_effect=["1.1", "1.0"])
+    with pytest.raises(ProductionPermissionDenied, match="spend cap reached"):
+        await authority._enforce_live_spend_cap(session, tenant_id, product_id)
+
+    disabled = SqlAlchemyGenerationAuthority(
+        object(), object(), MediaWorkloadIdentity(uuid4(), "test-media-worker", "test")
+    )
+    await disabled._enforce_live_spend_cap(session, tenant_id, product_id)
 
 
 @pytest.mark.asyncio

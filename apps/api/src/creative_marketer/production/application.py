@@ -39,9 +39,9 @@ PRODUCTION_CONTRACT_VERSION = 1
 SEEDANCE_MODEL = "dreamina-seedance-2-5-260628"
 SEEDANCE_ROUTE_VERSION = "byteplus-seedance-2.5-2026-08-17"
 SEEDANCE_PRICING_VERSION = "byteplus-enhanced-2026-08-17"
-OPENAI_IMAGE_MODEL = "gpt-image-2"
-OPENAI_IMAGE_ROUTE_VERSION = "openai-gpt-image-2-2026-09-12"
-OPENAI_IMAGE_PRICING_VERSION = "openai-gpt-image-2-reservation-2026-09-12"
+OPENAI_IMAGE_MODEL = "gpt-image-2.5-sunburst-2026-09-08"
+OPENAI_IMAGE_ROUTE_VERSION = "openai-gpt-image-2.5-sunburst-2026-09-13"
+OPENAI_IMAGE_PRICING_VERSION = "openai-gpt-image-2.5-sunburst-2026-09-13"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,16 +81,16 @@ class MediaRouter:
 
 
 def initial_producer_route() -> ModelRoute:
-    """Verified current replacement for the unissued task placeholder `gpt-6-astra`."""
+    """Current immutable Producer route verified against official OpenAI documentation."""
     return ModelRoute(
         profile_key="production_deep",
-        route_version="openai-gpt-5.6-sol-production-2026-09-12",
+        route_version="openai-gpt-6-astra-production-2026-09-13",
         provider="openai",
-        model="gpt-5.6-sol",
+        model="gpt-6-astra",
         capabilities=frozenset({"text", "image_input", "reasoning", "structured_output"}),
         reasoning_effort="high",
-        max_output_tokens=32_000,
-        pricing=ModelPricing("openai-gpt-5.6-2026-09-12", Decimal("4"), Decimal("20"), "USD"),
+        max_output_tokens=12_000,
+        pricing=ModelPricing("openai-gpt-6-astra-2026-09-13", Decimal("10"), Decimal("50"), "USD"),
     )
 
 
@@ -175,11 +175,37 @@ class ImageReservationPricing:
     medium_max_usd: Decimal = Decimal("0.20")
     high_max_usd: Decimal = Decimal("0.40")
 
+    # Official token prices per one million tokens. Reservations remain deliberately
+    # conservative because output token counts are not knowable before generation.
+    text_input_usd_per_million: Decimal = Decimal("5")
+    cached_text_input_usd_per_million: Decimal = Decimal("1.25")
+    image_input_usd_per_million: Decimal = Decimal("8")
+    cached_image_input_usd_per_million: Decimal = Decimal("2")
+    image_output_usd_per_million: Decimal = Decimal("30")
+
     def reserve(self, quality: str) -> Decimal:
         try:
             return {"MEDIUM": self.medium_max_usd, "HIGH": self.high_max_usd}[quality]
         except KeyError as error:
             raise ValueError("unsupported image quality") from error
+
+    def actual_cost(self, usage: Mapping[str, int]) -> Decimal | None:
+        required = {"text_input_tokens", "image_input_tokens", "image_output_tokens"}
+        if not required.issubset(usage):
+            return None
+        text = max(0, usage["text_input_tokens"] - usage.get("cached_text_input_tokens", 0))
+        cached_text = max(0, usage.get("cached_text_input_tokens", 0))
+        image = max(0, usage["image_input_tokens"] - usage.get("cached_image_input_tokens", 0))
+        cached_image = max(0, usage.get("cached_image_input_tokens", 0))
+        output = max(0, usage["image_output_tokens"])
+        total = (
+            Decimal(text) * self.text_input_usd_per_million
+            + Decimal(cached_text) * self.cached_text_input_usd_per_million
+            + Decimal(image) * self.image_input_usd_per_million
+            + Decimal(cached_image) * self.cached_image_input_usd_per_million
+            + Decimal(output) * self.image_output_usd_per_million
+        ) / Decimal(1_000_000)
+        return total.quantize(Decimal("0.000001"), rounding=ROUND_UP)
 
 
 def load_production_plan_schema() -> Mapping[str, object]:

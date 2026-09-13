@@ -2,11 +2,12 @@
 
 ## Status and verified provider snapshot
 
-Phase 3 introduces the provider-neutral `production` bounded context. The task-proposed names
-`gpt-6-astra` and `gpt-image-2.5-sunburst-2026-09-08` were not present in official OpenAI model
-documentation on 2026-09-12 and are therefore not represented as real models. The product-facing
-role remains **Astra Producer**, while the pinned `production_deep` route uses the verified
-`gpt-5.6-sol` model with high reasoning. The `production_image` route uses verified `gpt-image-2`.
+Phase 3 introduces the provider-neutral `production` bounded context. As reverified on 2026-09-13,
+the current `production_deep` route uses OpenAI `gpt-6-astra` with high reasoning and a
+12,000-token output ceiling. Researcher and Creative Strategist remain on `gpt-5.6-terra`. The
+current `production_image` route uses the exact documented
+`gpt-image-2.5-sunburst-2026-09-08` snapshot. Historical AgentRuns and GenerationJobs retain their
+older Sol/GPT Image 2 model and route fields.
 The verified video route is BytePlus LAS Enhanced `dreamina-seedance-2-5-260628`, documented
 2026-08-17 in `ap-southeast-1`.
 

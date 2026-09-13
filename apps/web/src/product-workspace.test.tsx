@@ -797,8 +797,15 @@ describe("Product Workspace", () => {
     expect(await screen.findByText("Production plan")).toBeInTheDocument();
     expect(screen.getByText(/Scene 1 · Hook · 12s/)).toBeInTheDocument();
     expect(screen.getByText(/shot one — generate image/)).toBeInTheDocument();
-    expect(screen.getByText(/Astra planning: 0.42 USD/)).toBeInTheDocument();
+    expect(screen.getByText(/AI planning: 0.42 USD/)).toBeInTheDocument();
+    expect(screen.getByText(/Image generation: 0.125 USD/)).toBeInTheDocument();
     expect(screen.getByText(/Video generation: 5.54 USD/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Total known spend: 6.085 USD/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Reserved\/unknown amount: 0 USD/),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("Local demo provider")).toHaveLength(3);
     expect(screen.getAllByText("Ready for use")).toHaveLength(2);
     expect(screen.getByText("Failed")).toBeInTheDocument();

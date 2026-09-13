@@ -1,5 +1,9 @@
 # Local Product and Obsidian Runbook
 
+This is the free fake-provider path. For real OpenAI/BytePlus execution, follow
+[the isolated live-provider runbook](22_LIVE_PROVIDER_AND_E2E_VALIDATION.md) instead of mixing paid
+steps into this walkthrough.
+
 This walkthrough produces a visible end-to-end Creative Marketer workspace with no provider bill.
 Values marked `LOCAL DEMO` are deterministic fixtures; they never bootstrap outside development.
 
@@ -9,7 +13,7 @@ From a fresh checkout:
 
 ```bash
 git pull
-cp .env.example .env
+make env-init
 make bootstrap
 make dev-up
 ```

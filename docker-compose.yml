@@ -20,6 +20,9 @@ services:
     build:
       context: ./apps/api
     command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       MIGRATION_DATABASE_URL: postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@postgres:5432/creative_marketer
     depends_on:
@@ -48,6 +51,9 @@ services:
         "-m",
         "creative_marketer.infrastructure.object_storage.bootstrap",
       ]
+    env_file:
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
       AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
@@ -64,6 +70,9 @@ services:
   api:
     build:
       context: ./apps/api
+    env_file:
+      - path: .env
+        required: false
     environment:
       APP_ENV: development
       APP_HOST: 0.0.0.0
@@ -77,6 +86,16 @@ services:
       OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
       OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
+      MODEL_PROVIDER_BACKEND: ${MODEL_PROVIDER_BACKEND:-disabled}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}
+      MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}
+      BYTEPLUS_LAS_API_KEY: ${BYTEPLUS_LAS_API_KEY:-}
+      BYTEPLUS_LAS_BASE_URL: ${BYTEPLUS_LAS_BASE_URL:-https://operator.las.ap-southeast-1.bytepluses.com}
+      ALLOW_BILLABLE_MEDIA: ${ALLOW_BILLABLE_MEDIA:-false}
+      RUN_LIVE_E2E: ${RUN_LIVE_E2E:-}
+      LIVE_E2E_MAX_USD: ${LIVE_E2E_MAX_USD:-10}
+      LIVE_E2E_PRODUCT_ID: ${LIVE_E2E_PRODUCT_ID:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -87,6 +106,9 @@ services:
     build:
       context: ./apps/api
     command: ["python", "-m", "creative_marketer.events.worker"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
@@ -120,15 +142,22 @@ services:
       context: ./apps/api
     command: ["python", "-m", "creative_marketer_api.researcher_worker"]
     profiles: ["temporal"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
       EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
       AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
       TEMPORAL_ADDRESS: temporal:7233
-      MODEL_PROVIDER_BACKEND: openai
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-disabled-openai-key}
-      AGENT_WORKLOAD_ID: local-researcher-worker
+      MODEL_PROVIDER_BACKEND: ${MODEL_PROVIDER_BACKEND:-disabled}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ALLOW_BILLABLE_MEDIA: ${ALLOW_BILLABLE_MEDIA:-false}
+      RUN_LIVE_E2E: ${RUN_LIVE_E2E:-}
+      LIVE_E2E_MAX_USD: ${LIVE_E2E_MAX_USD:-10}
+      LIVE_E2E_PRODUCT_ID: ${LIVE_E2E_PRODUCT_ID:-}
+      AGENT_WORKLOAD_ID: ${AGENT_WORKLOAD_ID:-local-agent-worker}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -140,6 +169,9 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.assembly
     profiles: ["temporal"]
+    env_file:
+      - path: .env
+        required: false
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
@@ -167,8 +199,13 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+        NEXT_PUBLIC_OBSIDIAN_VAULT_NAME: ${NEXT_PUBLIC_OBSIDIAN_VAULT_NAME:-}
+    env_file:
+      - path: .env
+        required: false
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_OBSIDIAN_VAULT_NAME: ${NEXT_PUBLIC_OBSIDIAN_VAULT_NAME:-}
     depends_on:
       - api
     ports:

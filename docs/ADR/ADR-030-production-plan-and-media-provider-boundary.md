@@ -13,8 +13,8 @@ authority, coupling canonical data to provider JSON, hiding spend, or weakening 
   `production_deep`, receives at most ten authorized visual inputs, and has no tools.
 - `ProductionPlan` is immutable and provider-neutral. `GenerationSegment`, not Shot, is the provider
   unit and can cover contiguous shots.
-- Images use `ImageProvider`; videos use `VideoProvider`. Verified routes are OpenAI `gpt-image-2`
-  and BytePlus `dreamina-seedance-2-5-260628`.
+- Images use `ImageProvider`; videos use `VideoProvider`. The current verified routes are OpenAI
+  `gpt-image-2.5-sunburst-2026-09-08` and BytePlus `dreamina-seedance-2-5-260628`.
 - All paid generation uses exact Tool Gateway contracts with only `generation_job_id`. Deterministic
   workflow code—not an agent—executes them.
 - Human approval binds plan digest, route/pricing versions, maximum cost, and currency. Permission,
@@ -31,7 +31,5 @@ authority, coupling canonical data to provider JSON, hiding spend, or weakening 
 Explicit persistence and workflow complexity buy reviewable cost, recovery, and lineage evidence.
 Provider changes do not rewrite plans but intentionally invalidate execution approval.
 
-The proposed identifiers `gpt-6-astra` and `gpt-image-2.5-sunburst-2026-09-08` were absent from
-official OpenAI documentation at implementation time. Recording them as real would violate provider
-verification, so route versions pin the current documented models while preserving Astra as the
-product role name.
+Provider availability changed after this ADR was first accepted. ADR-033 records the verified
+current route migration without rewriting the truthful historical Sol/GPT Image 2 records.

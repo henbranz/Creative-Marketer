@@ -124,6 +124,9 @@ async def run() -> None:
     settings = Settings()
     if settings.model_provider_backend != "openai" or settings.openai_api_key is None:
         raise RuntimeError("Researcher worker requires MODEL_PROVIDER_BACKEND=openai")
+    authorization = getattr(settings, "require_live_spend_authorization", None)
+    if authorization is not None:
+        authorization()
     telemetry = NullTelemetry()
     routes = (
         initial_researcher_route(),

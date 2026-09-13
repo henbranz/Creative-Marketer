@@ -51,6 +51,10 @@ from creative_marketer.production.service import ProductionService
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
 from scripts import bootstrap_demo
+from tests.integration.test_asset_library import (
+    OBJECT_STORAGE_ACCESS_KEY_ID,
+    OBJECT_STORAGE_SECRET_ACCESS_KEY,
+)
 from tests.integration.test_catalog import owner_context, seed_catalog_identity
 
 
@@ -105,8 +109,8 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
         "OBJECT_STORAGE_BACKEND": "s3",
         "OBJECT_STORAGE_ENDPOINT_URL": endpoint,
         "OBJECT_STORAGE_PUBLIC_ENDPOINT_URL": endpoint,
-        "OBJECT_STORAGE_ACCESS_KEY_ID": "creative-marketer-test",
-        "OBJECT_STORAGE_SECRET_ACCESS_KEY": "creative-marketer-test-secret",
+        "OBJECT_STORAGE_ACCESS_KEY_ID": OBJECT_STORAGE_ACCESS_KEY_ID,
+        "OBJECT_STORAGE_SECRET_ACCESS_KEY": OBJECT_STORAGE_SECRET_ACCESS_KEY,
         "CORS_ORIGINS": '["http://localhost:3000"]',
         "MODEL_PROVIDER_BACKEND": "disabled",
         "MEDIA_IMAGE_PROVIDER": "fake",
@@ -122,8 +126,8 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
         public_endpoint_url=endpoint,
         region="us-east-1",
         bucket="creative-marketer-assets",
-        access_key_id="creative-marketer-test",
-        secret_access_key="creative-marketer-test-secret",
+        access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+        secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
     )
     production_factory = SqlAlchemyProductionUnitOfWorkFactory(sessions)
     async with production_factory(context.tenant_id) as uow:
@@ -215,8 +219,8 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
             object_storage_backend="s3",
             object_storage_endpoint_url=endpoint,
             object_storage_public_endpoint_url=endpoint,
-            object_storage_access_key_id="creative-marketer-test",
-            object_storage_secret_access_key="creative-marketer-test-secret",
+            object_storage_access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+            object_storage_secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
         )
     )
     auth = {

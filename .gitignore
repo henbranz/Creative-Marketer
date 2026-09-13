@@ -11,6 +11,7 @@ __pycache__/
 .ruff_cache/
 .venv/
 .coverage
+apps/api/phase0-gate.xml
 htmlcov/
 
 # Node / Next.js

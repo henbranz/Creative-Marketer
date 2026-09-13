@@ -66,6 +66,7 @@ from creative_marketer.production.infrastructure import (
     OpenAIImageProvider,
     SeedanceMediaProvider,
 )
+from creative_marketer.production.media import ImageProvider, VideoProvider
 from creative_marketer.tool_execution.application import (
     ToolExecutionBinding,
     ToolExecutor,
@@ -142,6 +143,8 @@ async def run() -> None:
         raise RuntimeError("Production worker requires private S3-compatible object storage")
     if settings.media_image_provider == "disabled" or settings.media_video_provider == "disabled":
         raise RuntimeError("Production worker requires explicit image and video provider selection")
+    if settings.media_image_provider == "openai" or settings.media_video_provider == "byteplus":
+        settings.require_live_spend_authorization()
     workload = _workload(settings)
     sessions = create_session_factory(str(settings.database_url))
     object_store = S3ObjectStore(
@@ -154,17 +157,35 @@ async def run() -> None:
         upload_ttl_seconds=settings.asset_upload_ttl_seconds,
         download_ttl_seconds=settings.asset_download_ttl_seconds,
     )
-    authority = SqlAlchemyGenerationAuthority(sessions, object_store, workload)
-    image_provider = (
-        FakeImageProvider()
-        if settings.media_image_provider == "fake"
-        else OpenAIImageProvider(settings.openai_api_key.get_secret_value())  # type: ignore[union-attr]
+    real_provider_enabled = (
+        settings.media_image_provider == "openai" or settings.media_video_provider == "byteplus"
     )
-    video_provider = (
-        FakeSeedanceMediaProvider()
-        if settings.media_video_provider == "fake"
-        else SeedanceMediaProvider(settings.byteplus_las_api_key.get_secret_value())  # type: ignore[union-attr]
+    authority = (
+        SqlAlchemyGenerationAuthority(
+            sessions,
+            object_store,
+            workload,
+            live_spend_cap=settings.live_e2e_max_usd,
+            live_product_id=settings.live_e2e_product_id,
+        )
+        if real_provider_enabled
+        else SqlAlchemyGenerationAuthority(sessions, object_store, workload)
     )
+    image_provider: ImageProvider
+    if settings.media_image_provider == "fake":
+        image_provider = FakeImageProvider()
+    else:
+        assert settings.openai_api_key is not None
+        image_provider = OpenAIImageProvider(settings.openai_api_key.get_secret_value())
+    video_provider: VideoProvider
+    if settings.media_video_provider == "fake":
+        video_provider = FakeSeedanceMediaProvider()
+    else:
+        assert settings.byteplus_las_api_key is not None
+        video_provider = SeedanceMediaProvider(
+            settings.byteplus_las_api_key.get_secret_value(),
+            base_url=str(settings.byteplus_las_base_url).rstrip("/"),
+        )
     image_importer = ApplicationGeneratedAssetImporter(
         AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), object_store),
         sessions,

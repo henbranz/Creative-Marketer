@@ -55,10 +55,10 @@ def test_deployed_s3_storage_rejects_local_or_placeholder_credentials() -> None:
         "object_storage_access_key_id": "disabled-access-key",
     }
     with pytest.raises(ValidationError, match="loopback"):
-        Settings(**common)  # type: ignore[arg-type]
+        Settings(**common)
     with pytest.raises(ValidationError, match="injected credentials"):
         Settings(
-            **common,  # type: ignore[arg-type]
+            **common,
             object_storage_endpoint_url="https://storage.example.test",
             object_storage_public_endpoint_url="https://storage.example.test",
         )
@@ -162,3 +162,39 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
         media_workload_id="kubernetes/service-account/media",
     )
     assert deployed.allow_billable_media
+
+
+def test_live_spend_authorization_requires_both_independent_gates() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    for settings in (
+        Settings(database_url=database_url),
+        Settings(database_url=database_url, allow_billable_media=True),
+        Settings(database_url=database_url, run_live_e2e="I_UNDERSTAND_THIS_SPENDS_MONEY"),
+    ):
+        with pytest.raises(RuntimeError, match="explicit RUN_LIVE_E2E"):
+            settings.require_live_spend_authorization()
+    Settings(
+        database_url=database_url,
+        allow_billable_media=True,
+        run_live_e2e="I_UNDERSTAND_THIS_SPENDS_MONEY",
+    ).require_live_spend_authorization()
+
+
+def test_byteplus_base_url_is_explicit_and_region_safe() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    configured = Settings(
+        database_url=database_url,
+        media_video_provider="byteplus",
+        byteplus_las_api_key="unit-live-shaped-credential",
+        byteplus_las_base_url="https://operator.las.eu-west-1.bytepluses.com",
+        allow_billable_media=True,
+    )
+    assert configured.byteplus_las_base_url.host == "operator.las.eu-west-1.bytepluses.com"
+    with pytest.raises(ValidationError, match="BytePlus LAS BaseURL"):
+        Settings(
+            database_url=database_url,
+            media_video_provider="byteplus",
+            byteplus_las_api_key="unit-live-shaped-credential",
+            byteplus_las_base_url="https://example.invalid",
+            allow_billable_media=True,
+        )

@@ -52,12 +52,14 @@ def producer_configuration() -> AgentVersionConfiguration:
             "Never predict performance, authorize spend, invoke tools, name providers, or reveal "
             "hidden reasoning. Return only production.production_plan.v1."
         ),
-        prompt_revision="astra_producer_v1",
+        prompt_revision="astra_producer_v2_gpt6",
         model_policy=ModelPolicy(
             "production_deep", ("image_input", "reasoning", "structured_output", "text"), 1
         ),
-        run_budget_policy=RunBudgetPolicy(1, 0, 64_000, Decimal("1.50"), "USD"),
-        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 20, Decimal("30"), "USD"),
+        # 20k bounded input + 12k strict-schema output at Astra's verified prices:
+        # (20k * $10/M) + (12k * $50/M) = $0.80 worst case.
+        run_budget_policy=RunBudgetPolicy(1, 0, 32_000, Decimal("0.80"), "USD"),
+        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 20, Decimal("16"), "USD"),
         read_scopes=(
             "catalog.asset_manifest",
             "catalog.product",

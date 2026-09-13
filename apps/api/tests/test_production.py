@@ -260,12 +260,15 @@ def test_routes_pricing_contracts_and_selection() -> None:
     producer = initial_producer_route()
     assert (producer.profile_key, producer.model, producer.reasoning_effort) == (
         "production_deep",
-        "gpt-5.6-sol",
+        "gpt-6-astra",
         "high",
     )
+    assert producer.route_version == "openai-gpt-6-astra-production-2026-09-13"
+    assert producer.pricing.version == "openai-gpt-6-astra-2026-09-13"
+    assert producer.max_output_tokens == 12_000
     router = initial_media_router()
     assert router.resolve("production_video").model == "dreamina-seedance-2-5-260628"
-    assert router.resolve("production_image").model == "gpt-image-2"
+    assert router.resolve("production_image").model == "gpt-image-2.5-sunburst-2026-09-08"
     with pytest.raises(InvalidProductionPlan):
         MediaRouter(()).resolve("missing")
     duplicate = initial_media_router().resolve("production_video")
@@ -281,6 +284,16 @@ def test_routes_pricing_contracts_and_selection() -> None:
     with pytest.raises(ValueError, match="dimensions"):
         pricing.cost(output_duration_seconds=4, resolution="1080p")
     assert ImageReservationPricing().reserve("HIGH") == Decimal("0.40")
+    assert ImageReservationPricing().actual_cost(
+        {
+            "text_input_tokens": 1_000,
+            "cached_text_input_tokens": 500,
+            "image_input_tokens": 2_000,
+            "cached_image_input_tokens": 1_000,
+            "image_output_tokens": 3_000,
+        }
+    ) == Decimal("0.103125")
+    assert ImageReservationPricing().actual_cost({"output_tokens": 3}) is None
     with pytest.raises(ValueError):
         ImageReservationPricing().reserve("AUTO")
     assert len(load_production_plan_schema()["$defs"]) > 1  # type: ignore[arg-type]
@@ -625,6 +638,12 @@ async def test_seedance_rejects_malformed_requests_and_provider_responses() -> N
         SeedanceMediaProvider("test-placeholder")
     with pytest.raises(ValueError):
         SeedanceMediaProvider("real-key-value", base_url="https://unverified.invalid")
+    regional = SeedanceMediaProvider(
+        "real-key-value",
+        transport=FakeTransport([]),
+        base_url="https://operator.las.eu-west-1.bytepluses.com/",
+    )
+    assert regional.base_url == "https://operator.las.eu-west-1.bytepluses.com"
     assert isinstance(SeedanceMediaProvider("real-key-value").transport, UrllibJsonHttpTransport)
     provider = SeedanceMediaProvider("real-key-value", transport=FakeTransport([]))
     with pytest.raises(ValueError):
@@ -738,10 +757,13 @@ async def test_openai_image_generate_and_edit() -> None:
     client = SimpleNamespace(images=images)
     provider = OpenAIImageProvider("real-key-value", client=client)  # type: ignore[arg-type]
     result = await provider.generate(ImageGenerationRequest("render", "1024x1536", "high"))
-    assert result.content == png and images.generate_kwargs["model"] == "gpt-image-2"
+    assert (
+        result.content == png
+        and images.generate_kwargs["model"] == "gpt-image-2.5-sunburst-2026-09-08"
+    )
     reference = MaterializedReference("image/png", png, "reference_image")
     await provider.generate(ImageGenerationRequest("edit", "1024x1536", "medium", (reference,)))
-    assert images.edit_kwargs["model"] == "gpt-image-2"
+    assert images.edit_kwargs["model"] == "gpt-image-2.5-sunburst-2026-09-08"
     with pytest.raises(ValueError):
         await provider.generate(ImageGenerationRequest("render", "auto", "auto"))
 

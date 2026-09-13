@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from creative_marketer.production.application import SEEDANCE_MODEL
@@ -20,7 +21,7 @@ from creative_marketer.production.media import (
     assert_reference_limits,
 )
 
-BASE_URL = "https://operator.las.ap-southeast-1.bytepluses.com"
+DEFAULT_BASE_URL = "https://operator.las.ap-southeast-1.bytepluses.com"
 TASK_PATH = "/api/v1/contents/generations/tasks"
 
 
@@ -52,14 +53,25 @@ class UrllibJsonHttpTransport:
 class SeedanceMediaProvider:
     api_key: str
     transport: JsonHttpTransport | None = None
-    base_url: str = BASE_URL
+    base_url: str = DEFAULT_BASE_URL
     allow_real_face_references: bool = False
 
     def __post_init__(self) -> None:
         if not self.api_key or self.api_key.startswith(("disabled-", "test-", "fake-", "replace-")):
             raise ValueError("a non-placeholder BytePlus API key is required")
-        if self.base_url != BASE_URL:
-            raise ValueError("Seedance V1 is pinned to the verified BytePlus regional endpoint")
+        parsed = urlsplit(self.base_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or not parsed.hostname.endswith(".bytepluses.com")
+        ):
+            raise ValueError("BytePlus LAS BaseURL must be an HTTPS BytePlus regional origin")
+        self.base_url = self.base_url.rstrip("/")
         if self.transport is None:
             self.transport = UrllibJsonHttpTransport()
 

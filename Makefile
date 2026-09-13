@@ -3,10 +3,22 @@ include .env
 export
 endif
 
-.PHONY: bootstrap dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap researcher-live-smoke producer-astra-live-smoke production-image-live-smoke production-seedance-live-smoke production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+# An empty optional binary override is documentation, not a path. Do not pass an empty
+# string to Temporal's SDK, which correctly treats a present value as an explicit path.
+ifeq ($(strip $(TEMPORAL_TEST_SERVER_PATH)),)
+unexport TEMPORAL_TEST_SERVER_PATH
+endif
+
+.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap media-tools-bootstrap agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
+
+env-init:
+	@python3 scripts/environment.py init
+
+env-check:
+	@python3 scripts/environment.py check
 
 dev-up:
 	docker compose up --build
@@ -21,7 +33,7 @@ test-postgres:
 	docker compose up -d postgres object-storage
 	docker compose run --rm migrate
 	docker compose run --rm object-storage-init
-	cd apps/api && TEST_OBJECT_STORAGE_URL=http://localhost:9000 TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest -m 'postgres or object_storage'
+	cd apps/api && TEST_OBJECT_STORAGE_URL=http://localhost:9000 TEST_DATABASE_ADMIN_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer TEST_DATABASE_RUNTIME_URL=postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@localhost:5432/creative_marketer TEST_DATABASE_PUBLISHER_URL=postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@localhost:5432/creative_marketer uv run pytest -m 'postgres or object_storage' --no-cov
 
 api-dev:
 	cd apps/api && uv run uvicorn creative_marketer_api.main:app --reload --host 0.0.0.0 --port 8000
@@ -52,7 +64,7 @@ temporal-down:
 	docker compose --profile temporal down
 
 temporal-test:
-	cd apps/api && uv run pytest -m temporal
+	cd apps/api && uv run pytest -m temporal --no-cov
 
 researcher-bootstrap:
 	cd apps/api && uv run python scripts/bootstrap_researcher.py
@@ -63,6 +75,9 @@ producer-bootstrap:
 media-tools-bootstrap:
 	cd apps/api && uv run python scripts/bootstrap_media_tools.py
 
+agent-worker:
+	cd apps/api && uv run python -m creative_marketer_api.researcher_worker
+
 production-worker:
 	cd apps/api && uv run python -m creative_marketer_api.production_worker
 
@@ -72,20 +87,20 @@ assembly-worker:
 demo-bootstrap:
 	cd apps/api && DATABASE_URL="$(MIGRATION_DATABASE_URL)" uv run python -m scripts.bootstrap_demo
 
-producer-astra-live-smoke:
-	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
-	@test -n "$${OPENAI_API_KEY:-}" || (echo "OPENAI_API_KEY is required" && exit 2)
-	@echo "Live Producer smoke must be launched through an approved Concept API request."
+live-provider-preflight:
+	cd apps/api && uv run python scripts/live_validation.py preflight
 
-production-image-live-smoke:
-	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
-	@test -n "$${OPENAI_API_KEY:-}" || (echo "OPENAI_API_KEY is required" && exit 2)
-	@echo "Live image generation must be launched through an approved ProductionPlan."
+live-openai-smoke:
+	cd apps/api && uv run python scripts/live_validation.py openai-smoke
 
-production-seedance-live-smoke:
-	@test "$${RUN_LIVE_PRODUCTION_SMOKE:-}" = "I_UNDERSTAND_THIS_SPENDS_MONEY" || (echo "Set RUN_LIVE_PRODUCTION_SMOKE=I_UNDERSTAND_THIS_SPENDS_MONEY" && exit 2)
-	@test -n "$${BYTEPLUS_LAS_API_KEY:-}" || (echo "BYTEPLUS_LAS_API_KEY is required" && exit 2)
-	@echo "Live Seedance generation must be launched through an approved ProductionPlan."
+live-image-smoke:
+	cd apps/api && uv run python scripts/live_validation.py image-smoke
+
+live-seedance-smoke:
+	cd apps/api && uv run python scripts/live_validation.py seedance-smoke
+
+live-e2e:
+	cd apps/api && uv run python scripts/live_validation.py e2e
 
 researcher-live-smoke:
 	cd apps/api && uv run python scripts/researcher_live_smoke.py

@@ -420,7 +420,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 "producer-persisted",
                 ModelUsage(800, 1200, 2000),
                 "openai",
-                "gpt-5.6-sol",
+                "gpt-6-astra",
             )
         assert creative_context is not None
         raw = creative_output(creative_context)

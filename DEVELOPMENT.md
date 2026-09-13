@@ -10,7 +10,7 @@
 ## Bootstrap
 
 ```bash
-cp .env.example .env
+make env-init
 make bootstrap
 make check
 ```
@@ -36,6 +36,20 @@ make web-dev
 ```
 
 The API reads the repository-root `.env` file. Configuration is validated at startup; invalid URLs, environments, origins, or ports fail closed with a clear validation error.
+
+## Central environment and provider modes
+
+The repository-root `.env` is the one developer configuration source for the API, web build,
+Compose, workers, Temporal, object storage, Obsidian, and operator validation. Run `make env-init`
+to safely create/merge it and `make env-check` for secret-safe local diagnostics. Never create
+service-specific `.env` files. `NEXT_PUBLIC_*` values are compiled into the Next.js bundle, so
+changing them requires a web rebuild/restart.
+
+Free local mode uses `MEDIA_IMAGE_PROVIDER=fake` and `MEDIA_VIDEO_PROVIDER=fake` for the demo
+worker; fresh configuration defaults all provider selectors to `disabled`. Live provider mode is
+operator-only and additionally requires both the billable switch and exact acknowledgement. Run
+the no-generation `make live-provider-preflight` first, then follow
+[the live provider runbook](docs/22_LIVE_PROVIDER_AND_E2E_VALIDATION.md).
 
 The Research tab accepts public HTTP/HTTPS pages only. Localhost, private/link-local/reserved
 addresses, non-standard ports, URL credentials, and secret-like query keys are intentionally
@@ -84,6 +98,8 @@ binary on first run. Set `TEMPORAL_TEST_SERVER_PATH` only to reuse an already do
 binary. No separately running Temporal service is required for tests.
 
 The generic worker factory is `creative_marketer.infrastructure.temporal.worker:create_worker`.
+The activated local Agent entrypoint is `make agent-worker`; one worker handles Researcher,
+Creative Strategist, and Producer runs.
 The activated media entrypoint is `make production-worker`: it composes the existing Tool Gateway,
 canonical PostgreSQL authority, private object storage, media adapters, and Temporal workflow in a
 separate process. Development may derive the labeled local workload identity; staging/production

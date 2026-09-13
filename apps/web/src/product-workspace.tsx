@@ -1380,6 +1380,27 @@ function ProductionPanel({
   }, [finalCreative, finalPreview, session]);
   const plan = plans[0];
   const producerRun = runs[0];
+  const money = (value: number) =>
+    value.toFixed(6).replace(/\.?0+$/, "") || "0";
+  const planningSpend = Number(plan?.planning_cost ?? 0);
+  const imageSpend = jobs
+    .filter((job) => job.kind === "IMAGE" && job.status === "SUCCEEDED")
+    .reduce((total, job) => total + Number(job.actual_cost), 0);
+  const videoSpend = jobs
+    .filter((job) => job.kind === "VIDEO" && job.status === "SUCCEEDED")
+    .reduce((total, job) => total + Number(job.actual_cost), 0);
+  const reservedOrUnknown = jobs
+    .filter((job) => !["SUCCEEDED", "FAILED"].includes(job.status))
+    .reduce(
+      (total, job) =>
+        total +
+        Number(
+          job.status === "OUTCOME_UNKNOWN"
+            ? job.unknown_cost
+            : job.reserved_cost,
+        ),
+      0,
+    );
   const act = async (operation: () => Promise<unknown>) => {
     setBusy(true);
     setError("");
@@ -1401,8 +1422,8 @@ function ProductionPanel({
           <p className="eyebrow">Governed media production</p>
           <h2>Production</h2>
           <p>
-            Astra plans. You approve exact cost and media work before providers
-            run.
+            The Producer plans. You approve exact cost and media work before
+            providers run.
           </p>
         </div>
         <div className="creative-readiness">
@@ -1424,6 +1445,12 @@ function ProductionPanel({
                         ? "Ready"
                         : "Waiting"}
           </span>
+          {producerRun?.resolved_model && (
+            <span>
+              Producer route: {producerRun.resolved_model} ·{" "}
+              {producerRun.model_route_version}
+            </span>
+          )}
           {workspace.product.can_edit && concept && !plan && (
             <button
               className="primary"
@@ -1572,20 +1599,28 @@ function ProductionPanel({
               </article>
             ))}
           </div>
-          <div className="creative-readiness">
+          <div className="creative-readiness" aria-label="Cost dashboard">
             <span>
-              Astra planning: {plan.planning_cost} {plan.currency}
+              AI planning: {money(planningSpend)} {plan.currency}
             </span>
             <span>
-              Images: {plan.estimated_max_image_cost} {plan.currency}
+              Image generation: {money(imageSpend)} {plan.currency}
             </span>
             <span>
-              Video generation: {plan.estimated_max_video_cost} {plan.currency}
+              Video generation: {money(videoSpend)} {plan.currency}
             </span>
             <strong>
-              Total generation budget: {plan.estimated_total_cost}{" "}
-              {plan.currency}
+              Total known spend:{" "}
+              {money(planningSpend + imageSpend + videoSpend)} {plan.currency}
             </strong>
+            <span>
+              Reserved/unknown amount: {money(reservedOrUnknown)}{" "}
+              {plan.currency}
+            </span>
+            <small>
+              Approved generation ceiling: {plan.estimated_total_cost}{" "}
+              {plan.currency}
+            </small>
           </div>
           {workspace.product.can_edit && plan.status === "UNREVIEWED" && (
             <div className="concept-actions">
@@ -1625,6 +1660,9 @@ function ProductionPanel({
                   </p>
                   {job.local_demo_provider && (
                     <span className="status draft">Local demo provider</span>
+                  )}
+                  {!job.local_demo_provider && (
+                    <span className="status active">Live provider</span>
                   )}
                   <h4>
                     {{

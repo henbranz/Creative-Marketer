@@ -32,6 +32,13 @@ from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
 from tests.integration.test_catalog import headers, owner_context, seed_catalog_identity
 
+OBJECT_STORAGE_ACCESS_KEY_ID = os.environ.get(
+    "OBJECT_STORAGE_ACCESS_KEY_ID", "creative-marketer-test"
+)
+OBJECT_STORAGE_SECRET_ACCESS_KEY = os.environ.get(
+    "OBJECT_STORAGE_SECRET_ACCESS_KEY", "creative-marketer-test-secret"
+)
+
 
 def storage() -> S3ObjectStore:
     endpoint = os.environ.get("TEST_OBJECT_STORAGE_URL")
@@ -42,8 +49,8 @@ def storage() -> S3ObjectStore:
         public_endpoint_url=endpoint,
         region="us-east-1",
         bucket="creative-marketer-assets",
-        access_key_id="creative-marketer-test",
-        secret_access_key="creative-marketer-test-secret",
+        access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+        secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
     )
 
 
@@ -190,8 +197,8 @@ async def test_real_storage_rejects_spoofing_and_grant_tampering(
         public_endpoint_url=os.environ["TEST_OBJECT_STORAGE_URL"],
         region="us-east-1",
         bucket="creative-marketer-assets",
-        access_key_id="creative-marketer-test",
-        secret_access_key="creative-marketer-test-secret",
+        access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+        secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
         upload_ttl_seconds=-1,
     )
     expired = await expired_store.create_upload_grant(
@@ -230,8 +237,8 @@ async def test_protected_asset_api_exposes_grants_but_never_storage_keys(
             object_storage_backend="s3",
             object_storage_endpoint_url=endpoint,
             object_storage_public_endpoint_url=endpoint,
-            object_storage_access_key_id="creative-marketer-test",
-            object_storage_secret_access_key="creative-marketer-test-secret",
+            object_storage_access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+            object_storage_secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
         )
     )
     auth = headers(context.tenant_id, context.user_id)
