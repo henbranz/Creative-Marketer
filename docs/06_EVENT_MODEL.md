@@ -207,3 +207,10 @@ Production publishes `production.plan.created.v1`, `production.plan.approved_for
 and `production.generation.completed.v1`. Payloads contain IDs, digests, version evidence, media
 kind, and decimal cost strings—never plan text, generation specs/prompts, provider operation refs,
 or result URLs.
+
+## Publishing facts
+
+`publishing.draft.created.v1`, `publishing.draft.approved.v1`, and
+`publishing.publication.published.v1` contain identifiers, platform/mode, and semantic digests only.
+Caption text, hashtags, credentials, provider request/response bodies, and access tokens are
+forbidden.

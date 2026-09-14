@@ -109,3 +109,7 @@ Deliverables:
 Do not judge the MVP by number of agents.
 
 Judge whether the closed loop consistently helps a founder create and test better organic creative with less manual work while preserving control and visibility.
+
+Phase 5 establishes the safe organic publication lifecycle with a fake provider. OAuth, real social
+API activation, paid campaign management, performance ingestion, attribution, and automated
+optimization remain deferred behind explicit architecture and security gates.

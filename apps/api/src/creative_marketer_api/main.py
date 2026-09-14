@@ -29,6 +29,7 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyCreativeUnitOfWorkFactory,
     SqlAlchemyProductionUnitOfWorkFactory,
+    SqlAlchemyPublishingUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
@@ -53,6 +54,8 @@ from creative_marketer.observability.runtime import ObservabilityRuntime
 from creative_marketer.production.application import initial_media_router, initial_producer_route
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
+from creative_marketer.publishing.application import PublishingService
+from creative_marketer.publishing.provider import FakeSocialProvider
 from creative_marketer.research.application import ResearchService
 from creative_marketer_api.assembly_routes import create_assembly_router
 from creative_marketer_api.authentication_routes import create_authentication_router
@@ -61,6 +64,7 @@ from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.knowledge_routes import create_knowledge_router
 from creative_marketer_api.production_routes import create_production_router
+from creative_marketer_api.publishing_routes import create_publishing_router
 from creative_marketer_api.research_routes import create_research_router
 
 
@@ -173,6 +177,7 @@ def create_app(
     creative_uow = SqlAlchemyCreativeUnitOfWorkFactory(session_factory)
     production_uow = SqlAlchemyProductionUnitOfWorkFactory(session_factory)
     assembly_uow = SqlAlchemyAssemblyUnitOfWorkFactory(session_factory)
+    publishing_uow = SqlAlchemyPublishingUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -272,6 +277,15 @@ def create_app(
             authenticator,
             identity_uow,
             AssemblyService(assembly_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_publishing_router(
+            authenticator,
+            identity_uow,
+            PublishingService(publishing_uow, FakeSocialProvider()),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

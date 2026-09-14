@@ -603,3 +603,10 @@ The `production` schema holds immutable plans, scenes, shots, segments and decis
 generation jobs; and append-only spend entries. Relations are tenant-keyed with forced RLS and
 same-tenant composite foreign keys. `catalog.asset_lineage` is an immutable neutral many-to-many
 relation between Assets. See ADR-030.
+
+## Phase 5 publishing data
+
+The `publishing` schema owns tenant-scoped SocialAccount, immutable PublicationDraft and
+PublicationDecision, controlled PublicationJob, and immutable Publication records. Composite
+foreign keys enforce same-tenant Product, FinalCreative, Asset, account, draft, and job references.
+Every table has enabled and forced RLS. Credentials and raw provider responses are not columns.

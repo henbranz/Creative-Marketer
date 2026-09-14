@@ -708,6 +708,41 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/publication-drafts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Drafts */
+    get: operations["list_drafts_v1_products__product_id__publication_drafts_get"];
+    put?: never;
+    /** Create Draft */
+    post: operations["create_draft_v1_products__product_id__publication_drafts_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/publications": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Publications */
+    get: operations["list_publications_v1_products__product_id__publications_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/research-context-manifest": {
     parameters: {
       query?: never;
@@ -839,6 +874,125 @@ export interface paths {
     };
     /** List Social Evidence */
     get: operations["list_social_evidence_v1_products__product_id__social_evidence_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Draft */
+    get: operations["get_draft_v1_publication_drafts__draft_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}/approve": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Approve */
+    post: operations["approve_v1_publication_drafts__draft_id__approve_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Cancel */
+    post: operations["cancel_v1_publication_drafts__draft_id__cancel_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}/execute": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Execute */
+    post: operations["execute_v1_publication_drafts__draft_id__execute_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}/reconcile": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reconcile */
+    post: operations["reconcile_v1_publication_drafts__draft_id__reconcile_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publication-drafts/{draft_id}/reject": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reject */
+    post: operations["reject_v1_publication_drafts__draft_id__reject_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publications/{publication_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Publication */
+    get: operations["get_publication_v1_publications__publication_id__get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1028,6 +1182,24 @@ export interface paths {
     get: operations["social_capabilities_v1_social_research_capabilities_get"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/social/accounts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Accounts */
+    get: operations["list_accounts_v1_social_accounts_get"];
+    put?: never;
+    /** Create Account */
+    post: operations["create_account_v1_social_accounts_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -2182,7 +2354,7 @@ export interface components {
       media_type?: string | null;
       /** Placements */
       placements?: string[];
-      platform: components["schemas"]["SocialPlatform"];
+      platform: components["schemas"]["creative_marketer__research__domain__SocialPlatform"];
       /** Platform Content Id */
       platform_content_id?: string | null;
       /** Region */
@@ -2589,6 +2761,148 @@ export interface components {
       /** Next Cursor */
       next_cursor: string;
     };
+    /** PublicationDraftResponse */
+    PublicationDraftResponse: {
+      /** Approval Action Digest */
+      approval_action_digest: string | null;
+      /** Caption */
+      caption: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Decision State */
+      decision_state: string | null;
+      /** Destination Url */
+      destination_url: string | null;
+      /** External Destination Id */
+      external_destination_id: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /**
+       * Final Creative Id
+       * Format: uuid
+       */
+      final_creative_id: string;
+      /** Hashtags */
+      hashtags: string[];
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Mode */
+      mode: string;
+      /**
+       * Output Asset Id
+       * Format: uuid
+       */
+      output_asset_id: string;
+      /** Platform */
+      platform: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Scheduled At */
+      scheduled_at: string | null;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /**
+       * Social Account Id
+       * Format: uuid
+       */
+      social_account_id: string;
+      /** Status */
+      status: string;
+      /** Title */
+      title: string | null;
+    };
+    /** PublicationDraftWrite */
+    PublicationDraftWrite: {
+      /** Caption */
+      caption: string;
+      /** Destination Url */
+      destination_url?: string | null;
+      /**
+       * Final Creative Id
+       * Format: uuid
+       */
+      final_creative_id: string;
+      /** Hashtags */
+      hashtags?: string[];
+      mode: components["schemas"]["PublicationMode"];
+      /** Platform Settings */
+      platform_settings?: {
+        [key: string]: unknown;
+      };
+      /** Scheduled At */
+      scheduled_at?: string | null;
+      /**
+       * Social Account Id
+       * Format: uuid
+       */
+      social_account_id: string;
+      /** Title */
+      title?: string | null;
+    };
+    /**
+     * PublicationMode
+     * @enum {string}
+     */
+    PublicationMode: "POST_NOW" | "SCHEDULE";
+    /** PublicationResponse */
+    PublicationResponse: {
+      /** Canonical Permalink */
+      canonical_permalink: string | null;
+      /** External Post Id */
+      external_post_id: string;
+      /**
+       * Final Creative Id
+       * Format: uuid
+       */
+      final_creative_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Output Asset Id
+       * Format: uuid
+       */
+      output_asset_id: string;
+      /** Platform */
+      platform: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Provider */
+      provider: string;
+      /**
+       * Publication Draft Id
+       * Format: uuid
+       */
+      publication_draft_id: string;
+      /** Published At */
+      published_at: string | null;
+      /**
+       * Social Account Id
+       * Format: uuid
+       */
+      social_account_id: string;
+      /** Status */
+      status: string;
+      /**
+       * Submitted At
+       * Format: date-time
+       */
+      submitted_at: string;
+    };
     /** ReadinessItemResponse */
     ReadinessItemResponse: {
       /** Shot Key */
@@ -2710,7 +3024,9 @@ export interface components {
       /** Display Name */
       display_name: string;
       kind: components["schemas"]["ResearchTargetKind"];
-      platform?: components["schemas"]["SocialPlatform"] | null;
+      platform?:
+        | components["schemas"]["creative_marketer__research__domain__SocialPlatform"]
+        | null;
       /** Platform Handle */
       platform_handle?: string | null;
       /** Platform Identifier */
@@ -2743,7 +3059,7 @@ export interface components {
        */
       id: string;
       kind: components["schemas"]["ResearchTargetKind"];
-      platform: components["schemas"]["SocialPlatform"] | null;
+      platform: components["schemas"]["SocialPlatform-Output"] | null;
       /** Platform Handle */
       platform_handle: string | null;
       /** Platform Identifier */
@@ -2792,13 +3108,47 @@ export interface components {
       /** Source Revision */
       source_revision: number;
     };
+    /** SocialAccountResponse */
+    SocialAccountResponse: {
+      /** Capabilities */
+      capabilities: {
+        [key: string]: unknown;
+      };
+      /** Display Name */
+      display_name: string;
+      /** External Account Id */
+      external_account_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Platform */
+      platform: string;
+      /** Provider */
+      provider: string;
+      /** Status */
+      status: string;
+      /** Username */
+      username: string | null;
+    };
+    /** SocialAccountWrite */
+    SocialAccountWrite: {
+      /** Display Name */
+      display_name: string;
+      /** External Account Id */
+      external_account_id: string;
+      platform: components["schemas"]["creative_marketer__publishing__domain__SocialPlatform"];
+      /** Username */
+      username?: string | null;
+    };
     /** SocialCapabilityResponse */
     SocialCapabilityResponse: {
       /** Capabilities */
       capabilities: string[];
       /** Enabled */
       enabled: boolean;
-      platform: components["schemas"]["SocialPlatform"];
+      platform: components["schemas"]["SocialPlatform-Output"];
     };
     /**
      * SocialEvidenceProvenance
@@ -2868,7 +3218,7 @@ export interface components {
       media_type: string | null;
       /** Placements */
       placements: string[];
-      platform: components["schemas"]["SocialPlatform"];
+      platform: components["schemas"]["SocialPlatform-Output"];
       /** Platform Content Id */
       platform_content_id: string | null;
       /**
@@ -2917,7 +3267,7 @@ export interface components {
      * SocialPlatform
      * @enum {string}
      */
-    SocialPlatform: "facebook" | "instagram" | "tiktok" | "other";
+    "SocialPlatform-Output": "facebook" | "instagram" | "tiktok" | "other";
     /** SocialProviderQuery */
     SocialProviderQuery: {
       /** Capability */
@@ -3021,6 +3371,18 @@ export interface components {
       latest_snapshot: components["schemas"]["SnapshotResponse"] | null;
       product: components["schemas"]["ProductResponse"];
     };
+    /**
+     * SocialPlatform
+     * @enum {string}
+     */
+    creative_marketer__publishing__domain__SocialPlatform:
+      "facebook" | "instagram" | "tiktok";
+    /**
+     * SocialPlatform
+     * @enum {string}
+     */
+    creative_marketer__research__domain__SocialPlatform:
+      "facebook" | "instagram" | "tiktok" | "other";
   };
   responses: never;
   parameters: never;
@@ -4703,6 +5065,115 @@ export interface operations {
       };
     };
   };
+  list_drafts_v1_products__product_id__publication_drafts_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_draft_v1_products__product_id__publication_drafts_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PublicationDraftWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_publications_v1_products__product_id__publications_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   get_manifest_v1_products__product_id__research_context_manifest_get: {
     parameters: {
       query?: never;
@@ -5100,6 +5571,251 @@ export interface operations {
       };
     };
   };
+  get_draft_v1_publication_drafts__draft_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  approve_v1_publication_drafts__draft_id__approve_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  cancel_v1_publication_drafts__draft_id__cancel_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  execute_v1_publication_drafts__draft_id__execute_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  reconcile_v1_publication_drafts__draft_id__reconcile_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  reject_v1_publication_drafts__draft_id__reject_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        draft_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationDraftResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_publication_v1_publications__publication_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        publication_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PublicationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   get_evidence_v1_research_evidence__evidence_id__get: {
     parameters: {
       query?: never;
@@ -5478,6 +6194,76 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["SocialCapabilityResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_accounts_v1_social_accounts_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialAccountResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_account_v1_social_accounts_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SocialAccountWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SocialAccountResponse"];
         };
       };
       /** @description Validation Error */

@@ -231,3 +231,10 @@ The production event bridge uses the transactional Outbox/Inbox path, reloads th
 and starts one logical plan workflow. Each activity then executes through Tool Gateway and
 GenerationAuthority. Restart polls the persisted provider operation; an accepted start with a lost
 response is terminal `OUTCOME_UNKNOWN` pending operator reconciliation.
+
+## Publication workflow
+
+`PublicationWorkflow` receives identifiers and bounded timing values only. It durably waits until a
+UTC schedule, honors cancellation before submit, invokes Tool Gateway-backed submit exactly once,
+and reconciles `SUBMITTED` or `OUTCOME_UNKNOWN` within a fixed deadline. PostgreSQL remains truth;
+workflow replay cannot authorize or create a duplicate post.

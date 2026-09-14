@@ -23,6 +23,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationState,
     GenerationWorkflowInput,
     MediaProductionJobResult,
+    PublicationWorkflowInput,
+    PublicationWorkflowResult,
     ResearcherActivityResult,
     ResearcherWorkflowInput,
     ToolActivityResult,
@@ -60,6 +62,12 @@ class FinalAssemblyResult(Protocol):
 
 class FinalAssemblyExecutor(Protocol):
     async def execute(self, tenant_id: UUID, job_id: UUID) -> FinalAssemblyResult: ...
+
+
+class PublicationJobExecutor(Protocol):
+    async def submit(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
+    async def reconcile(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
+    async def cancel(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
 
 
 @dataclass(slots=True)
@@ -111,6 +119,7 @@ class TemporalActivities:
     agent_runtime: AgentRunService | None = None
     production_jobs: ProductionJobExecutor | None = None
     assembly_jobs: FinalAssemblyExecutor | None = None
+    publication_jobs: PublicationJobExecutor | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -276,3 +285,44 @@ class TemporalActivities:
                 return FinalCreativeAssemblyResult(request.assembly_job_id, None, "FAILED", code)
             raise ApplicationError("assembly activity failed", type=code) from error
         return FinalCreativeAssemblyResult(request.assembly_job_id, str(final_id), "SUCCEEDED")
+
+    async def _publication_call(
+        self, operation: str, request: PublicationWorkflowInput
+    ) -> PublicationWorkflowResult:
+        if self.publication_jobs is None:
+            raise ApplicationError(
+                "Publishing executor is not composed",
+                type="PUBLISHING_EXECUTOR_UNAVAILABLE",
+                non_retryable=True,
+            )
+        tenant_id = UUID(request.tenant_id)
+        draft_id = UUID(request.publication_draft_id)
+        if operation == "submit":
+            return await self.publication_jobs.submit(tenant_id, draft_id)
+        if operation == "reconcile":
+            return await self.publication_jobs.reconcile(tenant_id, draft_id)
+        if operation == "cancel":
+            return await self.publication_jobs.cancel(tenant_id, draft_id)
+        raise ApplicationError(
+            "Unknown publication operation",
+            type="PUBLISHING_OPERATION_INVALID",
+            non_retryable=True,
+        )
+
+    @activity.defn(name="workflow.submit_publication")
+    async def submit_publication(
+        self, request: PublicationWorkflowInput
+    ) -> PublicationWorkflowResult:
+        return await self._publication_call("submit", request)
+
+    @activity.defn(name="workflow.reconcile_publication")
+    async def reconcile_publication(
+        self, request: PublicationWorkflowInput
+    ) -> PublicationWorkflowResult:
+        return await self._publication_call("reconcile", request)
+
+    @activity.defn(name="workflow.cancel_publication")
+    async def cancel_publication(
+        self, request: PublicationWorkflowInput
+    ) -> PublicationWorkflowResult:
+        return await self._publication_call("cancel", request)

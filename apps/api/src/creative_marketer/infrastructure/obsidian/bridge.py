@@ -39,6 +39,10 @@ TYPE_DIRECTORIES = {
     "assembly_job": "Production/Assembly",
     "final_creative": "Production/Finals",
     "final_creative_decision": "Production/Finals",
+    "social_account": "Publishing/Accounts",
+    "publication_draft": "Publishing/Drafts",
+    "publication_decision": "Publishing/Decisions",
+    "publication": "Publishing/Published",
 }
 
 
@@ -312,6 +316,12 @@ class ObsidianBridge:
                 "final_creative_decision",
             },
             "Final Creatives.md": {"final_creative", "final_creative_decision"},
+            "Publishing.md": {
+                "social_account",
+                "publication_draft",
+                "publication_decision",
+                "publication",
+            },
         }
         all_entries = list(state["nodes"].values())
         for filename, types in groups.items():

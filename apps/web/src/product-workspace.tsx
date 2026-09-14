@@ -24,6 +24,8 @@ import {
   catalogApi,
   obsidianOpenUrl,
   type Product,
+  type Publication,
+  type PublicationDraft,
   type ProductionJob,
   type ProductionPlan,
   type ResearchEvidence,
@@ -35,6 +37,7 @@ import {
   type ResearchTarget,
   type SocialCapability,
   type SocialEvidence,
+  type SocialAccount,
   slugify,
   type Workspace,
   uploadToGrant,
@@ -1972,9 +1975,11 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
 function ProductionPanel({
   workspace,
   onOpenAssets,
+  onPreparePublication,
 }: {
   workspace: Workspace;
   onOpenAssets: () => void;
+  onPreparePublication: (finalCreativeId: string) => void;
 }) {
   const session = useMemo(() => readSession(), []);
   const obsidianVaultName = process.env.NEXT_PUBLIC_OBSIDIAN_VAULT_NAME;
@@ -2655,6 +2660,16 @@ function ProductionPanel({
                       </button>
                     </>
                   )}
+                  {workspace.product.can_edit &&
+                    finalCreative.decision_state ===
+                      "APPROVED_FOR_PUBLISHING" && (
+                      <button
+                        className="primary"
+                        onClick={() => onPreparePublication(finalCreative.id)}
+                      >
+                        Prepare publication
+                      </button>
+                    )}
                   {obsidianVaultName && (
                     <button
                       className="secondary"
@@ -2697,6 +2712,353 @@ function ProductionPanel({
           Approve a current creative concept to begin production planning.
         </EmptyState>
       )}
+    </div>
+  );
+}
+
+function PublishedPanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [drafts, setDrafts] = useState<PublicationDraft[]>([]);
+  const [publications, setPublications] = useState<Publication[]>([]);
+  const [selectedDraft, setSelectedDraft] = useState<PublicationDraft | null>(
+    null,
+  );
+  const [finalCreativeId, setFinalCreativeId] = useState(
+    () => sessionStorage.getItem("cm-publication-final") ?? "",
+  );
+  const [accountId, setAccountId] = useState("");
+  const [caption, setCaption] = useState("");
+  const [hashtags, setHashtags] = useState("");
+  const [mode, setMode] = useState<"POST_NOW" | "SCHEDULE">("POST_NOW");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback(async () => {
+    const [nextAccounts, nextDrafts, nextPublications] = await Promise.all([
+      catalogApi.listSocialAccounts(session),
+      catalogApi.listPublicationDrafts(session, workspace.product.id),
+      catalogApi.listPublications(session, workspace.product.id),
+    ]);
+    setAccounts(nextAccounts);
+    setDrafts(nextDrafts);
+    setPublications(nextPublications);
+    if (!accountId && nextAccounts[0]) setAccountId(nextAccounts[0].id);
+    if (selectedDraft) {
+      setSelectedDraft(
+        nextDrafts.find((item) => item.id === selectedDraft.id) ?? null,
+      );
+    }
+  }, [accountId, selectedDraft, session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void refresh().catch(() => setError("Publishing could not be loaded.")),
+    );
+  }, [refresh]);
+  const act = async (operation: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await operation();
+      await refresh();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Publishing action failed.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createDraft = async () => {
+    if (!finalCreativeId || !accountId || !caption.trim()) return;
+    const created = await catalogApi.createPublicationDraft(
+      session,
+      workspace.product.id,
+      {
+        final_creative_id: finalCreativeId,
+        social_account_id: accountId,
+        caption: caption.trim(),
+        title: null,
+        hashtags: hashtags
+          .split(/[\s,]+/)
+          .map((value) => value.replace(/^#/, "").trim())
+          .filter(Boolean),
+        destination_url: null,
+        mode,
+        scheduled_at:
+          mode === "SCHEDULE" && scheduledAt
+            ? new Date(scheduledAt).toISOString()
+            : null,
+        platform_settings: {},
+      },
+    );
+    sessionStorage.removeItem("cm-publication-final");
+    setFinalCreativeId("");
+    setSelectedDraft(created);
+    await refresh();
+  };
+  const approve = async (draft: PublicationDraft) => {
+    const approved = await catalogApi.approvePublicationDraft(
+      session,
+      draft.id,
+    );
+    await catalogApi.executePublicationDraft(session, approved.id);
+  };
+  const accountFor = (id: string) => accounts.find((item) => item.id === id);
+  return (
+    <div className="publishing-workspace creative-workspace">
+      <section className="creative-hero">
+        <div>
+          <p className="eyebrow">Governed organic publishing</p>
+          <h2>Published</h2>
+          <p>
+            Prepare, approve, schedule, and track exact publication drafts.
+            Every destination change requires fresh approval.
+          </p>
+        </div>
+        <div className="creative-readiness">
+          <span>Provider: FakeSocialProvider</span>
+          <span>Live posting: Disabled</span>
+          <span>Cost: N/A · organic publishing</span>
+        </div>
+      </section>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {finalCreativeId && (
+        <section className="publication-composer">
+          <p className="eyebrow">Publication composer</p>
+          <h3>Prepare publication</h3>
+          <p>
+            Final Creative <code>{finalCreativeId.slice(0, 8)}</code>
+          </p>
+          <label>
+            Platform and destination account
+            <select
+              aria-label="Platform and destination account"
+              value={accountId}
+              onChange={(event) => setAccountId(event.target.value)}
+            >
+              <option value="">Select an account</option>
+              {accounts
+                .filter((item) => item.status === "ACTIVE")
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.platform} · {item.username ?? item.display_name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <TextArea
+            label="Caption"
+            hint="Review every word before approval. AI copy is not required."
+            value={caption}
+            maxLength={2200}
+            onChange={setCaption}
+          />
+          <label className="field">
+            <span>Hashtags</span>
+            <input
+              aria-label="Hashtags"
+              value={hashtags}
+              onChange={(event) => setHashtags(event.target.value)}
+              placeholder="#launch #product"
+            />
+          </label>
+          <fieldset className="publication-mode">
+            <legend>Publish mode</legend>
+            <label>
+              <input
+                type="radio"
+                checked={mode === "POST_NOW"}
+                onChange={() => setMode("POST_NOW")}
+              />{" "}
+              Publish now
+            </label>
+            <label>
+              <input
+                type="radio"
+                checked={mode === "SCHEDULE"}
+                onChange={() => setMode("SCHEDULE")}
+              />{" "}
+              Schedule
+            </label>
+          </fieldset>
+          {mode === "SCHEDULE" && (
+            <label className="field">
+              <span>Schedule date and time</span>
+              <input
+                aria-label="Schedule date and time"
+                type="datetime-local"
+                value={scheduledAt}
+                onChange={(event) => setScheduledAt(event.target.value)}
+              />
+              <small>
+                Stored in UTC; shown in your browser&apos;s local time.
+              </small>
+            </label>
+          )}
+          <p className="compatibility-ok">
+            ✓ Compatible with the selected fake destination
+          </p>
+          <Button
+            variant="primary"
+            disabled={
+              busy ||
+              !accountId ||
+              !caption.trim() ||
+              (mode === "SCHEDULE" && !scheduledAt)
+            }
+            onClick={() => void act(createDraft)}
+          >
+            Review exact publication
+          </Button>
+        </section>
+      )}
+      {selectedDraft && !selectedDraft.decision_state && (
+        <section
+          className="approval-summary"
+          aria-label="Publication approval summary"
+        >
+          <p className="eyebrow">Exact R4 approval</p>
+          <h3>You are approving</h3>
+          <dl>
+            <div>
+              <dt>Platform</dt>
+              <dd>{selectedDraft.platform}</dd>
+            </div>
+            <div>
+              <dt>Account</dt>
+              <dd>
+                {accountFor(selectedDraft.social_account_id)?.username ??
+                  selectedDraft.external_destination_id}
+              </dd>
+            </div>
+            <div>
+              <dt>Creative</dt>
+              <dd>
+                FinalCreative {selectedDraft.final_creative_id.slice(0, 8)}
+              </dd>
+            </div>
+            <div>
+              <dt>Caption</dt>
+              <dd>{selectedDraft.caption}</dd>
+            </div>
+            <div>
+              <dt>Schedule</dt>
+              <dd>
+                {selectedDraft.scheduled_at
+                  ? new Date(selectedDraft.scheduled_at).toLocaleString()
+                  : "Publish now"}
+              </dd>
+            </div>
+          </dl>
+          <p>
+            This authorizes Creative Manager to publish this exact artifact to
+            this exact destination. Changing any material value requires
+            re-approval.
+          </p>
+          <div className="concept-actions">
+            <Button
+              variant="primary"
+              disabled={busy}
+              onClick={() => void act(() => approve(selectedDraft))}
+            >
+              Approve exact publication
+            </Button>
+            <button
+              className="danger"
+              disabled={busy}
+              onClick={() =>
+                void act(() =>
+                  catalogApi.rejectPublicationDraft(session, selectedDraft.id),
+                )
+              }
+            >
+              Reject
+            </button>
+          </div>
+        </section>
+      )}
+      <section className="publishing-lanes">
+        <div>
+          <p className="eyebrow">Drafts</p>
+          {drafts
+            .filter((item) =>
+              ["PENDING_APPROVAL", "APPROVED"].includes(item.status),
+            )
+            .map((item) => (
+              <button
+                key={item.id}
+                className="publication-card"
+                onClick={() => setSelectedDraft(item)}
+              >
+                <StatusBadge status={item.status} />
+                <strong>
+                  {item.platform} ·{" "}
+                  {accountFor(item.social_account_id)?.display_name ??
+                    "Account"}
+                </strong>
+                <span>{item.caption.slice(0, 100)}</span>
+              </button>
+            ))}
+        </div>
+        <div>
+          <p className="eyebrow">Scheduled</p>
+          {drafts
+            .filter((item) => item.status === "SCHEDULED")
+            .map((item) => (
+              <article key={item.id} className="publication-card">
+                <StatusBadge status={item.status} />
+                <strong>{item.platform}</strong>
+                <span>
+                  {item.scheduled_at
+                    ? new Date(item.scheduled_at).toLocaleString()
+                    : ""}
+                </span>
+                {workspace.product.can_edit && (
+                  <button
+                    className="danger"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(() =>
+                        catalogApi.cancelPublicationDraft(session, item.id),
+                      )
+                    }
+                  >
+                    Cancel schedule
+                  </button>
+                )}
+              </article>
+            ))}
+        </div>
+        <div>
+          <p className="eyebrow">Published</p>
+          {publications.map((item) => (
+            <article key={item.id} className="publication-card">
+              <StatusBadge status={item.status} />
+              <strong>{item.platform} · Fake publication</strong>
+              <span>
+                {item.published_at
+                  ? new Date(item.published_at).toLocaleString()
+                  : "Published"}
+              </span>
+              {item.canonical_permalink && (
+                <a
+                  href={item.canonical_permalink}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open fake permalink
+                </a>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -4080,7 +4442,16 @@ export function ProductWorkspaceApp() {
                     <ProductionPanel
                       workspace={workspace}
                       onOpenAssets={() => setTab("Assets")}
+                      onPreparePublication={(finalCreativeId) => {
+                        sessionStorage.setItem(
+                          "cm-publication-final",
+                          finalCreativeId,
+                        );
+                        setTab("Published");
+                      }}
                     />
+                  ) : tab === "Published" ? (
+                    <PublishedPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

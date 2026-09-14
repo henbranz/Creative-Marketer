@@ -402,3 +402,11 @@ The media process authenticates as a distinct workload and never reconstructs or
 OWNER from workflow input. Its canonical reload retains the actual initiating User only for
 provenance. Fake providers are rejected outside development/test; real providers require both a
 valid secret and `ALLOW_BILLABLE_MEDIA=true`; deployed workers require an issued workload identity.
+
+## Social publishing controls
+
+Only OWNER and ADMIN members may create accounts, drafts, decisions, schedules, or execution
+requests; members retain tenant-scoped read access. Publish submit and cancel are R4 actions bound to
+the exact draft and destination. Provider credentials are connector-only and never enter the
+SocialAccount, model context, events, UI, audit, or Obsidian. Phase 5 database and domain constraints
+accept only the fake provider, so real social posting is impossible.

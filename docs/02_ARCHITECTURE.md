@@ -329,3 +329,12 @@ The activated independent media worker is a composition adapter, not a new bound
 retains the modular-monolith dependency direction: Temporal coordinates IDs, Production owns the
 authoritative execution port, Tool Execution governs effects, and Catalog owns imported Assets.
 See ADR-031.
+
+## Phase 5 governed publishing boundary
+
+Publishing owns safe SocialAccount metadata, immutable PublicationDraft and Publication facts, and
+the controlled PublicationJob lifecycle. It depends inward on approved FinalCreative and Asset
+facts and outward on existing Permission, Approval, Tool Gateway, Temporal, Audit, and Event ports.
+UI, agent, and workflow code cannot call a social provider directly. Phase 5 has only the
+zero-network FakeSocialProvider. See `docs/24_SOCIAL_MEDIA_MANAGER_AND_GOVERNED_PUBLISHING.md` and
+ADR-036.

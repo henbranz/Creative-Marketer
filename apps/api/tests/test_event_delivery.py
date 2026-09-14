@@ -180,6 +180,9 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         "assembly.plan.created.v1",
         "assembly.final_creative.created.v1",
         "assembly.final_creative.approved_for_publishing.v1",
+        "publishing.draft.created.v1",
+        "publishing.draft.approved.v1",
+        "publishing.publication.published.v1",
     }
     (tmp_path / "bad.json").write_text(
         '{"$schema":"https://json-schema.org/draft/2020-12/schema",'

@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -47,6 +48,12 @@ from creative_marketer.infrastructure.database.production_schema import (
     plan_decisions,
     production_plans,
     production_shots,
+)
+from creative_marketer.infrastructure.database.publishing_schema import (
+    publication_decisions,
+    publication_drafts,
+    publications,
+    social_accounts,
 )
 from creative_marketer.infrastructure.database.research_schema import (
     evidence_snapshots,
@@ -176,6 +183,16 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 "final_creative_decisions": select(final_creative_decisions).where(
                     final_creative_decisions.c.tenant_id == tenant
                 ),
+                "social_accounts": select(social_accounts).where(
+                    social_accounts.c.tenant_id == tenant
+                ),
+                "publication_drafts": select(publication_drafts).where(
+                    publication_drafts.c.tenant_id == tenant
+                ),
+                "publication_decisions": select(publication_decisions).where(
+                    publication_decisions.c.tenant_id == tenant
+                ),
+                "publications": select(publications).where(publications.c.tenant_id == tenant),
             }
             for key, statement in statements.items():
                 result = (await session.execute(statement)).mappings()
@@ -1039,6 +1056,139 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     row["created_at"],
                     {"reason_code": row["reason_code"], "note": row["note"]},
                     (_rel(KnowledgeNodeType.CREATIVE_CONCEPT, row["concept_id"], "decision_for"),),
+                )
+            )
+        for row in rows.get("social_accounts", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.SOCIAL_ACCOUNT,
+                    str(row["id"]),
+                    f"{row['platform'].title()} · {row['display_name']}",
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    {
+                        "platform": row["platform"],
+                        "display_name": row["display_name"],
+                        "username": row["username"],
+                        "provider": row["provider"],
+                    },
+                )
+            )
+        decisions_by_draft = {
+            row["publication_draft_id"]: row for row in rows.get("publication_decisions", [])
+        }
+        publications_by_draft = {
+            row["publication_draft_id"]: row for row in rows.get("publications", [])
+        }
+        for row in rows.get("publication_drafts", []):
+            publication_decision = decisions_by_draft.get(row["id"])
+            publication = publications_by_draft.get(row["id"])
+            relationships = [
+                _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "publishes_product"),
+                _rel(
+                    KnowledgeNodeType.FINAL_CREATIVE,
+                    row["final_creative_id"],
+                    "publishes_final_creative",
+                ),
+                _rel(KnowledgeNodeType.ASSET, row["output_asset_id"], "publishes_asset"),
+                _rel(
+                    KnowledgeNodeType.SOCIAL_ACCOUNT,
+                    row["social_account_id"],
+                    "targets_account",
+                ),
+            ]
+            if publication_decision:
+                relationships.append(
+                    _rel(
+                        KnowledgeNodeType.PUBLICATION_DECISION,
+                        publication_decision["id"],
+                        "has_publication_decision",
+                    )
+                )
+            if publication:
+                relationships.append(
+                    _rel(
+                        KnowledgeNodeType.PUBLICATION,
+                        publication["id"],
+                        "resulted_in_publication",
+                    )
+                )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PUBLICATION_DRAFT,
+                    str(row["id"]),
+                    f"{row['platform'].title()} Publication Draft",
+                    publication_decision["state"] if publication_decision else "PENDING_APPROVAL",
+                    row["created_at"],
+                    publication_decision["created_at"]
+                    if publication_decision
+                    else row["created_at"],
+                    {
+                        "platform": row["platform"],
+                        "mode": row["mode"],
+                        "scheduled_at": row["scheduled_at"],
+                        "hashtags": row["hashtags"],
+                        "caption_digest": "sha256:"
+                        + hashlib.sha256(row["caption"].encode()).hexdigest(),
+                    },
+                    tuple(relationships),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("publication_decisions", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PUBLICATION_DECISION,
+                    str(row["id"]),
+                    f"Publication {row['state'].title()}",
+                    row["state"],
+                    row["created_at"],
+                    row["created_at"],
+                    {"action_digest": row["action_digest"]},
+                    (
+                        _rel(
+                            KnowledgeNodeType.PUBLICATION_DRAFT,
+                            row["publication_draft_id"],
+                            "decision_for",
+                        ),
+                    ),
+                    row["action_digest"],
+                )
+            )
+        for row in rows.get("publications", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PUBLICATION,
+                    str(row["id"]),
+                    f"Published to {row['platform'].title()}",
+                    row["status"],
+                    row["created_at"],
+                    row["published_at"] or row["created_at"],
+                    {
+                        "platform": row["platform"],
+                        "provider": row["provider"],
+                        "external_post_id": row["external_post_id"],
+                        "canonical_permalink": row["canonical_permalink"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.PUBLICATION_DRAFT,
+                            row["publication_draft_id"],
+                            "published_from",
+                        ),
+                        _rel(
+                            KnowledgeNodeType.FINAL_CREATIVE,
+                            row["final_creative_id"],
+                            "published_final_creative",
+                        ),
+                        _rel(
+                            KnowledgeNodeType.SOCIAL_ACCOUNT,
+                            row["social_account_id"],
+                            "published_to",
+                        ),
+                    ),
+                    row["semantic_digest"],
                 )
             )
         by_ref = {node.ref: node for node in nodes}

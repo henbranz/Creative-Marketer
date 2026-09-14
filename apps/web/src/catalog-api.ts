@@ -172,6 +172,52 @@ export interface FinalCreative {
   decision_state: string | null;
   created_at: string;
 }
+export interface SocialAccount {
+  id: string;
+  platform: "facebook" | "instagram" | "tiktok";
+  display_name: string;
+  external_account_id: string;
+  username: string | null;
+  status: string;
+  provider: "fake";
+  capabilities: Record<string, unknown>;
+}
+export interface PublicationDraft {
+  id: string;
+  product_id: string;
+  final_creative_id: string;
+  output_asset_id: string;
+  platform: string;
+  social_account_id: string;
+  external_destination_id: string;
+  caption: string;
+  title: string | null;
+  hashtags: string[];
+  destination_url: string | null;
+  mode: "POST_NOW" | "SCHEDULE";
+  scheduled_at: string | null;
+  semantic_digest: string;
+  decision_state: string | null;
+  approval_action_digest: string | null;
+  status: string;
+  failure_code: string | null;
+  created_at: string;
+}
+export interface Publication {
+  id: string;
+  product_id: string;
+  publication_draft_id: string;
+  final_creative_id: string;
+  output_asset_id: string;
+  platform: string;
+  social_account_id: string;
+  external_post_id: string;
+  canonical_permalink: string | null;
+  provider: "fake";
+  status: "PUBLISHED";
+  submitted_at: string;
+  published_at: string | null;
+}
 
 export interface Session {
   readonly tenantId: string;
@@ -467,6 +513,65 @@ export const catalogApi = {
     request<FinalCreative>(session, `/v1/final-creatives/${finalId}/reject`, {
       method: "POST",
     }),
+  listSocialAccounts: (session: Session) =>
+    request<SocialAccount[]>(session, "/v1/social/accounts"),
+  listPublicationDrafts: (session: Session, productId: string) =>
+    request<PublicationDraft[]>(
+      session,
+      `/v1/products/${productId}/publication-drafts`,
+    ),
+  createPublicationDraft: (
+    session: Session,
+    productId: string,
+    value: {
+      final_creative_id: string;
+      social_account_id: string;
+      caption: string;
+      title: string | null;
+      hashtags: string[];
+      destination_url: string | null;
+      mode: "POST_NOW" | "SCHEDULE";
+      scheduled_at: string | null;
+      platform_settings: Record<string, unknown>;
+    },
+  ) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/products/${productId}/publication-drafts`,
+      { method: "POST", body: JSON.stringify(value) },
+    ),
+  approvePublicationDraft: (session: Session, draftId: string) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/publication-drafts/${draftId}/approve`,
+      { method: "POST" },
+    ),
+  rejectPublicationDraft: (session: Session, draftId: string) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/publication-drafts/${draftId}/reject`,
+      { method: "POST" },
+    ),
+  executePublicationDraft: (session: Session, draftId: string) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/publication-drafts/${draftId}/execute`,
+      { method: "POST" },
+    ),
+  cancelPublicationDraft: (session: Session, draftId: string) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/publication-drafts/${draftId}/cancel`,
+      { method: "POST" },
+    ),
+  reconcilePublicationDraft: (session: Session, draftId: string) =>
+    request<PublicationDraft>(
+      session,
+      `/v1/publication-drafts/${draftId}/reconcile`,
+      { method: "POST" },
+    ),
+  listPublications: (session: Session, productId: string) =>
+    request<Publication[]>(session, `/v1/products/${productId}/publications`),
 };
 
 export async function uploadToGrant(
@@ -542,6 +647,10 @@ export async function obsidianOpenUrl(
     assembly_job: "Production/Assembly",
     final_creative: "Production/Finals",
     final_creative_decision: "Production/Finals",
+    social_account: "Publishing/Accounts",
+    publication_draft: "Publishing/Drafts",
+    publication_decision: "Publishing/Decisions",
+    publication: "Publishing/Published",
   };
   const directory = directories[nodeType];
   if (!directory || !canonicalId.trim())

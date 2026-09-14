@@ -27,6 +27,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     ApprovalBlockingWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
+    PublicationWorkflow,
     ResearcherWorkflow,
     ScheduledPublicationWorkflow,
 )
@@ -40,12 +41,15 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    PublicationWorkflowInput,
+    PublicationWorkflowResult,
     ResearcherWorkflowInput,
     ToolActivityResult,
     ToolWorkflowInput,
     WorkflowState,
     agent_execution_workflow_id,
     generation_workflow_id,
+    publication_workflow_id,
     researcher_workflow_id,
     tool_workflow_id,
 )
@@ -815,3 +819,82 @@ async def test_generic_agent_activity_fails_closed_when_runtime_is_absent_or_fai
     researcher_request = ResearcherWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
     with pytest.raises(ApplicationError, match="not composed"):
         await unavailable.execute_researcher(researcher_request)
+
+
+@pytest.mark.asyncio
+async def test_publication_workflow_reconciles_delayed_result_once(temporal_environment) -> None:
+    class Publishing:
+        submits = 0
+        reconciles = 0
+
+        async def submit(self, tenant_id, draft_id):
+            self.submits += 1
+            return PublicationWorkflowResult(str(draft_id), "SUBMITTED")
+
+        async def reconcile(self, tenant_id, draft_id):
+            self.reconciles += 1
+            return PublicationWorkflowResult(str(draft_id), "PUBLISHED", str(uuid4()))
+
+        async def cancel(self, tenant_id, draft_id):
+            return PublicationWorkflowResult(str(draft_id), "CANCELLED")
+
+    publishing = Publishing()
+    request = PublicationWorkflowInput(
+        str(uuid4()),
+        str(uuid4()),
+        str(uuid4()),
+        reconcile_interval_seconds=1,
+        maximum_reconcile_seconds=10,
+    )
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), publication_jobs=publishing
+    )
+    async with create_worker(temporal_environment.client, activities):
+        result = await temporal_environment.client.execute_workflow(
+            PublicationWorkflow.run,
+            request,
+            id=publication_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+    assert result.status == "PUBLISHED"
+    assert publishing.submits == 1
+    assert publishing.reconciles == 1
+
+
+@pytest.mark.asyncio
+async def test_scheduled_publication_cancels_before_submit(temporal_environment) -> None:
+    class Publishing:
+        submits = 0
+        cancellations = 0
+
+        async def submit(self, tenant_id, draft_id):
+            self.submits += 1
+            return PublicationWorkflowResult(str(draft_id), "PUBLISHED")
+
+        async def reconcile(self, tenant_id, draft_id):
+            raise AssertionError("cancelled publication cannot reconcile")
+
+        async def cancel(self, tenant_id, draft_id):
+            self.cancellations += 1
+            return PublicationWorkflowResult(str(draft_id), "CANCELLED")
+
+    publishing = Publishing()
+    request = PublicationWorkflowInput(
+        str(uuid4()), str(uuid4()), str(uuid4()), scheduled_at_epoch_seconds=4_102_444_800
+    )
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), publication_jobs=publishing
+    )
+    async with create_worker(temporal_environment.client, activities):
+        handle = await temporal_environment.client.start_workflow(
+            PublicationWorkflow.run,
+            request,
+            id=publication_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        await wait_for_status(handle, "SCHEDULED")
+        await handle.signal(PublicationWorkflow.cancel_publication)
+        result = await handle.result()
+    assert result.status == "CANCELLED"
+    assert publishing.submits == 0
+    assert publishing.cancellations == 1

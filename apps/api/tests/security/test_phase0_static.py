@@ -427,6 +427,15 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "governance.tool.execution_succeeded.v1": (
             "sha256:8717b393ccdc75e59e4ab557d8ea6fdc55ece77d31911f4a935c6bf89bc41bd0"
         ),
+        "publishing.draft.created.v1": (
+            "sha256:8f9c6602283fd3f17c829b494c67981d36a729c35c27f74843ad93cef95d2376"
+        ),
+        "publishing.draft.approved.v1": (
+            "sha256:aa1fd7667f0b822974a12c560f8cbe0040d017de55f3f998475bf406e489e74e"
+        ),
+        "publishing.publication.published.v1": (
+            "sha256:da140942d555a4e62fcb4153d9eab72715c4537dd22e20ff71633e52a886754b"
+        ),
         "research.evidence.captured.v1": (
             "sha256:cf112f0c6152b8b3ddd3c8519fe3b2d8a4c5bf88a5b33e4d37f23e52feb1bef5"
         ),
@@ -454,6 +463,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260913_0022"]
+    assert script.get_heads() == ["20260914_0023"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

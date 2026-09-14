@@ -41,6 +41,9 @@ from creative_marketer.infrastructure.database.production_authority import (
 from creative_marketer.infrastructure.database.production_uow import (
     SqlAlchemyProductionUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.publishing_uow import (
+    SqlAlchemyPublishingUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.object_storage.s3 import S3ObjectStore
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
@@ -48,6 +51,14 @@ from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import MediaKind, ProductionPlanDecisionState
 from creative_marketer.production.infrastructure.fakes import DEMO_MP4
 from creative_marketer.production.service import ProductionService
+from creative_marketer.publishing.application import PublishingService
+from creative_marketer.publishing.domain import (
+    PublicationDecisionState,
+    PublicationMode,
+    PublicationStatus,
+    SocialPlatform,
+)
+from creative_marketer.publishing.provider import FakeSocialProvider
 from creative_marketer_api.config import Settings
 from creative_marketer_api.main import create_app
 from scripts import bootstrap_demo
@@ -208,6 +219,42 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
         KnowledgeNodeType.FINAL_CREATIVE,
         KnowledgeNodeType.FINAL_CREATIVE_DECISION,
     } <= node_types
+
+    publishing = PublishingService(
+        SqlAlchemyPublishingUnitOfWorkFactory(sessions), FakeSocialProvider()
+    )
+    social_account = await publishing.create_account(
+        context,
+        platform=SocialPlatform.INSTAGRAM,
+        display_name="Fake Instagram acceptance",
+        external_account_id="fake-instagram-acceptance",
+        username="@fake-acceptance",
+    )
+    assert social_account in await publishing.list_accounts(context)
+    publication_draft = await publishing.create_draft(
+        context,
+        product_id=bootstrap_demo.PRODUCT_ID,
+        final_creative_id=final.id,
+        social_account_id=social_account.id,
+        caption="Exact approved fake acceptance caption",
+        hashtags=("phase5", "fake"),
+        mode=PublicationMode.POST_NOW,
+    )
+    assert (
+        await publishing.get_draft(context, publication_draft.draft.id)
+    ).draft.semantic_digest == publication_draft.draft.semantic_digest
+    assert len(await publishing.list_drafts(context, bootstrap_demo.PRODUCT_ID)) == 1
+    await publishing.decide(context, publication_draft.draft.id, PublicationDecisionState.APPROVED)
+    published_record = await publishing.execute(context, publication_draft.draft.id)
+    assert published_record.job and published_record.job.status is PublicationStatus.PUBLISHED
+    publications = await publishing.list_publications(context, bootstrap_demo.PRODUCT_ID)
+    assert len(publications) == 1
+    assert (await publishing.get_publication(context, publications[0].id)) == publications[0]
+    assert publications[0].canonical_permalink and publications[0].canonical_permalink.startswith(
+        "https://social.invalid/"
+    )
+    assert await publishing.list_drafts(other, bootstrap_demo.PRODUCT_ID) == ()
+    assert await publishing.list_publications(other, bootstrap_demo.PRODUCT_ID) == ()
 
     app = create_app(
         Settings(

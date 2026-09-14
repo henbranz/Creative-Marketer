@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "publishing.draft.created.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["publication_draft_id", "publication_draft_digest", "product_id", "final_creative_id", "social_account_id", "platform"],
+  "properties": {
+    "publication_draft_id": {"type": "string", "format": "uuid"},
+    "publication_draft_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "product_id": {"type": "string", "format": "uuid"},
+    "final_creative_id": {"type": "string", "format": "uuid"},
+    "social_account_id": {"type": "string", "format": "uuid"},
+    "platform": {"enum": ["facebook", "instagram", "tiktok"]}
+  }
+}

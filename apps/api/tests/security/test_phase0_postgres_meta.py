@@ -20,6 +20,7 @@ APPLICATION_SCHEMAS = (
     "catalog",
     "research",
     "knowledge_projection",
+    "publishing",
 )
 
 
@@ -253,6 +254,11 @@ async def test_missing_tenant_context_fails_closed_across_every_implemented_cont
         "research.evidence_snapshots",
         "research.research_targets",
         "research.social_evidence_snapshots",
+        "publishing.social_accounts",
+        "publishing.publication_drafts",
+        "publishing.publication_decisions",
+        "publishing.publication_jobs",
+        "publishing.publications",
     )
     for table in tables:
         try:

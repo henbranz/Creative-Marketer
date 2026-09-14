@@ -36,6 +36,10 @@ class KnowledgeNodeType(StrEnum):
     ASSEMBLY_JOB = "assembly_job"
     FINAL_CREATIVE = "final_creative"
     FINAL_CREATIVE_DECISION = "final_creative_decision"
+    SOCIAL_ACCOUNT = "social_account"
+    PUBLICATION_DRAFT = "publication_draft"
+    PUBLICATION_DECISION = "publication_decision"
+    PUBLICATION = "publication"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

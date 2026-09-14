@@ -225,3 +225,36 @@ class FinalCreativeAssemblyResult:
 
 def final_creative_assembly_workflow_id(value: FinalCreativeAssemblyWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/assembly-plan/{value.assembly_plan_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationWorkflowInput:
+    tenant_id: str
+    publication_draft_id: str
+    correlation_id: str
+    scheduled_at_epoch_seconds: int | None = None
+    reconcile_interval_seconds: int = 30
+    maximum_reconcile_seconds: int = 3600
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.publication_draft_id, "publication_draft_id")
+        _uuid(self.correlation_id, "correlation_id")
+        if self.scheduled_at_epoch_seconds is not None and self.scheduled_at_epoch_seconds < 0:
+            raise ValueError("scheduled publication timestamp is invalid")
+        if not 1 <= self.reconcile_interval_seconds <= 3600:
+            raise ValueError("publication reconciliation interval is invalid")
+        if not 1 <= self.maximum_reconcile_seconds <= 604_800:
+            raise ValueError("publication reconciliation deadline is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class PublicationWorkflowResult:
+    publication_draft_id: str
+    status: str
+    publication_id: str | None = None
+    failure_code: str | None = None
+
+
+def publication_workflow_id(value: PublicationWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/publication-draft/{value.publication_draft_id}"

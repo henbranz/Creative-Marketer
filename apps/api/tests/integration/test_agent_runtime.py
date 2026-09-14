@@ -362,8 +362,19 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     strategist = await CreateTenantAgentDefinition(agent_registry_factory)(
         context, agent_key="creative_strategist", agent_type="creative_strategist"
     )
+    strategist_configuration = creative_configuration()
+    # The persisted V2 product snapshot is intentionally richer than the compact
+    # unit fixture. Keep the integration envelope aligned with the 8k output route
+    # while preserving the same deterministic USD 0.20 maximum-cost ceiling.
+    strategist_configuration = replace(
+        strategist_configuration,
+        run_budget_policy=replace(
+            strategist_configuration.run_budget_policy,
+            max_total_tokens=18_000,
+        ),
+    )
     strategist_version = await CreateAgentVersion(agent_registry_factory)(
-        context, strategist.id, creative_configuration()
+        context, strategist.id, strategist_configuration
     )
     await ActivateAgentVersion(agent_registry_factory)(
         context, strategist.id, strategist_version.id

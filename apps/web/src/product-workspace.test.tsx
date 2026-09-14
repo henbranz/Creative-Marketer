@@ -14,6 +14,8 @@ import {
   type CreativeConceptSet,
   type ProductionJob,
   type ProductionPlan,
+  type PublicationDraft,
+  type SocialAccount,
   type ResearchEvidence,
   type ResearchFetch,
   type ResearchSource,
@@ -96,6 +98,39 @@ const product = {
   created_at: brand.created_at,
   updated_at: brand.updated_at,
   can_edit: true,
+};
+
+const socialAccount: SocialAccount = {
+  id: "a4000000-0000-0000-0000-000000000001",
+  platform: "instagram",
+  display_name: "Fake Instagram",
+  external_account_id: "fake-demo-instagram",
+  username: "@fake-demo",
+  status: "ACTIVE",
+  provider: "fake",
+  capabilities: { media_kinds: ["video"], supports_schedule: true },
+};
+
+const publicationDraft: PublicationDraft = {
+  id: "a5000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  final_creative_id: "a6000000-0000-0000-0000-000000000001",
+  output_asset_id: "a7000000-0000-0000-0000-000000000001",
+  platform: "instagram",
+  social_account_id: socialAccount.id,
+  external_destination_id: socialAccount.external_account_id,
+  caption: "Launch caption",
+  title: null,
+  hashtags: ["launch"],
+  destination_url: null,
+  mode: "POST_NOW",
+  scheduled_at: null,
+  semantic_digest: `sha256:${"f".repeat(64)}`,
+  decision_state: null,
+  approval_action_digest: null,
+  status: "PENDING_APPROVAL",
+  failure_code: null,
+  created_at: product.created_at,
 };
 const brief = {
   product_id: product.id,
@@ -589,6 +624,32 @@ function mocks() {
     sources: [],
   });
   vi.spyOn(catalogApi, "listAssemblyPlans").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listSocialAccounts").mockResolvedValue([socialAccount]);
+  vi.spyOn(catalogApi, "listPublicationDrafts").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listPublications").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "createPublicationDraft").mockResolvedValue(
+    publicationDraft,
+  );
+  vi.spyOn(catalogApi, "approvePublicationDraft").mockResolvedValue({
+    ...publicationDraft,
+    decision_state: "APPROVED",
+    status: "APPROVED",
+  });
+  vi.spyOn(catalogApi, "executePublicationDraft").mockResolvedValue({
+    ...publicationDraft,
+    decision_state: "APPROVED",
+    status: "PUBLISHED",
+  });
+  vi.spyOn(catalogApi, "rejectPublicationDraft").mockResolvedValue({
+    ...publicationDraft,
+    decision_state: "REJECTED",
+    status: "PENDING_APPROVAL",
+  });
+  vi.spyOn(catalogApi, "cancelPublicationDraft").mockResolvedValue({
+    ...publicationDraft,
+    decision_state: "APPROVED",
+    status: "CANCELLED",
+  });
   vi.spyOn(catalogApi, "downloadAsset").mockResolvedValue({
     url: "https://assets.example.test/signed-preview",
     expires_at: product.updated_at,
@@ -1481,6 +1542,56 @@ describe("Product Workspace", () => {
       "API unavailable",
     );
     expect(screen.queryByText("Atlas")).not.toBeInTheDocument();
+  });
+
+  it("renders the governed fake-only publication composer and exact approval", async () => {
+    vi.mocked(catalogApi.listPublicationDrafts).mockResolvedValue([
+      publicationDraft,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    sessionStorage.setItem(
+      "cm-publication-final",
+      publicationDraft.final_creative_id,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Published" }));
+
+    expect(await screen.findByText("Prepare publication")).toBeInTheDocument();
+    expect(screen.getByText("Live posting: Disabled")).toBeInTheDocument();
+    expect(
+      screen.getByText("Provider: FakeSocialProvider"),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Platform and destination account"),
+      ).toHaveValue(socialAccount.id),
+    );
+    fireEvent.change(screen.getByLabelText("Caption"), {
+      target: { value: "Launch caption" },
+    });
+    fireEvent.change(screen.getByLabelText("Hashtags"), {
+      target: { value: "#launch" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Review exact publication" }),
+    );
+
+    const approval = await screen.findByRole("region", {
+      name: "Publication approval summary",
+    });
+    expect(approval).toHaveTextContent("@fake-demo");
+    expect(within(approval).getByText("Launch caption")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve exact publication" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.executePublicationDraft).toHaveBeenCalledWith(
+        expect.anything(),
+        publicationDraft.id,
+      ),
+    );
+    expect(screen.queryByText(/access[_ -]?token/i)).not.toBeInTheDocument();
   });
 
   it("creates a product through the selected brand", async () => {

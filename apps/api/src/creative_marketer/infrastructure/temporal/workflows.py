@@ -25,6 +25,8 @@ with workflow.unsafe.imports_passed_through():
         GenerationWorkflowInput,
         MediaProductionJobResult,
         MediaProductionWorkflowInput,
+        PublicationWorkflowInput,
+        PublicationWorkflowResult,
         ResearcherActivityResult,
         ResearcherWorkflowInput,
         ToolActivityResult,
@@ -273,6 +275,76 @@ class FinalCreativeAssemblyWorkflow:
             WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
         )
         return result
+
+
+@workflow.defn(name="PublicationWorkflow")
+class PublicationWorkflow:
+    """IDs-only schedule, submit, and bounded reconciliation coordinator."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+        self._cancelled = False
+
+    @workflow.signal(name="cancel_publication")
+    def cancel_publication(self) -> None:
+        self._cancelled = True
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: PublicationWorkflowInput) -> PublicationWorkflowResult:
+        if request.scheduled_at_epoch_seconds is not None:
+            self._state = WorkflowState.SCHEDULED
+            delay = request.scheduled_at_epoch_seconds - int(workflow.now().timestamp())
+            if delay > 0:
+                with suppress(TimeoutError):
+                    await workflow.wait_condition(
+                        lambda: self._cancelled, timeout=timedelta(seconds=delay)
+                    )
+        if self._cancelled:
+            result = await self._activity("workflow.cancel_publication", request)
+            self._state = WorkflowState.FAILED
+            return result
+        self._state = WorkflowState.EXECUTING
+        result = await self._activity("workflow.submit_publication", request)
+        if result.status not in {"SUBMITTED", "OUTCOME_UNKNOWN"}:
+            self._state = (
+                WorkflowState.COMPLETED if result.status == "PUBLISHED" else WorkflowState.FAILED
+            )
+            return result
+        deadline = workflow.now() + timedelta(seconds=request.maximum_reconcile_seconds)
+        while workflow.now() < deadline:
+            await workflow.sleep(timedelta(seconds=request.reconcile_interval_seconds))
+            result = await self._activity("workflow.reconcile_publication", request)
+            if result.status not in {"SUBMITTED", "OUTCOME_UNKNOWN"}:
+                self._state = (
+                    WorkflowState.COMPLETED
+                    if result.status == "PUBLISHED"
+                    else WorkflowState.FAILED
+                )
+                return result
+        self._state = WorkflowState.FAILED
+        return PublicationWorkflowResult(
+            request.publication_draft_id,
+            "OUTCOME_UNKNOWN",
+            failure_code="PUBLICATION_RECONCILIATION_DEADLINE_EXCEEDED",
+        )
+
+    @staticmethod
+    async def _activity(name: str, request: PublicationWorkflowInput) -> PublicationWorkflowResult:
+        return cast(
+            PublicationWorkflowResult,
+            await workflow.execute_activity(
+                name,
+                request,
+                result_type=PublicationWorkflowResult,
+                start_to_close_timeout=timedelta(minutes=2),
+                schedule_to_close_timeout=timedelta(minutes=5),
+                retry_policy=TOOL_RETRY_POLICY,
+            ),
+        )
 
 
 @workflow.defn(name="ScheduledPublicationWorkflow")
