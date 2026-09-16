@@ -22,6 +22,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    MeasurementActivityInput,
+    MeasurementActivityResult,
     MediaProductionJobResult,
     PublicationWorkflowInput,
     PublicationWorkflowResult,
@@ -68,6 +70,12 @@ class PublicationJobExecutor(Protocol):
     async def submit(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
     async def reconcile(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
     async def cancel(self, tenant_id: UUID, draft_id: UUID) -> PublicationWorkflowResult: ...
+
+
+class MeasurementJobExecutor(Protocol):
+    async def collect(
+        self, tenant_id: UUID, publication_id: UUID, checkpoint: str
+    ) -> MeasurementActivityResult: ...
 
 
 @dataclass(slots=True)
@@ -120,6 +128,7 @@ class TemporalActivities:
     production_jobs: ProductionJobExecutor | None = None
     assembly_jobs: FinalAssemblyExecutor | None = None
     publication_jobs: PublicationJobExecutor | None = None
+    measurement_jobs: MeasurementJobExecutor | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -326,3 +335,26 @@ class TemporalActivities:
         self, request: PublicationWorkflowInput
     ) -> PublicationWorkflowResult:
         return await self._publication_call("cancel", request)
+
+    @activity.defn(name="workflow.collect_performance")
+    async def collect_performance(
+        self, request: MeasurementActivityInput
+    ) -> MeasurementActivityResult:
+        if self.measurement_jobs is None:
+            raise ApplicationError(
+                "Measurement executor is not composed",
+                type="MEASUREMENT_EXECUTOR_UNAVAILABLE",
+                non_retryable=True,
+            )
+        try:
+            return await self.measurement_jobs.collect(
+                UUID(request.tenant_id),
+                UUID(request.publication_id),
+                f"schedule-v1:{request.checkpoint_index}",
+            )
+        except ApplicationError:
+            raise
+        except Exception as error:
+            raise ApplicationError(
+                "Measurement collection failed", type="MEASUREMENT_COLLECTION_FAILED"
+            ) from error

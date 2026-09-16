@@ -23,6 +23,9 @@ with workflow.unsafe.imports_passed_through():
         GenerationStartResult,
         GenerationState,
         GenerationWorkflowInput,
+        MeasurementActivityInput,
+        MeasurementActivityResult,
+        MeasurementWorkflowInput,
         MediaProductionJobResult,
         MediaProductionWorkflowInput,
         PublicationWorkflowInput,
@@ -375,6 +378,52 @@ class ScheduledPublicationWorkflow:
         final = _tool_result(current)
         self._state = final.state
         return final
+
+
+@workflow.defn(name="PerformanceCollectionWorkflow")
+class PerformanceCollectionWorkflow:
+    """Finite, versioned publication measurement schedule with identifiers-only history."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: MeasurementWorkflowInput) -> MeasurementActivityResult:
+        self._state = WorkflowState.SCHEDULED
+        result = MeasurementActivityResult(request.publication_id, None, "NO_DATA")
+        previous_delay = 0
+        for index, delay in enumerate(request.checkpoint_delays_seconds):
+            if delay > previous_delay:
+                await workflow.sleep(timedelta(seconds=delay - previous_delay))
+            self._state = WorkflowState.EXECUTING
+            activity_input = MeasurementActivityInput(
+                request.tenant_id,
+                request.publication_id,
+                request.correlation_id,
+                index,
+            )
+            result = cast(
+                MeasurementActivityResult,
+                await workflow.execute_activity(
+                    "workflow.collect_performance",
+                    activity_input,
+                    result_type=MeasurementActivityResult,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    schedule_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=TOOL_RETRY_POLICY,
+                ),
+            )
+            if result.status == "FAILED":
+                self._state = WorkflowState.FAILED
+                return result
+            previous_delay = delay
+            self._state = WorkflowState.SCHEDULED
+        self._state = WorkflowState.COMPLETED
+        return result
 
 
 @workflow.defn(name="ResearcherWorkflow")

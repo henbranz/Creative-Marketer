@@ -436,6 +436,12 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "publishing.publication.published.v1": (
             "sha256:da140942d555a4e62fcb4153d9eab72715c4537dd22e20ff71633e52a886754b"
         ),
+        "measurement.performance_snapshot.created.v1": (
+            "sha256:19ae9d452ab9ab726effbd379cc23f933c11a7b3f0c5ff4edaea347c9d9da351"
+        ),
+        "measurement.attribution.recorded.v1": (
+            "sha256:46f470818042bf6dd265983cddcad5a313737796fd3d31447dfcb02af5ce7395"
+        ),
         "research.evidence.captured.v1": (
             "sha256:cf112f0c6152b8b3ddd3c8519fe3b2d8a4c5bf88a5b33e4d37f23e52feb1bef5"
         ),
@@ -463,6 +469,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260914_0023"]
+    assert script.get_heads() == ["20260916_0024"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

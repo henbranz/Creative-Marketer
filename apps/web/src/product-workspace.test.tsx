@@ -15,6 +15,8 @@ import {
   type ProductionJob,
   type ProductionPlan,
   type PublicationDraft,
+  type Publication,
+  type PerformanceSnapshot,
   type SocialAccount,
   type ResearchEvidence,
   type ResearchFetch,
@@ -130,6 +132,41 @@ const publicationDraft: PublicationDraft = {
   approval_action_digest: null,
   status: "PENDING_APPROVAL",
   failure_code: null,
+  created_at: product.created_at,
+};
+const publication: Publication = {
+  id: "a8000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  publication_draft_id: publicationDraft.id,
+  final_creative_id: publicationDraft.final_creative_id,
+  output_asset_id: publicationDraft.output_asset_id,
+  platform: "instagram",
+  social_account_id: socialAccount.id,
+  external_post_id: "fake-post-1",
+  canonical_permalink: "https://social.invalid/fake-post-1",
+  provider: "fake",
+  status: "PUBLISHED",
+  submitted_at: product.created_at,
+  published_at: product.created_at,
+};
+const performanceSnapshot: PerformanceSnapshot = {
+  id: "a9000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  publication_id: publication.id,
+  observation_ids: ["aa000000-0000-0000-0000-000000000001"],
+  latest_metrics: { impressions: "100", clicks: "5" },
+  derived_metrics: [
+    {
+      key: "ctr",
+      value: "0.05",
+      formula_version: "measurement-formulas-v1",
+      unavailable_reason: null,
+    },
+  ],
+  attributed_conversions: 1,
+  attributed_revenue: { USD: "49.95" },
+  freshness: "CURRENT",
+  semantic_digest: `sha256:${"9".repeat(64)}`,
   created_at: product.created_at,
 };
 const brief = {
@@ -627,6 +664,11 @@ function mocks() {
   vi.spyOn(catalogApi, "listSocialAccounts").mockResolvedValue([socialAccount]);
   vi.spyOn(catalogApi, "listPublicationDrafts").mockResolvedValue([]);
   vi.spyOn(catalogApi, "listPublications").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "listProductPerformance").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "performanceHistory").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "collectPublicationPerformance").mockResolvedValue(
+    performanceSnapshot,
+  );
   vi.spyOn(catalogApi, "createPublicationDraft").mockResolvedValue(
     publicationDraft,
   );
@@ -1592,6 +1634,48 @@ describe("Product Workspace", () => {
       ),
     );
     expect(screen.queryByText(/access[_ -]?token/i)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes observed derived and attributed performance without recommendations", async () => {
+    vi.mocked(catalogApi.listPublications).mockResolvedValue([publication]);
+    vi.mocked(catalogApi.listProductPerformance).mockResolvedValue([
+      performanceSnapshot,
+    ]);
+    vi.mocked(catalogApi.performanceHistory).mockResolvedValue([
+      {
+        id: performanceSnapshot.observation_ids![0]!,
+        publication_id: publication.id,
+        metric_key: "impressions",
+        semantics: "CUMULATIVE",
+        value: "100",
+        unit: "count",
+        observed_at: product.created_at,
+        provider: "fake",
+        provider_version: "fake-v1",
+      },
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Performance" }));
+    expect(
+      await screen.findByText("Deterministic measurement"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Observed").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Derived").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Attributed").length).toBeGreaterThan(0);
+    expect(screen.getByText("5.00%")).toBeInTheDocument();
+    expect(screen.getByText("USD 49.95")).toBeInTheDocument();
+    expect(screen.queryByText(/winner|scale|kill/i)).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh performance" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.collectPublicationPerformance).toHaveBeenCalledWith(
+        expect.anything(),
+        publication.id,
+      ),
+    );
   });
 
   it("creates a product through the selected brand", async () => {

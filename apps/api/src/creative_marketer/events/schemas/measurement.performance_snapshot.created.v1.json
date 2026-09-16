@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "measurement.performance_snapshot.created.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["performance_snapshot_id", "publication_id", "product_id", "semantic_digest"],
+  "properties": {
+    "performance_snapshot_id": {"type": "string", "format": "uuid"},
+    "publication_id": {"type": "string", "format": "uuid"},
+    "product_id": {"type": "string", "format": "uuid"},
+    "semantic_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

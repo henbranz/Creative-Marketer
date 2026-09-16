@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "measurement.attribution.recorded.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["attribution_result_id", "conversion_observation_id", "publication_id", "method"],
+  "properties": {
+    "attribution_result_id": {"type": "string", "format": "uuid"},
+    "conversion_observation_id": {"type": "string", "format": "uuid"},
+    "publication_id": {"type": "string", "format": "uuid"},
+    "method": {"const": "DIRECT_REFERENCE"}
+  }
+}

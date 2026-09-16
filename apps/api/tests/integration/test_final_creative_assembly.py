@@ -34,6 +34,9 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.measurement_uow import (
+    SqlAlchemyMeasurementUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.production_authority import (
     MediaWorkloadIdentity,
     SqlAlchemyGenerationAuthority,
@@ -47,6 +50,9 @@ from creative_marketer.infrastructure.database.publishing_uow import (
 from creative_marketer.infrastructure.object_storage.s3 import S3ObjectStore
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
+from creative_marketer.measurement.application import MeasurementService
+from creative_marketer.measurement.domain import MeasurementNotFound
+from creative_marketer.measurement.provider import FakeSocialMetricsProvider
 from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import MediaKind, ProductionPlanDecisionState
 from creative_marketer.production.infrastructure.fakes import DEMO_MP4
@@ -256,6 +262,32 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
     assert await publishing.list_drafts(other, bootstrap_demo.PRODUCT_ID) == ()
     assert await publishing.list_publications(other, bootstrap_demo.PRODUCT_ID) == ()
 
+    measurement = MeasurementService(
+        SqlAlchemyMeasurementUnitOfWorkFactory(sessions), FakeSocialMetricsProvider()
+    )
+    first_snapshot = await measurement.collect(context, publications[0].id)
+    assert first_snapshot.latest_metrics["impressions"] == 100
+    second_snapshot = await measurement.collect(context, publications[0].id)
+    assert second_snapshot.latest_metrics["impressions"] == 250
+    assert len(second_snapshot.observation_ids) > len(first_snapshot.observation_ids)
+    reference = await measurement.issue_reference(
+        context, publications[0].id, "https://example.invalid/product"
+    )
+    conversion, attribution = await measurement.ingest_fake_conversion(
+        context,
+        external_id="integration-order-1",
+        amount=Decimal("49.95"),
+        currency="USD",
+        observed_at=publications[0].published_at or publications[0].created_at,
+        public_code=reference.public_code,
+    )
+    assert conversion.amount == Decimal("49.95")
+    assert attribution and attribution.publication_id == publications[0].id
+    attributed_snapshot = await measurement.get_publication(context, publications[0].id)
+    assert attributed_snapshot.attributed_revenue == {"USD": Decimal("49.95")}
+    with pytest.raises(MeasurementNotFound):
+        await measurement.get_publication(other, publications[0].id)
+
     app = create_app(
         Settings(
             app_env="test",
@@ -312,6 +344,51 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
             await http.get(f"/v1/assembly/jobs/{record.job.id}", headers=auth)
         ).status_code == 200
         assert (await http.get(f"/v1/final-creatives/{final.id}", headers=auth)).status_code == 200
+        performance = await http.get(
+            f"/v1/publications/{publications[0].id}/performance", headers=auth
+        )
+        assert performance.status_code == 200
+        assert Decimal(performance.json()["attributed_revenue"]["USD"]) == Decimal("49.95")
+        assert (
+            await http.get(
+                f"/v1/publications/{publications[0].id}/performance/history", headers=auth
+            )
+        ).status_code == 200
+        assert (
+            await http.get(f"/v1/products/{bootstrap_demo.PRODUCT_ID}/performance", headers=auth)
+        ).status_code == 200
+        assert (
+            await http.post(
+                f"/v1/publications/{publications[0].id}/performance/collect", headers=auth
+            )
+        ).status_code == 200
+        reference_response = await http.post(
+            f"/v1/publications/{publications[0].id}/attribution-references",
+            headers=auth,
+            json={"destination_url": "https://example.invalid/api-product"},
+        )
+        assert reference_response.status_code == 201
+        conversion_response = await http.post(
+            "/v1/measurement/dev/fake-conversions",
+            headers=auth,
+            json={
+                "external_id": "integration-api-order-2",
+                "amount": "12.50",
+                "currency": "EUR",
+                "observed_at": (
+                    publications[0].published_at or publications[0].created_at
+                ).isoformat(),
+                "attribution_code": reference_response.json()["public_code"],
+            },
+        )
+        assert conversion_response.status_code == 200
+        assert conversion_response.json()["method"] == "DIRECT_REFERENCE"
+        assert (
+            await http.get(f"/v1/publications/{uuid4()}/performance", headers=auth)
+        ).status_code == 404
+        assert (
+            await http.get(f"/v1/products/{bootstrap_demo.PRODUCT_ID}/performance")
+        ).status_code == 401
         assert (await http.post(f"/v1/final-creatives/{final.id}/reject", headers=auth)).json()[
             "decision_state"
         ] == "REJECTED"

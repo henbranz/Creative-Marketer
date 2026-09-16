@@ -2439,6 +2439,86 @@ select:focus {
   border-radius: var(--radius-md);
 }
 
+.measurement-legend,
+.performance-overview,
+.performance-metrics,
+.attribution-summary {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.measurement-legend span,
+.performance-metrics span {
+  background: #f2f4ff;
+  border: 1px solid #dfe3f2;
+  border-radius: 999px;
+  color: var(--brand-purple);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.25rem 0.55rem;
+  text-transform: uppercase;
+}
+.performance-overview {
+  margin: 1rem 0;
+}
+.performance-publications {
+  display: grid;
+  gap: 1rem;
+}
+.performance-card {
+  background: white;
+  border: 1px solid #dfe3f2;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: 1rem;
+}
+.performance-card > header {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.performance-card > header div,
+.performance-metrics > div {
+  display: grid;
+  gap: 0.25rem;
+}
+.performance-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin: 1rem 0;
+}
+.performance-metrics > div {
+  background: #f8faff;
+  border-radius: var(--radius-md);
+  padding: 0.8rem;
+}
+.performance-metrics strong {
+  font-size: 1.35rem;
+}
+.metric-history {
+  align-items: end;
+  background: linear-gradient(180deg, rgba(56, 130, 246, 0.08), transparent);
+  border-bottom: 1px solid #dfe3f2;
+  display: flex;
+  gap: 5px;
+  height: 82px;
+  padding: 0.5rem;
+}
+.metric-history i {
+  background: var(--gradient-brand-main);
+  border-radius: 4px 4px 0 0;
+  min-width: 12px;
+}
+.attribution-summary {
+  align-items: center;
+  margin-top: 1rem;
+}
+.attribution-summary small {
+  color: var(--text-muted);
+  flex-basis: 100%;
+}
+
 @keyframes cm-pulse {
   50% {
     opacity: 0.35;

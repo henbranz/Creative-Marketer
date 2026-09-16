@@ -41,6 +41,10 @@ from creative_marketer.infrastructure.database.knowledge_schema import (
     projection_changes,
     projection_nodes,
 )
+from creative_marketer.infrastructure.database.measurement_schema import (
+    attribution_results,
+    performance_snapshots,
+)
 from creative_marketer.infrastructure.database.production_schema import (
     asset_lineage,
     generation_jobs,
@@ -193,6 +197,12 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     publication_decisions.c.tenant_id == tenant
                 ),
                 "publications": select(publications).where(publications.c.tenant_id == tenant),
+                "performance_snapshots": select(performance_snapshots).where(
+                    performance_snapshots.c.tenant_id == tenant
+                ),
+                "attribution_results": select(attribution_results).where(
+                    attribution_results.c.tenant_id == tenant
+                ),
             }
             for key, statement in statements.items():
                 result = (await session.execute(statement)).mappings()
@@ -1156,7 +1166,31 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     row["action_digest"],
                 )
             )
+        snapshots_by_publication: dict[object, list[Mapping[str, Any]]] = {}
+        for snapshot in rows.get("performance_snapshots", []):
+            snapshots_by_publication.setdefault(snapshot["publication_id"], []).append(snapshot)
         for row in rows.get("publications", []):
+            publication_relationships = [
+                _rel(
+                    KnowledgeNodeType.PUBLICATION_DRAFT,
+                    row["publication_draft_id"],
+                    "published_from",
+                ),
+                _rel(
+                    KnowledgeNodeType.FINAL_CREATIVE,
+                    row["final_creative_id"],
+                    "published_final_creative",
+                ),
+                _rel(
+                    KnowledgeNodeType.SOCIAL_ACCOUNT,
+                    row["social_account_id"],
+                    "published_to",
+                ),
+            ]
+            publication_relationships.extend(
+                _rel(KnowledgeNodeType.PERFORMANCE_SNAPSHOT, snapshot["id"], "measured_by")
+                for snapshot in snapshots_by_publication.get(row["id"], [])
+            )
             nodes.append(
                 KnowledgeNode(
                     KnowledgeNodeType.PUBLICATION,
@@ -1171,24 +1205,60 @@ class SqlAlchemyCanonicalKnowledgeReader:
                         "external_post_id": row["external_post_id"],
                         "canonical_permalink": row["canonical_permalink"],
                     },
+                    tuple(publication_relationships),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("performance_snapshots", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PERFORMANCE_SNAPSHOT,
+                    str(row["id"]),
+                    "Performance Snapshot",
+                    row["freshness"],
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "latest_metrics": row["latest_metrics"],
+                        "derived_metrics": row["derived_metrics"],
+                        "attributed_conversions": row["attributed_conversions"],
+                        "attributed_revenue": row["attributed_revenue"],
+                        "freshness": row["freshness"],
+                    },
                     (
                         _rel(
-                            KnowledgeNodeType.PUBLICATION_DRAFT,
-                            row["publication_draft_id"],
-                            "published_from",
-                        ),
-                        _rel(
-                            KnowledgeNodeType.FINAL_CREATIVE,
-                            row["final_creative_id"],
-                            "published_final_creative",
-                        ),
-                        _rel(
-                            KnowledgeNodeType.SOCIAL_ACCOUNT,
-                            row["social_account_id"],
-                            "published_to",
+                            KnowledgeNodeType.PUBLICATION,
+                            row["publication_id"],
+                            "measures_publication",
                         ),
                     ),
                     row["semantic_digest"],
+                )
+            )
+        for row in rows.get("attribution_results", []):
+            digest = (
+                "sha256:"
+                + hashlib.sha256(
+                    f"{row['id']}:{row['method']}:{row['formula_version']}".encode()
+                ).hexdigest()
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.ATTRIBUTION_RESULT,
+                    str(row["id"]),
+                    "Direct Reference Attribution",
+                    "ATTRIBUTED",
+                    row["created_at"],
+                    row["created_at"],
+                    {"method": row["method"], "formula_version": row["formula_version"]},
+                    (
+                        _rel(
+                            KnowledgeNodeType.PUBLICATION,
+                            row["publication_id"],
+                            "attributes_to_publication",
+                        ),
+                    ),
+                    digest,
                 )
             )
         by_ref = {node.ref: node for node in nodes}

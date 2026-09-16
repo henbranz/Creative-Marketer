@@ -21,6 +21,7 @@ APPLICATION_SCHEMAS = (
     "research",
     "knowledge_projection",
     "publishing",
+    "measurement",
 )
 
 

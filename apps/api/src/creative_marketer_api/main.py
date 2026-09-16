@@ -28,6 +28,7 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyAssemblyUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyCreativeUnitOfWorkFactory,
+    SqlAlchemyMeasurementUnitOfWorkFactory,
     SqlAlchemyProductionUnitOfWorkFactory,
     SqlAlchemyPublishingUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
@@ -44,6 +45,8 @@ from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.research import SafeWebFetcher
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
+from creative_marketer.measurement.application import MeasurementService
+from creative_marketer.measurement.provider import FakeSocialMetricsProvider
 from creative_marketer.observability.configuration import (
     ObservabilityConfiguration,
     build_runtime,
@@ -63,6 +66,7 @@ from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.knowledge_routes import create_knowledge_router
+from creative_marketer_api.measurement_routes import create_measurement_router
 from creative_marketer_api.production_routes import create_production_router
 from creative_marketer_api.publishing_routes import create_publishing_router
 from creative_marketer_api.research_routes import create_research_router
@@ -178,6 +182,7 @@ def create_app(
     production_uow = SqlAlchemyProductionUnitOfWorkFactory(session_factory)
     assembly_uow = SqlAlchemyAssemblyUnitOfWorkFactory(session_factory)
     publishing_uow = SqlAlchemyPublishingUnitOfWorkFactory(session_factory)
+    measurement_uow = SqlAlchemyMeasurementUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -286,6 +291,15 @@ def create_app(
             authenticator,
             identity_uow,
             PublishingService(publishing_uow, FakeSocialProvider()),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_measurement_router(
+            authenticator,
+            identity_uow,
+            MeasurementService(measurement_uow, FakeSocialMetricsProvider()),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

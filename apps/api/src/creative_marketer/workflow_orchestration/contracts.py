@@ -258,3 +258,49 @@ class PublicationWorkflowResult:
 
 def publication_workflow_id(value: PublicationWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/publication-draft/{value.publication_draft_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementWorkflowInput:
+    tenant_id: str
+    publication_id: str
+    correlation_id: str
+    checkpoint_delays_seconds: tuple[int, ...] = (3600, 21600, 86400, 259200, 604800)
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.publication_id, "publication_id")
+        _uuid(self.correlation_id, "correlation_id")
+        if not 1 <= len(self.checkpoint_delays_seconds) <= 12:
+            raise ValueError("measurement checkpoint set is invalid")
+        if any(value < 0 or value > 2_592_000 for value in self.checkpoint_delays_seconds):
+            raise ValueError("measurement checkpoint delay is invalid")
+        if tuple(sorted(set(self.checkpoint_delays_seconds))) != self.checkpoint_delays_seconds:
+            raise ValueError("measurement checkpoints must be unique and ascending")
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementActivityInput:
+    tenant_id: str
+    publication_id: str
+    correlation_id: str
+    checkpoint_index: int
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.publication_id, "publication_id")
+        _uuid(self.correlation_id, "correlation_id")
+        if not 0 <= self.checkpoint_index <= 12:
+            raise ValueError("measurement checkpoint index is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class MeasurementActivityResult:
+    publication_id: str
+    snapshot_id: str | None
+    status: str
+    failure_code: str | None = None
+
+
+def measurement_workflow_id(value: MeasurementWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/publication/{value.publication_id}/measurement-v1"

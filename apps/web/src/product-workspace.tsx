@@ -24,6 +24,8 @@ import {
   catalogApi,
   obsidianOpenUrl,
   type Product,
+  type PerformanceObservation,
+  type PerformanceSnapshot,
   type Publication,
   type PublicationDraft,
   type ProductionJob,
@@ -3063,6 +3065,252 @@ function PublishedPanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function formatMetric(value: string | undefined): string {
+  if (value === undefined) return "—";
+  const parsed = Number(value);
+  return Number.isFinite(parsed)
+    ? new Intl.NumberFormat().format(parsed)
+    : value;
+}
+
+function formatRate(value: string | null): string {
+  if (value === null) return "—";
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "—";
+}
+
+function PerformancePanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [publications, setPublications] = useState<Publication[]>([]);
+  const [snapshots, setSnapshots] = useState<PerformanceSnapshot[]>([]);
+  const [history, setHistory] = useState<
+    Record<string, PerformanceObservation[]>
+  >({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    const [published, performance] = await Promise.all([
+      catalogApi.listPublications(session, workspace.product.id),
+      catalogApi.listProductPerformance(session, workspace.product.id),
+    ]);
+    setPublications(published);
+    setSnapshots(performance);
+    const entries = await Promise.all(
+      published.map(
+        async (item) =>
+          [
+            item.id,
+            await catalogApi.performanceHistory(session, item.id),
+          ] as const,
+      ),
+    );
+    setHistory(Object.fromEntries(entries));
+  }, [session, workspace.product.id]);
+
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void refresh().catch((caught: unknown) =>
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Performance data is unavailable.",
+          ),
+        ),
+    );
+  }, [refresh]);
+
+  const snapshotFor = (publicationId: string) =>
+    snapshots.find((item) => item.publication_id === publicationId);
+  const totals = snapshots.reduce(
+    (result, item) => {
+      result.impressions += Number(item.latest_metrics.impressions ?? 0);
+      result.clicks += Number(item.latest_metrics.clicks ?? 0);
+      result.conversions += item.attributed_conversions;
+      return result;
+    },
+    { impressions: 0, clicks: 0, conversions: 0 },
+  );
+
+  return (
+    <div className="workspace-panel performance-panel">
+      <section className="panel-heading">
+        <div>
+          <p className="eyebrow">Deterministic measurement</p>
+          <h2>Performance</h2>
+          <p>
+            Observed platform facts, versioned calculations, and exact-reference
+            attribution.
+          </p>
+        </div>
+        <div className="measurement-legend" aria-label="Metric provenance">
+          <span>Observed</span>
+          <span>Derived</span>
+          <span>Attributed</span>
+        </div>
+      </section>
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+        </div>
+      )}
+      <section
+        className="performance-overview"
+        aria-label="Performance overview"
+      >
+        <Metric
+          label="Observed impressions"
+          value={formatMetric(String(totals.impressions))}
+        />
+        <Metric
+          label="Observed clicks"
+          value={formatMetric(String(totals.clicks))}
+        />
+        <Metric
+          label="Attributed conversions"
+          value={formatMetric(String(totals.conversions))}
+        />
+      </section>
+      {!publications.length ? (
+        <EmptyState icon="↗" title="No published creative to measure">
+          Publish an approved creative before collecting performance facts.
+        </EmptyState>
+      ) : (
+        <section className="performance-publications">
+          {publications.map((publication) => {
+            const snapshot = snapshotFor(publication.id);
+            const observations = history[publication.id] ?? [];
+            const impressions = observations.filter(
+              (item) => item.metric_key === "impressions",
+            );
+            const maximum = Math.max(
+              ...impressions.map((item) => Number(item.value)),
+              1,
+            );
+            const derived = Object.fromEntries(
+              (snapshot?.derived_metrics ?? []).map((item) => [item.key, item]),
+            );
+            return (
+              <article className="performance-card" key={publication.id}>
+                <header>
+                  <div>
+                    <strong>{publication.platform}</strong>
+                    <small>
+                      {publication.published_at
+                        ? new Date(publication.published_at).toLocaleString()
+                        : "Published"}
+                    </small>
+                  </div>
+                  <StatusBadge status={snapshot?.freshness ?? "NO_DATA"} />
+                  {workspace.product.can_edit && (
+                    <button
+                      disabled={busy === publication.id}
+                      onClick={() => {
+                        setBusy(publication.id);
+                        setError("");
+                        void catalogApi
+                          .collectPublicationPerformance(
+                            session,
+                            publication.id,
+                          )
+                          .then(refresh)
+                          .catch((caught: unknown) =>
+                            setError(
+                              caught instanceof Error
+                                ? caught.message
+                                : "Collection failed.",
+                            ),
+                          )
+                          .finally(() => setBusy(null));
+                      }}
+                    >
+                      {busy === publication.id
+                        ? "Collecting…"
+                        : "Refresh performance"}
+                    </button>
+                  )}
+                </header>
+                <div className="performance-metrics">
+                  <div>
+                    <span>Observed</span>
+                    <strong>
+                      {formatMetric(snapshot?.latest_metrics.impressions)}
+                    </strong>
+                    <small>Impressions</small>
+                  </div>
+                  <div>
+                    <span>Observed</span>
+                    <strong>
+                      {formatMetric(snapshot?.latest_metrics.clicks)}
+                    </strong>
+                    <small>Clicks</small>
+                  </div>
+                  <div>
+                    <span>Derived</span>
+                    <strong>{formatRate(derived.ctr?.value ?? null)}</strong>
+                    <small>
+                      CTR · {derived.ctr?.formula_version ?? "unavailable"}
+                    </small>
+                  </div>
+                  <div>
+                    <span>Attributed</span>
+                    <strong>
+                      {formatMetric(
+                        snapshot
+                          ? String(snapshot.attributed_conversions)
+                          : undefined,
+                      )}
+                    </strong>
+                    <small>Exact-reference conversions</small>
+                  </div>
+                </div>
+                <div
+                  className="metric-history"
+                  aria-label="Impressions history"
+                >
+                  {impressions.length ? (
+                    impressions.map((item) => (
+                      <i
+                        key={item.id}
+                        style={{
+                          height: `${Math.max(8, (Number(item.value) / maximum) * 100)}%`,
+                        }}
+                        title={`${item.value} impressions`}
+                      />
+                    ))
+                  ) : (
+                    <span>History unavailable —</span>
+                  )}
+                </div>
+                <div className="attribution-summary">
+                  <strong>Attributed revenue</strong>
+                  {snapshot &&
+                  Object.keys(snapshot.attributed_revenue).length ? (
+                    Object.entries(snapshot.attributed_revenue).map(
+                      ([currency, amount]) => (
+                        <span key={currency}>
+                          {currency} {formatMetric(amount)}
+                        </span>
+                      ),
+                    )
+                  ) : (
+                    <span>—</span>
+                  )}
+                  <small>
+                    Only conversions carrying an exact Creative Manager
+                    reference are included. Currencies are never combined.
+                  </small>
+                </div>
+              </article>
+            );
+          })}
+        </section>
+      )}
+    </div>
+  );
+}
+
 function PillList({
   values,
   empty = "Not provided",
@@ -4452,6 +4700,8 @@ export function ProductWorkspaceApp() {
                     />
                   ) : tab === "Published" ? (
                     <PublishedPanel workspace={workspace} />
+                  ) : tab === "Performance" ? (
+                    <PerformancePanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

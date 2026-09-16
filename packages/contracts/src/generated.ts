@@ -432,6 +432,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/measurement/dev/fake-conversions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Fake Conversion */
+    post: operations["fake_conversion_v1_measurement_dev_fake_conversions_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/production/jobs/{job_id}": {
     parameters: {
       query?: never;
@@ -668,6 +685,23 @@ export interface paths {
     put?: never;
     /** Start Run */
     post: operations["start_run_v1_products__product_id__creative_runs_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/performance": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Product Performance */
+    get: operations["product_performance_v1_products__product_id__performance_get"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -993,6 +1027,74 @@ export interface paths {
     };
     /** Get Publication */
     get: operations["get_publication_v1_publications__publication_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publications/{publication_id}/attribution-references": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Issue Reference */
+    post: operations["issue_reference_v1_publications__publication_id__attribution_references_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publications/{publication_id}/performance": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Publication Performance */
+    get: operations["publication_performance_v1_publications__publication_id__performance_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publications/{publication_id}/performance/collect": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Collect */
+    post: operations["collect_v1_publications__publication_id__performance_collect_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/publications/{publication_id}/performance/history": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** History */
+    get: operations["history_v1_publications__publication_id__performance_history_get"];
     put?: never;
     post?: never;
     delete?: never;
@@ -1570,6 +1672,36 @@ export interface components {
      */
     AssetStatus:
       "pending_upload" | "validating" | "ready" | "rejected" | "archived";
+    /** AttributionReferenceResponse */
+    AttributionReferenceResponse: {
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Public Code */
+      public_code: string;
+      /**
+       * Publication Id
+       * Format: uuid
+       */
+      publication_id: string;
+      /** Tracked Destination Url */
+      tracked_destination_url: string;
+    };
+    /** AttributionReferenceWrite */
+    AttributionReferenceWrite: {
+      /**
+       * Destination Url
+       * Format: uri
+       */
+      destination_url: string;
+    };
     /** AudienceContract */
     AudienceContract: {
       /**
@@ -2042,6 +2174,17 @@ export interface components {
       /** Node Type */
       node_type: string;
     };
+    /** DerivedMetricResponse */
+    DerivedMetricResponse: {
+      /** Formula Version */
+      formula_version: string;
+      /** Key */
+      key: string;
+      /** Unavailable Reason */
+      unavailable_reason: string | null;
+      /** Value */
+      value: string | null;
+    };
     /** DownloadGrantResponse */
     DownloadGrantResponse: {
       /**
@@ -2154,6 +2297,36 @@ export interface components {
        * Format: uuid
        */
       user_id: string;
+    };
+    /** FakeConversionResponse */
+    FakeConversionResponse: {
+      /** Attribution Result Id */
+      attribution_result_id: string | null;
+      /**
+       * Conversion Observation Id
+       * Format: uuid
+       */
+      conversion_observation_id: string;
+      /** Method */
+      method: string | null;
+      /** Publication Id */
+      publication_id: string | null;
+    };
+    /** FakeConversionWrite */
+    FakeConversionWrite: {
+      /** Amount */
+      amount: number | string;
+      /** Attribution Code */
+      attribution_code?: string | null;
+      /** Currency */
+      currency: string;
+      /** External Id */
+      external_id: string;
+      /**
+       * Observed At
+       * Format: date-time
+       */
+      observed_at: string;
     };
     /** FetchResponse */
     FetchResponse: {
@@ -2375,6 +2548,36 @@ export interface components {
      * @enum {string}
      */
     MediaKind: "IMAGE" | "VIDEO";
+    /** ObservationResponse */
+    ObservationResponse: {
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Metric Key */
+      metric_key: string;
+      /**
+       * Observed At
+       * Format: date-time
+       */
+      observed_at: string;
+      /** Provider */
+      provider: string;
+      /** Provider Version */
+      provider_version: string;
+      /**
+       * Publication Id
+       * Format: uuid
+       */
+      publication_id: string;
+      /** Semantics */
+      semantics: string;
+      /** Unit */
+      unit: string;
+      /** Value */
+      value: string;
+    };
     /** OverlayResponse */
     OverlayResponse: {
       /** End Ms */
@@ -3084,30 +3287,6 @@ export interface components {
       /** Website Url */
       website_url: string | null;
     };
-    /** SnapshotResponse */
-    SnapshotResponse: {
-      /**
-       * Created At
-       * Format: date-time
-       */
-      created_at: string;
-      /** Digest */
-      digest: string;
-      /**
-       * Id
-       * Format: uuid
-       */
-      id: string;
-      /**
-       * Product Id
-       * Format: uuid
-       */
-      product_id: string;
-      /** Schema Version */
-      schema_version: number;
-      /** Source Revision */
-      source_revision: number;
-    };
     /** SocialAccountResponse */
     SocialAccountResponse: {
       /** Capabilities */
@@ -3368,7 +3547,9 @@ export interface components {
       brand: components["schemas"]["BrandResponse"];
       brief: components["schemas"]["BriefResponse"];
       completeness: components["schemas"]["CompletenessResponse"];
-      latest_snapshot: components["schemas"]["SnapshotResponse"] | null;
+      latest_snapshot:
+        | components["schemas"]["creative_marketer_api__catalog_routes__SnapshotResponse"]
+        | null;
       product: components["schemas"]["ProductResponse"];
     };
     /**
@@ -3383,6 +3564,71 @@ export interface components {
      */
     creative_marketer__research__domain__SocialPlatform:
       "facebook" | "instagram" | "tiktok" | "other";
+    /** SnapshotResponse */
+    creative_marketer_api__catalog_routes__SnapshotResponse: {
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Digest */
+      digest: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Schema Version */
+      schema_version: number;
+      /** Source Revision */
+      source_revision: number;
+    };
+    /** SnapshotResponse */
+    creative_marketer_api__measurement_routes__SnapshotResponse: {
+      /** Attributed Conversions */
+      attributed_conversions: number;
+      /** Attributed Revenue */
+      attributed_revenue: {
+        [key: string]: string;
+      };
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Derived Metrics */
+      derived_metrics: components["schemas"]["DerivedMetricResponse"][];
+      /** Freshness */
+      freshness: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Latest Metrics */
+      latest_metrics: {
+        [key: string]: string;
+      };
+      /** Observation Ids */
+      observation_ids: string[];
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /**
+       * Publication Id
+       * Format: uuid
+       */
+      publication_id: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+    };
   };
   responses: never;
   parameters: never;
@@ -4346,6 +4592,43 @@ export interface operations {
       };
     };
   };
+  fake_conversion_v1_measurement_dev_fake_conversions_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FakeConversionWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["FakeConversionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   get_job_v1_production_jobs__job_id__get: {
     parameters: {
       query?: never;
@@ -4995,6 +5278,41 @@ export interface operations {
       };
     };
   };
+  product_performance_v1_products__product_id__performance_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["creative_marketer_api__measurement_routes__SnapshotResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   list_plans_v1_products__product_id__production_plans_get: {
     parameters: {
       query?: never;
@@ -5487,7 +5805,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["SnapshotResponse"];
+          "application/json": components["schemas"]["creative_marketer_api__catalog_routes__SnapshotResponse"];
         };
       };
       /** @description Validation Error */
@@ -5522,7 +5840,7 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["SnapshotResponse"];
+          "application/json": components["schemas"]["creative_marketer_api__catalog_routes__SnapshotResponse"];
         };
       };
       /** @description Validation Error */
@@ -5803,6 +6121,150 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["PublicationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  issue_reference_v1_publications__publication_id__attribution_references_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        publication_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AttributionReferenceWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AttributionReferenceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  publication_performance_v1_publications__publication_id__performance_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        publication_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["creative_marketer_api__measurement_routes__SnapshotResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  collect_v1_publications__publication_id__performance_collect_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        publication_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["creative_marketer_api__measurement_routes__SnapshotResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  history_v1_publications__publication_id__performance_history_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        publication_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ObservationResponse"][];
         };
       };
       /** @description Validation Error */

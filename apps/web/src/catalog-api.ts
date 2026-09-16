@@ -10,7 +10,8 @@ export type BriefWrite = components["schemas"]["BriefContract"];
 export type Product = components["schemas"]["ProductResponse"];
 export type ProductCreate = components["schemas"]["ProductCreate"];
 export type Workspace = components["schemas"]["WorkspaceResponse"];
-export type Snapshot = components["schemas"]["SnapshotResponse"];
+export type Snapshot =
+  components["schemas"]["creative_marketer_api__catalog_routes__SnapshotResponse"];
 export type Asset = components["schemas"]["AssetResponse"];
 export type AssetCreate = components["schemas"]["AssetCreate"];
 export type UploadGrant = components["schemas"]["UploadGrantResponse"];
@@ -217,6 +218,36 @@ export interface Publication {
   status: "PUBLISHED";
   submitted_at: string;
   published_at: string | null;
+}
+export interface DerivedPerformanceMetric {
+  key: "ctr" | "engagement_rate" | "conversion_rate";
+  value: string | null;
+  formula_version: string;
+  unavailable_reason: string | null;
+}
+export interface PerformanceSnapshot {
+  id: string;
+  product_id: string;
+  publication_id: string;
+  observation_ids: string[];
+  latest_metrics: Record<string, string>;
+  derived_metrics: DerivedPerformanceMetric[];
+  attributed_conversions: number;
+  attributed_revenue: Record<string, string>;
+  freshness: "CURRENT" | "STALE" | "NO_DATA";
+  semantic_digest: string;
+  created_at: string;
+}
+export interface PerformanceObservation {
+  id: string;
+  publication_id: string;
+  metric_key: string;
+  semantics: "CUMULATIVE" | "INTERVAL" | "DURATION" | "RATIO";
+  value: string;
+  unit: string;
+  observed_at: string;
+  provider: "fake";
+  provider_version: string;
 }
 
 export interface Session {
@@ -572,6 +603,22 @@ export const catalogApi = {
     ),
   listPublications: (session: Session, productId: string) =>
     request<Publication[]>(session, `/v1/products/${productId}/publications`),
+  listProductPerformance: (session: Session, productId: string) =>
+    request<PerformanceSnapshot[]>(
+      session,
+      `/v1/products/${productId}/performance`,
+    ),
+  collectPublicationPerformance: (session: Session, publicationId: string) =>
+    request<PerformanceSnapshot>(
+      session,
+      `/v1/publications/${publicationId}/performance/collect`,
+      { method: "POST" },
+    ),
+  performanceHistory: (session: Session, publicationId: string) =>
+    request<PerformanceObservation[]>(
+      session,
+      `/v1/publications/${publicationId}/performance/history`,
+    ),
 };
 
 export async function uploadToGrant(
@@ -651,6 +698,8 @@ export async function obsidianOpenUrl(
     publication_draft: "Publishing/Drafts",
     publication_decision: "Publishing/Decisions",
     publication: "Publishing/Published",
+    performance_snapshot: "Performance/Snapshots",
+    attribution_result: "Performance/Attribution",
   };
   const directory = directories[nodeType];
   if (!directory || !canonicalId.trim())

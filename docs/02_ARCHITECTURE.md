@@ -123,6 +123,9 @@ Production plans, asset requirements, generations, QA, provider jobs.
 ### Marketing
 Experiments, channel posts, schedules, captions, links, UTMs, metrics.
 
+### Measurement
+Provider-neutral performance observations, deterministic collection/cursors, versioned derived metrics, explicit attribution references, PII-free conversion observations, and immutable performance snapshots. Measurement never uses AgentRuntime and never controls publishing.
+
 ### Commerce
 Orders, line items, fulfillment, inventory, production requirements.
 

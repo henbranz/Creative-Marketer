@@ -6,7 +6,7 @@ import os
 import re
 from datetime import timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -27,6 +27,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     ApprovalBlockingWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
+    PerformanceCollectionWorkflow,
     PublicationWorkflow,
     ResearcherWorkflow,
     ScheduledPublicationWorkflow,
@@ -41,6 +42,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationStartResult,
     GenerationState,
     GenerationWorkflowInput,
+    MeasurementActivityResult,
+    MeasurementWorkflowInput,
     PublicationWorkflowInput,
     PublicationWorkflowResult,
     ResearcherWorkflowInput,
@@ -49,6 +52,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     WorkflowState,
     agent_execution_workflow_id,
     generation_workflow_id,
+    measurement_workflow_id,
     publication_workflow_id,
     researcher_workflow_id,
     tool_workflow_id,
@@ -898,3 +902,42 @@ async def test_scheduled_publication_cancels_before_submit(temporal_environment)
     assert result.status == "CANCELLED"
     assert publishing.submits == 0
     assert publishing.cancellations == 1
+
+
+@pytest.mark.asyncio
+async def test_performance_collection_uses_finite_ids_only_checkpoints_and_replays(
+    temporal_environment,
+) -> None:
+    class Measurement:
+        def __init__(self):
+            self.checkpoints = []
+
+        async def collect(self, tenant_id, publication_id, checkpoint):
+            self.checkpoints.append((tenant_id, publication_id, checkpoint))
+            return MeasurementActivityResult(str(publication_id), str(uuid4()), "SUCCEEDED")
+
+    measurement = Measurement()
+    request = MeasurementWorkflowInput(
+        str(uuid4()), str(uuid4()), str(uuid4()), checkpoint_delays_seconds=(1, 2, 3)
+    )
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), measurement_jobs=measurement
+    )
+    async with create_worker(temporal_environment.client, activities):
+        handle = await temporal_environment.client.start_workflow(
+            PerformanceCollectionWorkflow.run,
+            request,
+            id=measurement_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        result = await handle.result()
+        history = await handle.fetch_history()
+    assert result.status == "SUCCEEDED"
+    assert [item[2] for item in measurement.checkpoints] == [
+        "schedule-v1:0",
+        "schedule-v1:1",
+        "schedule-v1:2",
+    ]
+    assert all(item[0] == UUID(request.tenant_id) for item in measurement.checkpoints)
+    replay = await Replayer(workflows=[PerformanceCollectionWorkflow]).replay_workflow(history)
+    assert replay.replay_failure is None

@@ -40,6 +40,8 @@ class KnowledgeNodeType(StrEnum):
     PUBLICATION_DRAFT = "publication_draft"
     PUBLICATION_DECISION = "publication_decision"
     PUBLICATION = "publication"
+    PERFORMANCE_SNAPSHOT = "performance_snapshot"
+    ATTRIBUTION_RESULT = "attribution_result"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

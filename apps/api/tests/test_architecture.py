@@ -261,3 +261,25 @@ def test_knowledge_projection_domain_is_provider_and_adapter_neutral() -> None:
         path for path in root.glob("**/*.py") if "OBSIDIAN_VAULT_PATH" in path.read_text()
     ]
     assert filesystem_users == [root / "infrastructure" / "obsidian" / "bridge.py"]
+
+
+def test_measurement_is_deterministic_fake_only_and_pii_minimized() -> None:
+    root = Path(__file__).parents[1] / "src" / "creative_marketer"
+    measurement = root / "measurement"
+    source = "\n".join(path.read_text().lower() for path in measurement.glob("*.py"))
+    assert imported_roots(list(measurement.glob("*.py"))).isdisjoint(
+        {"openai", "temporalio", "fastapi", "sqlalchemy", "requests", "httpx"}
+    )
+    for forbidden in (
+        "agentruntime",
+        "shopify",
+        "woocommerce",
+        "stripe",
+        "customer_email",
+        "customer_phone",
+        "shipping_address",
+        "raw_provider_response",
+    ):
+        assert forbidden not in source
+    assert 'provider != "fake"' in source
+    assert '"roas"' not in source

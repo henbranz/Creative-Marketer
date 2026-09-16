@@ -903,6 +903,58 @@
         "title": "AssetStatus",
         "type": "string"
       },
+      "AttributionReferenceResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "public_code": {
+            "title": "Public Code",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "tracked_destination_url": {
+            "title": "Tracked Destination Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "publication_id",
+          "public_code",
+          "tracked_destination_url",
+          "created_at"
+        ],
+        "title": "AttributionReferenceResponse",
+        "type": "object"
+      },
+      "AttributionReferenceWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "destination_url": {
+            "format": "uri",
+            "maxLength": 2083,
+            "minLength": 1,
+            "title": "Destination Url",
+            "type": "string"
+          }
+        },
+        "required": ["destination_url"],
+        "title": "AttributionReferenceWrite",
+        "type": "object"
+      },
       "AudienceContract": {
         "additionalProperties": false,
         "properties": {
@@ -1984,6 +2036,45 @@
         "title": "DeletedNodeResponse",
         "type": "object"
       },
+      "DerivedMetricResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "formula_version": {
+            "title": "Formula Version",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": ["key", "value", "formula_version", "unavailable_reason"],
+        "title": "DerivedMetricResponse",
+        "type": "object"
+      },
       "DownloadGrantResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2197,6 +2288,109 @@
           "correlation_id"
         ],
         "title": "ExecutionContextResponse",
+        "type": "object"
+      },
+      "FakeConversionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution_result_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution Result Id"
+          },
+          "conversion_observation_id": {
+            "format": "uuid",
+            "title": "Conversion Observation Id",
+            "type": "string"
+          },
+          "method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Method"
+          },
+          "publication_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publication Id"
+          }
+        },
+        "required": [
+          "conversion_observation_id",
+          "attribution_result_id",
+          "publication_id",
+          "method"
+        ],
+        "title": "FakeConversionResponse",
+        "type": "object"
+      },
+      "FakeConversionWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "amount": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*(?:\\d{0,21}|(?=[\\d.]{1,31}0*$)\\d{0,21}\\.\\d{0,9}0*$)",
+                "type": "string"
+              }
+            ],
+            "title": "Amount"
+          },
+          "attribution_code": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 40,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attribution Code"
+          },
+          "currency": {
+            "pattern": "^[A-Z]{3}$",
+            "title": "Currency",
+            "type": "string"
+          },
+          "external_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "External Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          }
+        },
+        "required": ["external_id", "amount", "currency", "observed_at"],
+        "title": "FakeConversionWrite",
         "type": "object"
       },
       "FetchResponse": {
@@ -2834,6 +3028,64 @@
         "enum": ["IMAGE", "VIDEO"],
         "title": "MediaKind",
         "type": "string"
+      },
+      "ObservationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metric_key": {
+            "title": "Metric Key",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_version": {
+            "title": "Provider Version",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "semantics": {
+            "title": "Semantics",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "publication_id",
+          "metric_key",
+          "semantics",
+          "value",
+          "unit",
+          "observed_at",
+          "provider",
+          "provider_version"
+        ],
+        "title": "ObservationResponse",
+        "type": "object"
       },
       "OverlayResponse": {
         "additionalProperties": false,
@@ -4671,48 +4923,6 @@
         "title": "ResearchTargetResponse",
         "type": "object"
       },
-      "SnapshotResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "digest": {
-            "title": "Digest",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "product_id": {
-            "format": "uuid",
-            "title": "Product Id",
-            "type": "string"
-          },
-          "schema_version": {
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "source_revision": {
-            "title": "Source Revision",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "product_id",
-          "schema_version",
-          "source_revision",
-          "digest",
-          "created_at"
-        ],
-        "title": "SnapshotResponse",
-        "type": "object"
-      },
       "SocialAccountResponse": {
         "additionalProperties": false,
         "properties": {
@@ -5387,7 +5597,7 @@
           "latest_snapshot": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/SnapshotResponse"
+                "$ref": "#/components/schemas/creative_marketer_api__catalog_routes__SnapshotResponse"
               },
               {
                 "type": "null"
@@ -5417,6 +5627,131 @@
         "enum": ["facebook", "instagram", "tiktok", "other"],
         "title": "SocialPlatform",
         "type": "string"
+      },
+      "creative_marketer_api__catalog_routes__SnapshotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source_revision": {
+            "title": "Source Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "schema_version",
+          "source_revision",
+          "digest",
+          "created_at"
+        ],
+        "title": "SnapshotResponse",
+        "type": "object"
+      },
+      "creative_marketer_api__measurement_routes__SnapshotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "attributed_conversions": {
+            "title": "Attributed Conversions",
+            "type": "integer"
+          },
+          "attributed_revenue": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "title": "Attributed Revenue",
+            "type": "object"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "derived_metrics": {
+            "items": {
+              "$ref": "#/components/schemas/DerivedMetricResponse"
+            },
+            "title": "Derived Metrics",
+            "type": "array"
+          },
+          "freshness": {
+            "title": "Freshness",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "latest_metrics": {
+            "additionalProperties": {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            },
+            "title": "Latest Metrics",
+            "type": "object"
+          },
+          "observation_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Observation Ids",
+            "type": "array"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "publication_id": {
+            "format": "uuid",
+            "title": "Publication Id",
+            "type": "string"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "publication_id",
+          "observation_ids",
+          "latest_metrics",
+          "derived_metrics",
+          "attributed_conversions",
+          "attributed_revenue",
+          "freshness",
+          "semantic_digest",
+          "created_at"
+        ],
+        "title": "SnapshotResponse",
+        "type": "object"
       }
     }
   },
@@ -7771,6 +8106,97 @@
         "tags": ["identity"]
       }
     },
+    "/v1/measurement/dev/fake-conversions": {
+      "post": {
+        "operationId": "fake_conversion_v1_measurement_dev_fake_conversions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FakeConversionWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FakeConversionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fake Conversion",
+        "tags": ["measurement"]
+      }
+    },
     "/v1/production/jobs/{job_id}": {
       "get": {
         "operationId": "get_job_v1_production_jobs__job_id__get",
@@ -9493,6 +9919,101 @@
         "tags": ["creative"]
       }
     },
+    "/v1/products/{product_id}/performance": {
+      "get": {
+        "operationId": "product_performance_v1_products__product_id__performance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/creative_marketer_api__measurement_routes__SnapshotResponse"
+                  },
+                  "title": "Response Product Performance V1 Products  Product Id  Performance Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Product Performance",
+        "tags": ["measurement"]
+      }
+    },
     "/v1/products/{product_id}/production/plans": {
       "get": {
         "operationId": "list_plans_v1_products__product_id__production_plans_get",
@@ -10810,7 +11331,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SnapshotResponse"
+                  "$ref": "#/components/schemas/creative_marketer_api__catalog_routes__SnapshotResponse"
                 }
               }
             },
@@ -10901,7 +11422,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SnapshotResponse"
+                  "$ref": "#/components/schemas/creative_marketer_api__catalog_routes__SnapshotResponse"
                 }
               }
             },
@@ -11652,6 +12173,384 @@
         },
         "summary": "Get Publication",
         "tags": ["publishing"]
+      }
+    },
+    "/v1/publications/{publication_id}/attribution-references": {
+      "post": {
+        "operationId": "issue_reference_v1_publications__publication_id__attribution_references_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publication_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publication Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributionReferenceWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttributionReferenceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue Reference",
+        "tags": ["measurement"]
+      }
+    },
+    "/v1/publications/{publication_id}/performance": {
+      "get": {
+        "operationId": "publication_performance_v1_publications__publication_id__performance_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publication_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publication Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/creative_marketer_api__measurement_routes__SnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publication Performance",
+        "tags": ["measurement"]
+      }
+    },
+    "/v1/publications/{publication_id}/performance/collect": {
+      "post": {
+        "operationId": "collect_v1_publications__publication_id__performance_collect_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publication_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publication Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/creative_marketer_api__measurement_routes__SnapshotResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Collect",
+        "tags": ["measurement"]
+      }
+    },
+    "/v1/publications/{publication_id}/performance/history": {
+      "get": {
+        "operationId": "history_v1_publications__publication_id__performance_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "publication_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Publication Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ObservationResponse"
+                  },
+                  "title": "Response History V1 Publications  Publication Id  Performance History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "History",
+        "tags": ["measurement"]
       }
     },
     "/v1/research-evidence/{evidence_id}": {
