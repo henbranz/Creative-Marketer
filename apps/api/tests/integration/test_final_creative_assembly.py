@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
@@ -10,9 +11,21 @@ from uuid import uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import insert, select, text
 from sqlalchemy.exc import DBAPIError
 
+from creative_marketer.agent_runtime.application import (
+    AgentRunService,
+    ModelProviderRegistry,
+    ModelRouter,
+    initial_creative_strategist_route,
+    initial_intelligence_route,
+)
+from creative_marketer.agent_runtime.domain import (
+    AgentRunNotReady,
+    ModelInvocationResult,
+    ModelUsage,
+)
 from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.assembly.domain import (
     AssemblyJobStatus,
@@ -23,16 +36,33 @@ from creative_marketer.assembly.execution import AssemblyJobExecutor, AssemblyWo
 from creative_marketer.assembly.rendering import MaterializedSource, RenderResult
 from creative_marketer.catalog.asset_application import AssetService
 from creative_marketer.catalog.asset_domain import AssetKind, AssetRole, AssetStatus
+from creative_marketer.creative.application import CreativeService
+from creative_marketer.creative.domain import ChannelIntent, CreativeStrategyRequest
+from creative_marketer.identity.domain import MembershipRole
+from creative_marketer.infrastructure.database.agent_runtime_uow import (
+    SqlAlchemyAgentRuntimeUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.assembly_uow import (
     SqlAlchemyAssemblyUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.catalog_uow import (
     SqlAlchemyCatalogUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.creative_uow import (
+    SqlAlchemyCreativeUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.intelligence_uow import (
+    SqlAlchemyIntelligenceUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
+)
+from creative_marketer.infrastructure.database.measurement_schema import (
+    collection_runs,
+    performance_observations,
+    performance_snapshots,
 )
 from creative_marketer.infrastructure.database.measurement_uow import (
     SqlAlchemyMeasurementUnitOfWorkFactory,
@@ -44,10 +74,26 @@ from creative_marketer.infrastructure.database.production_authority import (
 from creative_marketer.infrastructure.database.production_uow import (
     SqlAlchemyProductionUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.publishing_schema import (
+    publication_drafts,
+)
+from creative_marketer.infrastructure.database.publishing_schema import (
+    publications as publication_rows,
+)
 from creative_marketer.infrastructure.database.publishing_uow import (
     SqlAlchemyPublishingUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.infrastructure.object_storage.s3 import S3ObjectStore
+from creative_marketer.intelligence.application import IntelligenceService
+from creative_marketer.intelligence.domain import (
+    DataTrustLevel,
+    ExperimentDecisionKind,
+    ExperimentHandoffDenied,
+    InsightDecisionKind,
+    IntelligenceNotFound,
+    IntelligencePermissionDenied,
+)
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
 from creative_marketer.measurement.application import MeasurementService
@@ -107,6 +153,114 @@ class FixtureRenderer:
             len(DEMO_MP4),
             digest,
         )
+
+
+async def _seed_matched_synthetic_history(
+    admin_engine,
+    *,
+    tenant_id,
+    product_id,
+    source_draft_id,
+    source_publication_id,
+) -> None:
+    """Add three older canonical +6h fixtures for the deterministic median baseline."""
+
+    async with admin_engine.begin() as connection:
+        source_draft = dict(
+            (
+                await connection.execute(
+                    select(publication_drafts).where(publication_drafts.c.id == source_draft_id)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        source_publication = dict(
+            (
+                await connection.execute(
+                    select(publication_rows).where(publication_rows.c.id == source_publication_id)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        for index, impressions in enumerate((120, 160, 200), start=1):
+            created_at = datetime.now(UTC) - timedelta(days=8 - index)
+            draft_id, publication_id, observation_id = uuid4(), uuid4(), uuid4()
+            draft = {
+                **source_draft,
+                "id": draft_id,
+                "semantic_digest": "sha256:"
+                + f"history-draft-{index}".encode().hex().ljust(64, "0")[:64],
+                "created_at": created_at,
+            }
+            publication = {
+                **source_publication,
+                "id": publication_id,
+                "publication_draft_id": draft_id,
+                "external_post_id": f"fake-history-{index}",
+                "external_operation_id": f"fake-history-operation-{index}",
+                "request_digest": "sha256:"
+                + f"history-request-{index}".encode().hex().ljust(64, "0")[:64],
+                "response_metadata_digest": "sha256:"
+                + f"history-response-{index}".encode().hex().ljust(64, "0")[:64],
+                "semantic_digest": "sha256:"
+                + f"history-publication-{index}".encode().hex().ljust(64, "0")[:64],
+                "submitted_at": created_at,
+                "published_at": created_at,
+                "created_at": created_at,
+            }
+            await connection.execute(insert(publication_drafts).values(**draft))
+            await connection.execute(insert(publication_rows).values(**publication))
+            await connection.execute(
+                insert(performance_observations).values(
+                    id=observation_id,
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    publication_id=publication_id,
+                    metric_key="impressions",
+                    semantics="CUMULATIVE",
+                    value=Decimal(impressions),
+                    unit="COUNT",
+                    observed_at=created_at + timedelta(hours=6),
+                    provider="fake",
+                    provider_version="fixture-v1",
+                    source_digest="sha256:"
+                    + f"history-source-{index}".encode().hex().ljust(64, "0")[:64],
+                    created_at=created_at + timedelta(hours=6),
+                )
+            )
+            completed_at = created_at + timedelta(hours=6)
+            await connection.execute(
+                insert(collection_runs).values(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    publication_id=publication_id,
+                    status="SUCCEEDED",
+                    checkpoint="schedule-v1:1",
+                    cursor=None,
+                    failure_code=None,
+                    created_at=completed_at,
+                    completed_at=completed_at,
+                )
+            )
+            await connection.execute(
+                insert(performance_snapshots).values(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    product_id=product_id,
+                    publication_id=publication_id,
+                    observation_ids=[observation_id],
+                    latest_metrics={"impressions": impressions},
+                    derived_metrics=[],
+                    attributed_conversions=0,
+                    attributed_revenue={},
+                    freshness="CURRENT",
+                    semantic_digest="sha256:"
+                    + f"history-snapshot-{index}".encode().hex().ljust(64, "0")[:64],
+                    created_at=completed_at,
+                )
+            )
 
 
 @pytest.mark.postgres
@@ -265,11 +419,22 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
     measurement = MeasurementService(
         SqlAlchemyMeasurementUnitOfWorkFactory(sessions), FakeSocialMetricsProvider()
     )
-    first_snapshot = await measurement.collect(context, publications[0].id)
+    first_snapshot = await measurement.collect(
+        context, publications[0].id, checkpoint="schedule-v1:0"
+    )
     assert first_snapshot.latest_metrics["impressions"] == 100
-    second_snapshot = await measurement.collect(context, publications[0].id)
+    second_snapshot = await measurement.collect(
+        context, publications[0].id, checkpoint="schedule-v1:1"
+    )
     assert second_snapshot.latest_metrics["impressions"] == 250
     assert len(second_snapshot.observation_ids) > len(first_snapshot.observation_ids)
+    await _seed_matched_synthetic_history(
+        admin_engine,
+        tenant_id=context.tenant_id,
+        product_id=bootstrap_demo.PRODUCT_ID,
+        source_draft_id=publication_draft.draft.id,
+        source_publication_id=publications[0].id,
+    )
     reference = await measurement.issue_reference(
         context, publications[0].id, "https://example.invalid/product"
     )
@@ -288,6 +453,73 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
     with pytest.raises(MeasurementNotFound):
         await measurement.get_publication(other, publications[0].id)
 
+    def intelligence_model(invocation):
+        value = (
+            bootstrap_demo._intelligence_output(invocation)
+            if invocation.output_contract_key == "intelligence.intelligence_report"
+            else bootstrap_demo._creative_output(invocation)
+        )
+        return ModelInvocationResult(
+            value,
+            f"phase6-{invocation.output_contract_key}",
+            ModelUsage(100, 100, 200),
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    runtime = AgentRunService(
+        SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
+        ModelRouter((initial_intelligence_route(), initial_creative_strategist_route())),
+        ModelProviderRegistry({"openai": FakeModelProvider(intelligence_model)}),
+        bootstrap_demo.DemoWorkload(),
+    )
+    intelligence_run = await runtime.request_intelligence(
+        context,
+        product_id=bootstrap_demo.PRODUCT_ID,
+        idempotency_key="phase6-intelligence-integration",
+    )
+    completed_intelligence = await runtime.execute(context.tenant_id, intelligence_run.id)
+    assert completed_intelligence.status.value == "SUCCEEDED"
+    intelligence = IntelligenceService(SqlAlchemyIntelligenceUnitOfWorkFactory(sessions))
+    reports = await intelligence.list_reports(context, bootstrap_demo.PRODUCT_ID)
+    assert len(reports) == 1
+    report, candidates, proposals = await intelligence.get_report(context, reports[0].id)
+    assert report.data_trust_level is DataTrustLevel.SYNTHETIC
+    assert len(candidates) == len(proposals) == 1
+    assert candidates[0].confidence.value == "LOW"
+    assert proposals[0].source_intelligence_report_id == report.id
+    assert await intelligence.list_reports(other, bootstrap_demo.PRODUCT_ID) == ()
+    with pytest.raises(IntelligenceNotFound):
+        await intelligence.get_report(context, uuid4())
+    with pytest.raises(IntelligenceNotFound):
+        await intelligence.decide_insight(context, uuid4(), InsightDecisionKind.REJECT)
+    with pytest.raises(IntelligenceNotFound):
+        await intelligence.decide_experiment(context, uuid4(), ExperimentDecisionKind.REJECTED)
+    with pytest.raises(IntelligencePermissionDenied):
+        await intelligence.decide_insight(
+            replace(context, membership_role=MembershipRole.MEMBER),
+            candidates[0].id,
+            InsightDecisionKind.REJECT,
+        )
+    rejected_insight = await intelligence.decide_insight(
+        context, candidates[0].id, InsightDecisionKind.REJECT
+    )
+    rejected_experiment = await intelligence.decide_experiment(
+        context, proposals[0].id, ExperimentDecisionKind.REJECTED
+    )
+    assert rejected_insight.decision is InsightDecisionKind.REJECT
+    assert rejected_experiment.decision is ExperimentDecisionKind.REJECTED
+    with pytest.raises(ExperimentHandoffDenied):
+        await intelligence.approved_proposal(context, proposals[0].id)
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_strategist(
+            context,
+            product_id=bootstrap_demo.PRODUCT_ID,
+            request=CreativeStrategyRequest(3, ChannelIntent.ORGANIC_SHORT_FORM),
+            idempotency_key="phase6-rejected-experiment",
+            approved_experiment_proposal_id=proposals[0].id,
+        )
+
     app = create_app(
         Settings(
             app_env="test",
@@ -300,12 +532,14 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
             object_storage_public_endpoint_url=endpoint,
             object_storage_access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
             object_storage_secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
+            model_provider_backend="fake",
         )
     )
     auth = {
         "Authorization": "Bearer local-demo|owner",
         "X-Tenant-ID": str(context.tenant_id),
     }
+    creative_run_id = None
     manual_shot_id = next(
         shot_id
         for item in record.plan.items
@@ -389,11 +623,108 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
         assert (
             await http.get(f"/v1/products/{bootstrap_demo.PRODUCT_ID}/performance")
         ).status_code == 401
+        listed_reports = await http.get(
+            f"/v1/products/{bootstrap_demo.PRODUCT_ID}/intelligence/reports", headers=auth
+        )
+        assert listed_reports.status_code == 200
+        assert listed_reports.json()[0]["data_trust_level"] == "SYNTHETIC"
+        analysis_request = await http.post(
+            f"/v1/products/{bootstrap_demo.PRODUCT_ID}/intelligence/analyze",
+            headers=auth,
+            json={"idempotency_key": "phase6-api-analysis-rerun"},
+        )
+        assert analysis_request.status_code == 202
+        assert (
+            await http.get(f"/v1/intelligence/reports/{report.id}", headers=auth)
+        ).status_code == 200
+        unknown_id = uuid4()
+        assert (await http.get(f"/v1/intelligence/reports/{unknown_id}")).status_code == 401
+        assert (
+            await http.get(f"/v1/intelligence/reports/{unknown_id}", headers=auth)
+        ).status_code == 404
+        assert (
+            await http.post(
+                f"/v1/intelligence/insights/{unknown_id}/decision",
+                headers=auth,
+                json={"decision": InsightDecisionKind.REJECT.value},
+            )
+        ).status_code == 409
+        assert (
+            await http.post(
+                f"/v1/intelligence/experiments/{unknown_id}/decision",
+                headers=auth,
+                json={"decision": ExperimentDecisionKind.REJECTED.value},
+            )
+        ).status_code == 409
+        assert (
+            await http.post(
+                f"/v1/intelligence/experiments/{unknown_id}/generate-concepts",
+                headers=auth,
+                json={"idempotency_key": "phase6-unknown-proposal", "concept_count": 3},
+            )
+        ).status_code == 409
+        assert (
+            await http.post(
+                f"/v1/intelligence/insights/{candidates[0].id}/decision",
+                headers=auth,
+                json={"decision": InsightDecisionKind.PROPOSE_FOR_TESTING.value},
+            )
+        ).status_code == 201
+        assert (
+            await http.post(
+                f"/v1/intelligence/experiments/{proposals[0].id}/decision",
+                headers=auth,
+                json={"decision": ExperimentDecisionKind.APPROVED_FOR_CREATIVE.value},
+            )
+        ).status_code == 201
+        assert (await intelligence.approved_proposal(context, proposals[0].id)).id == proposals[
+            0
+        ].id
+        with pytest.raises(ExperimentHandoffDenied):
+            await intelligence.approved_proposal(
+                replace(context, environment="production"), proposals[0].id
+            )
+        generated = await http.post(
+            f"/v1/intelligence/experiments/{proposals[0].id}/generate-concepts",
+            headers=auth,
+            json={
+                "idempotency_key": "phase6-approved-experiment-creative",
+                "concept_count": 3,
+                "channel_intent": "ORGANIC_SHORT_FORM",
+            },
+        )
+        assert generated.status_code == 202, generated.text
+        creative_run_id = generated.json()["id"]
         assert (await http.post(f"/v1/final-creatives/{final.id}/reject", headers=auth)).json()[
             "decision_state"
         ] == "REJECTED"
         assert (await http.get(f"/v1/assembly/plans/{uuid4()}", headers=auth)).status_code == 404
         assert (await http.get(f"/v1/assembly/jobs/{record.job.id}")).status_code == 401
+
+    assert creative_run_id is not None
+    completed_creative = await runtime.execute(
+        context.tenant_id, __import__("uuid").UUID(creative_run_id)
+    )
+    assert completed_creative.status.value == "SUCCEEDED", completed_creative.failure_code
+    concept_sets = await CreativeService(SqlAlchemyCreativeUnitOfWorkFactory(sessions)).list_sets(
+        context, bootstrap_demo.PRODUCT_ID
+    )
+    generated_set = next(
+        item for item in concept_sets if item.agent_run_id == completed_creative.id
+    )
+    assert generated_set.experiment_proposal_id == proposals[0].id
+    assert generated_set.experiment_proposal_digest == proposals[0].semantic_digest
+    learned_graph, _ = await KnowledgeGraphProjector(
+        SqlAlchemyCanonicalKnowledgeReader(sessions),
+        SqlAlchemyKnowledgeProjectionStore(sessions),
+    ).full(context)
+    learned_types = {node.node_type for node in learned_graph.nodes}
+    assert {
+        KnowledgeNodeType.INTELLIGENCE_REPORT,
+        KnowledgeNodeType.INSIGHT_CANDIDATE,
+        KnowledgeNodeType.EXPERIMENT_PROPOSAL,
+        KnowledgeNodeType.CREATIVE_CONCEPT_SET,
+    } <= learned_types
 
     for statement in (
         "DELETE FROM assembly.final_creatives WHERE id=:id",

@@ -12,6 +12,7 @@ import {
   type AgentRun,
   type Asset,
   type CreativeConceptSet,
+  type IntelligenceReport,
   type ProductionJob,
   type ProductionPlan,
   type PublicationDraft,
@@ -168,6 +169,61 @@ const performanceSnapshot: PerformanceSnapshot = {
   freshness: "CURRENT",
   semantic_digest: `sha256:${"9".repeat(64)}`,
   created_at: product.created_at,
+};
+const intelligenceReport: IntelligenceReport = {
+  id: "a1000000-0000-0000-0000-000000000001",
+  product_id: product.id,
+  agent_run_id: "73000000-0000-0000-0000-000000000001",
+  context_manifest_id: "a2000000-0000-0000-0000-000000000001",
+  context_manifest_digest: `sha256:${"a".repeat(64)}`,
+  data_trust_level: "SYNTHETIC",
+  summary: "A possible pattern is worth testing.",
+  observations: [
+    { statement: "CTR was observed.", source_ref: "snapshot", window: "+24h" },
+  ],
+  comparative_findings: [
+    {
+      comparison_id: "a3000000-0000-0000-0000-000000000001",
+      interpretation: "This may indicate a testable pattern.",
+    },
+  ],
+  limitations: ["Synthetic and observational evidence only."],
+  semantic_digest: `sha256:${"b".repeat(64)}`,
+  created_at: product.created_at,
+  candidates: [
+    {
+      id: "a4000000-0000-0000-0000-000000000001",
+      statement: "The opening treatment may be worth testing.",
+      sample_size: 4,
+      metric: "ctr",
+      baseline: "0.04",
+      observed_delta: "0.01",
+      confidence: "LOW",
+      scope: { platform: "instagram" },
+      limitations: ["Synthetic only."],
+      data_trust_level: "SYNTHETIC",
+      status: "CANDIDATE",
+      semantic_digest: `sha256:${"c".repeat(64)}`,
+      created_at: product.created_at,
+    },
+  ],
+  proposals: [
+    {
+      id: "a5000000-0000-0000-0000-000000000001",
+      hypothesis: "An alternate opening may be worth testing.",
+      primary_variable: "Opening treatment",
+      controlled_elements: ["CTA", "caption"],
+      target_metric: "ctr",
+      platform: "instagram",
+      recommended_measurement_window: "+24h",
+      creative_direction: "Change only the opening.",
+      rationale: "Isolate one variable.",
+      expected_learning: "Whether to run a larger observed test.",
+      data_trust_level: "SYNTHETIC",
+      semantic_digest: `sha256:${"d".repeat(64)}`,
+      created_at: product.created_at,
+    },
+  ],
 };
 const brief = {
   product_id: product.id,
@@ -668,6 +724,13 @@ function mocks() {
   vi.spyOn(catalogApi, "performanceHistory").mockResolvedValue([]);
   vi.spyOn(catalogApi, "collectPublicationPerformance").mockResolvedValue(
     performanceSnapshot,
+  );
+  vi.spyOn(catalogApi, "listIntelligenceReports").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "analyzePerformance").mockResolvedValue(agentRun);
+  vi.spyOn(catalogApi, "decideInsight").mockResolvedValue(undefined);
+  vi.spyOn(catalogApi, "decideExperiment").mockResolvedValue(undefined);
+  vi.spyOn(catalogApi, "generateExperimentConcepts").mockResolvedValue(
+    agentRun,
   );
   vi.spyOn(catalogApi, "createPublicationDraft").mockResolvedValue(
     publicationDraft,
@@ -1676,6 +1739,51 @@ describe("Product Workspace", () => {
         publication.id,
       ),
     );
+  });
+
+  it("shows governed synthetic insights and requires approval before concept generation", async () => {
+    vi.mocked(catalogApi.listIntelligenceReports).mockResolvedValue([
+      intelligenceReport,
+    ]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Insights" }));
+    expect(await screen.findByText("Synthetic demo data")).toBeInTheDocument();
+    expect(screen.getByText("Observed · Derived")).toBeInTheDocument();
+    expect(
+      screen.getByText("AI hypothesis · not established truth"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Baseline sample")).toBeInTheDocument();
+    expect(
+      screen.getByText("Synthetic and observational evidence only."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Primary variable")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Generate next concepts" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve for creative" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.decideExperiment).toHaveBeenCalledWith(
+        expect.anything(),
+        intelligenceReport.proposals[0]!.id,
+        "APPROVED_FOR_CREATIVE",
+      ),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate next concepts" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.generateExperimentConcepts).toHaveBeenCalledWith(
+        expect.anything(),
+        intelligenceReport.proposals[0]!.id,
+      ),
+    );
+    expect(
+      screen.queryByText(/winner|guaranteed|roas|budget/i),
+    ).not.toBeInTheDocument();
   });
 
   it("creates a product through the selected brand", async () => {

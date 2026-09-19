@@ -135,6 +135,22 @@ class CreativeStrategyRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class ApprovedExperimentContext:
+    proposal_id: UUID
+    proposal_digest: str
+    report_id: UUID
+    report_digest: str
+    data_trust_level: str
+    hypothesis: str
+    primary_variable: str
+    controlled_elements: tuple[str, ...]
+    target_metric: str
+    platform: str
+    measurement_window: str
+    creative_direction: str
+
+
+@dataclass(frozen=True, slots=True)
 class CreativeStrategyContext:
     product_snapshot_id: UUID
     product_snapshot_digest: str
@@ -149,9 +165,10 @@ class CreativeStrategyContext:
     product_claims: tuple[ProductClaimRef, ...]
     request: CreativeStrategyRequest
     context_digest: str
+    approved_experiment: ApprovedExperimentContext | None = None
 
     def refs(self) -> tuple[Mapping[str, object], ...]:
-        return (
+        refs: list[Mapping[str, object]] = [
             {
                 "kind": "product_snapshot",
                 "id": str(self.product_snapshot_id),
@@ -172,7 +189,19 @@ class CreativeStrategyContext:
                 "concept_count": self.request.concept_count,
                 "channel_intent": self.request.channel_intent.value,
             },
-        )
+        ]
+        if self.approved_experiment is not None:
+            refs.append(
+                {
+                    "kind": "approved_experiment_proposal",
+                    "id": str(self.approved_experiment.proposal_id),
+                    "digest": self.approved_experiment.proposal_digest,
+                    "report_id": str(self.approved_experiment.report_id),
+                    "report_digest": self.approved_experiment.report_digest,
+                    "data_trust_level": self.approved_experiment.data_trust_level,
+                }
+            )
+        return tuple(refs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +238,8 @@ class CreativeConceptSet:
     id: UUID = field(default_factory=uuid4)
     schema_version: int = 1
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    experiment_proposal_id: UUID | None = None
+    experiment_proposal_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not MIN_CONCEPTS <= len(self.concepts) <= MAX_CONCEPTS:
@@ -220,7 +251,7 @@ class CreativeConceptSet:
             raise InvalidCreativeOutput("concept set digest does not match content")
 
     def semantic_content(self) -> dict[str, object]:
-        return {
+        content: dict[str, object] = {
             "schema_version": self.schema_version,
             "product_snapshot_id": str(self.product_snapshot_id),
             "product_snapshot_digest": self.product_snapshot_digest,
@@ -229,6 +260,10 @@ class CreativeConceptSet:
             "input_context_digest": self.input_context_digest,
             "concepts": [dict(item.payload) for item in self.concepts],
         }
+        if self.experiment_proposal_id is not None:
+            content["experiment_proposal_id"] = str(self.experiment_proposal_id)
+            content["experiment_proposal_digest"] = self.experiment_proposal_digest
+        return content
 
 
 @dataclass(frozen=True, slots=True)

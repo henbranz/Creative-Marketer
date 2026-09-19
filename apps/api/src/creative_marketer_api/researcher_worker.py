@@ -9,11 +9,14 @@ from temporalio.worker import Worker
 
 from creative_marketer.agent_runtime.application import (
     AgentRunService,
+    ModelProvider,
     ModelProviderRegistry,
     ModelRouter,
     initial_creative_strategist_route,
+    initial_intelligence_route,
     initial_researcher_route,
 )
+from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
 from creative_marketer.catalog.asset_application import UnavailableObjectStore
 from creative_marketer.events.application import (
     ConsumerRegistration,
@@ -31,6 +34,7 @@ from creative_marketer.infrastructure.database.event_consumer_uow import (
 from creative_marketer.infrastructure.database.event_delivery import PostgresPublisherStore
 from creative_marketer.infrastructure.model_providers import (
     DatabaseObjectStoreImageMaterializer,
+    FakeModelProvider,
     OpenAIResponsesModelProvider,
 )
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
@@ -122,16 +126,20 @@ async def _bridge_loop(
 
 async def run() -> None:
     settings = Settings()
-    if settings.model_provider_backend != "openai" or settings.openai_api_key is None:
-        raise RuntimeError("Researcher worker requires MODEL_PROVIDER_BACKEND=openai")
-    authorization = getattr(settings, "require_live_spend_authorization", None)
-    if authorization is not None:
-        authorization()
+    if settings.model_provider_backend not in {"openai", "fake"}:
+        raise RuntimeError("Agent worker requires MODEL_PROVIDER_BACKEND=openai or fake")
+    if settings.model_provider_backend == "openai":
+        if settings.openai_api_key is None:
+            raise RuntimeError("OpenAI Agent worker requires OPENAI_API_KEY")
+        authorization = getattr(settings, "require_live_spend_authorization", None)
+        if authorization is not None:
+            authorization()
     telemetry = NullTelemetry()
     routes = (
         initial_researcher_route(),
         initial_creative_strategist_route(),
         initial_producer_route(),
+        initial_intelligence_route(),
     )
     session_factory = create_session_factory(str(settings.database_url))
     runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
@@ -149,14 +157,45 @@ async def run() -> None:
         if getattr(settings, "object_storage_backend", "disabled") == "s3"
         else UnavailableObjectStore()
     )
-    provider = (
-        OpenAIResponsesModelProvider(
-            settings.openai_api_key.get_secret_value(),
-            image_materializer=DatabaseObjectStoreImageMaterializer(session_factory, object_store),
+    provider: ModelProvider
+    if settings.model_provider_backend == "fake":
+        from scripts.bootstrap_demo import (
+            _creative_output,
+            _intelligence_output,
+            _production_output,
         )
-        if getattr(settings, "object_storage_backend", "disabled") == "s3"
-        else OpenAIResponsesModelProvider(settings.openai_api_key.get_secret_value())
-    )
+
+        def demo_result(invocation: object) -> ModelInvocationResult:
+            contract = invocation.output_contract_key  # type: ignore[attr-defined]
+            if contract == "creative.creative_concept_set":
+                output = _creative_output(invocation)
+            elif contract == "production.production_plan":
+                output = _production_output(invocation)
+            elif contract == "intelligence.intelligence_report":
+                output = _intelligence_output(invocation)
+            else:
+                raise RuntimeError("fake worker only supports bootstrapped demo follow-up runs")
+            return ModelInvocationResult(
+                output,
+                f"local-demo-{contract}",
+                ModelUsage(100, 100, 200),
+                "openai",
+                "gpt-5.6-sol",
+            )
+
+        provider = FakeModelProvider(demo_result)
+    else:
+        assert settings.openai_api_key is not None
+        provider = (
+            OpenAIResponsesModelProvider(
+                settings.openai_api_key.get_secret_value(),
+                image_materializer=DatabaseObjectStoreImageMaterializer(
+                    session_factory, object_store
+                ),
+            )
+            if getattr(settings, "object_storage_backend", "disabled") == "s3"
+            else OpenAIResponsesModelProvider(settings.openai_api_key.get_secret_value())
+        )
     runtime = AgentRunService(
         runtime_uow,
         ModelRouter(routes),

@@ -249,6 +249,52 @@ export interface PerformanceObservation {
   provider: "fake";
   provider_version: string;
 }
+export interface IntelligenceCandidate {
+  id: string;
+  statement: string;
+  sample_size: number;
+  metric: string;
+  baseline: string | null;
+  observed_delta: string | null;
+  confidence: "LOW" | "MODERATE" | "HIGH";
+  scope: Record<string, unknown>;
+  limitations: string[];
+  data_trust_level: "SYNTHETIC" | "OBSERVED";
+  status: "CANDIDATE";
+  semantic_digest: string;
+  created_at: string;
+}
+export interface ExperimentProposal {
+  id: string;
+  hypothesis: string;
+  primary_variable: string;
+  controlled_elements: string[];
+  target_metric: string;
+  platform: string;
+  recommended_measurement_window: string;
+  creative_direction: string;
+  rationale: string;
+  expected_learning: string;
+  data_trust_level: "SYNTHETIC" | "OBSERVED";
+  semantic_digest: string;
+  created_at: string;
+}
+export interface IntelligenceReport {
+  id: string;
+  product_id: string;
+  agent_run_id: string;
+  context_manifest_id: string;
+  context_manifest_digest: string;
+  data_trust_level: "SYNTHETIC" | "OBSERVED";
+  summary: string;
+  observations: { statement: string; source_ref: string; window: string }[];
+  comparative_findings: { comparison_id: string; interpretation: string }[];
+  limitations: string[];
+  semantic_digest: string;
+  created_at: string;
+  candidates: IntelligenceCandidate[];
+  proposals: ExperimentProposal[];
+}
 
 export interface Session {
   readonly tenantId: string;
@@ -619,6 +665,59 @@ export const catalogApi = {
       session,
       `/v1/publications/${publicationId}/performance/history`,
     ),
+  listIntelligenceReports: (session: Session, productId: string) =>
+    request<IntelligenceReport[]>(
+      session,
+      `/v1/products/${productId}/intelligence/reports`,
+    ),
+  analyzePerformance: (session: Session, productId: string) =>
+    request<AgentRun>(
+      session,
+      `/v1/products/${productId}/intelligence/analyze`,
+      {
+        method: "POST",
+        body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+      },
+    ),
+  decideInsight: (
+    session: Session,
+    candidateId: string,
+    decision: "PROPOSE_FOR_TESTING" | "REJECT",
+  ) =>
+    request<void>(
+      session,
+      `/v1/intelligence/insights/${candidateId}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
+    ),
+  decideExperiment: (
+    session: Session,
+    proposalId: string,
+    decision: "APPROVED_FOR_CREATIVE" | "REJECTED",
+  ) =>
+    request<void>(
+      session,
+      `/v1/intelligence/experiments/${proposalId}/decision`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decision }),
+      },
+    ),
+  generateExperimentConcepts: (session: Session, proposalId: string) =>
+    request<AgentRun>(
+      session,
+      `/v1/intelligence/experiments/${proposalId}/generate-concepts`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          idempotency_key: crypto.randomUUID(),
+          concept_count: 5,
+          channel_intent: "ORGANIC_SHORT_FORM",
+        }),
+      },
+    ),
 };
 
 export async function uploadToGrant(
@@ -700,6 +799,9 @@ export async function obsidianOpenUrl(
     publication: "Publishing/Published",
     performance_snapshot: "Performance/Snapshots",
     attribution_result: "Performance/Attribution",
+    intelligence_report: "Insights/Reports",
+    insight_candidate: "Insights/Candidates",
+    experiment_proposal: "Experiments/Proposals",
   };
   const directory = directories[nodeType];
   if (!directory || !canonicalId.trim())

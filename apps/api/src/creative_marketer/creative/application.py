@@ -24,6 +24,7 @@ from creative_marketer.identity.application.authentication import ExecutionConte
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 
 from .domain import (
+    ApprovedExperimentContext,
     CreativeConcept,
     CreativeConceptDecision,
     CreativeConceptSet,
@@ -83,6 +84,7 @@ def build_creative_context(
     product: ProductKnowledgeSnapshot,
     research: ResearchSnapshot,
     request: CreativeStrategyRequest,
+    approved_experiment: ApprovedExperimentContext | None = None,
 ) -> CreativeStrategyContext:
     if product.schema_version != 2:
         raise InvalidCreativeOutput("Creative Strategist requires Product snapshot V2")
@@ -106,6 +108,17 @@ def build_creative_context(
             "concept_count": request.concept_count,
             "channel_intent": request.channel_intent.value,
         },
+        "approved_experiment": (
+            {
+                "proposal_id": str(approved_experiment.proposal_id),
+                "proposal_digest": approved_experiment.proposal_digest,
+                "report_id": str(approved_experiment.report_id),
+                "report_digest": approved_experiment.report_digest,
+                "data_trust_level": approved_experiment.data_trust_level,
+            }
+            if approved_experiment
+            else None
+        ),
     }
     return CreativeStrategyContext(
         product.id,
@@ -121,6 +134,7 @@ def build_creative_context(
         claims,
         request,
         canonical_digest(document),
+        approved_experiment,
     )
 
 
@@ -238,6 +252,9 @@ def validate_creative_output(
         "input_context_digest": context.context_digest,
         "concepts": [dict(item.payload) for item in concepts],
     }
+    if context.approved_experiment is not None:
+        semantic["experiment_proposal_id"] = str(context.approved_experiment.proposal_id)
+        semantic["experiment_proposal_digest"] = context.approved_experiment.proposal_digest
     return CreativeConceptSet(
         tenant_id,
         product_id,
@@ -250,6 +267,12 @@ def validate_creative_output(
         tuple(concepts),
         canonical_digest(semantic),
         id=set_id,
+        experiment_proposal_id=(
+            context.approved_experiment.proposal_id if context.approved_experiment else None
+        ),
+        experiment_proposal_digest=(
+            context.approved_experiment.proposal_digest if context.approved_experiment else None
+        ),
     )
 
 

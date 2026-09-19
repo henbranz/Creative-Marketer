@@ -2461,6 +2461,87 @@ select:focus {
 .performance-overview {
   margin: 1rem 0;
 }
+
+.insights-panel {
+  display: grid;
+  gap: 20px;
+}
+.synthetic-warning {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid #f59e0b;
+  border-radius: 14px;
+  background: #fffbeb;
+  color: #78350f;
+}
+.insight-section {
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+}
+.insight-section h3 {
+  margin: 0;
+}
+.insight-fact,
+.hypothesis-card,
+.experiment-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-raised, #fff);
+}
+.insight-fact p,
+.hypothesis-card p,
+.experiment-card p {
+  margin: 0;
+}
+.hypothesis-card header,
+.experiment-card header,
+.card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.comparison-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.experiment-card dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+.experiment-card dl div {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.4fr) 1fr;
+  gap: 12px;
+}
+.experiment-card dt {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.experiment-card dd {
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .comparison-facts {
+    grid-template-columns: 1fr;
+  }
+  .experiment-card dl div {
+    grid-template-columns: 1fr;
+  }
+}
 .performance-publications {
   display: grid;
   gap: 1rem;

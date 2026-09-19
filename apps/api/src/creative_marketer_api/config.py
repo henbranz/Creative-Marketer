@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     )
     asset_upload_ttl_seconds: int = Field(default=900, ge=600, le=900)
     asset_download_ttl_seconds: int = Field(default=600, ge=300, le=900)
-    model_provider_backend: Literal["disabled", "openai"] = "disabled"
+    model_provider_backend: Literal["disabled", "fake", "openai"] = "disabled"
     openai_api_key: SecretStr | None = None
     media_image_provider: Literal["disabled", "fake", "openai"] = "disabled"
     media_video_provider: Literal["disabled", "fake", "byteplus"] = "disabled"
@@ -92,6 +92,8 @@ class Settings(BaseSettings):
             key = self.openai_api_key.get_secret_value() if self.openai_api_key else None
             if key is not None and key.startswith(("disabled-", "test-", "fake-", "replace-")):
                 raise ValueError("OpenAI provider rejects placeholder credentials")
+        if self.model_provider_backend == "fake" and self.app_env not in {"development", "test"}:
+            raise ValueError("fake model provider is development/test only")
         if self.media_image_provider == "openai" and self.openai_api_key is None:
             raise ValueError("OpenAI image provider requires OPENAI_API_KEY")
         if self.media_video_provider == "byteplus":

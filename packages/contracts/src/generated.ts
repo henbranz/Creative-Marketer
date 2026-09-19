@@ -381,6 +381,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/intelligence/experiments/{proposal_id}/decision": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Decide Experiment */
+    post: operations["decide_experiment_v1_intelligence_experiments__proposal_id__decision_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/intelligence/experiments/{proposal_id}/generate-concepts": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Generate Concepts */
+    post: operations["generate_concepts_v1_intelligence_experiments__proposal_id__generate_concepts_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/intelligence/insights/{candidate_id}/decision": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Decide Insight */
+    post: operations["decide_insight_v1_intelligence_insights__candidate_id__decision_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/intelligence/reports/{report_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Report */
+    get: operations["get_report_v1_intelligence_reports__report_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/knowledge/projection": {
     parameters: {
       query?: never;
@@ -685,6 +753,40 @@ export interface paths {
     put?: never;
     /** Start Run */
     post: operations["start_run_v1_products__product_id__creative_runs_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/intelligence/analyze": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Analyze */
+    post: operations["analyze_v1_products__product_id__intelligence_analyze_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/intelligence/reports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Reports */
+    get: operations["list_reports_v1_products__product_id__intelligence_reports_get"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -1428,6 +1530,11 @@ export interface components {
       /** Idempotency Key */
       idempotency_key: string;
     };
+    /** AnalyzeRequest */
+    AnalyzeRequest: {
+      /** Idempotency Key */
+      idempotency_key: string;
+    };
     /** AssemblyItemResponse */
     AssemblyItemResponse: {
       /** Audio Behavior */
@@ -1998,6 +2105,43 @@ export interface components {
       /** Why Choose Us */
       why_choose_us?: string[];
     };
+    /** CandidateResponse */
+    CandidateResponse: {
+      /** Baseline */
+      baseline: string | null;
+      /** Confidence */
+      confidence: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Data Trust Level */
+      data_trust_level: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Limitations */
+      limitations: string[];
+      /** Metric */
+      metric: string;
+      /** Observed Delta */
+      observed_delta: string | null;
+      /** Sample Size */
+      sample_size: number;
+      /** Scope */
+      scope: {
+        [key: string]: unknown;
+      };
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Statement */
+      statement: string;
+      /** Status */
+      status: string;
+    };
     /** CaptionResponse */
     CaptionResponse: {
       /** End Ms */
@@ -2072,6 +2216,10 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /** Experiment Proposal Digest */
+      experiment_proposal_digest?: string | null;
+      /** Experiment Proposal Id */
+      experiment_proposal_id?: string | null;
       /** Freshness */
       freshness: string;
       /**
@@ -2147,6 +2295,8 @@ export interface components {
       "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED";
     /** CreativeRunStart */
     CreativeRunStart: {
+      /** Approved Experiment Proposal Id */
+      approved_experiment_proposal_id?: string | null;
       /** @default ORGANIC_SHORT_FORM */
       channel_intent: components["schemas"]["ChannelIntent"];
       /**
@@ -2166,6 +2316,11 @@ export interface components {
        * Format: uuid
        */
       user_id: string;
+    };
+    /** DecisionRequest */
+    DecisionRequest: {
+      /** Decision */
+      decision: string;
     };
     /** DeletedNodeResponse */
     DeletedNodeResponse: {
@@ -2438,6 +2593,18 @@ export interface components {
       nodes: components["schemas"]["KnowledgeNodeResponse"][];
       /** Revision */
       revision: number;
+    };
+    /** GenerateConceptsRequest */
+    GenerateConceptsRequest: {
+      /** @default ORGANIC_SHORT_FORM */
+      channel_intent: components["schemas"]["ChannelIntent"];
+      /**
+       * Concept Count
+       * @default 5
+       */
+      concept_count: number;
+      /** Idempotency Key */
+      idempotency_key: string;
     };
     /** HTTPValidationError */
     HTTPValidationError: {
@@ -2964,6 +3131,41 @@ export interface components {
       /** Next Cursor */
       next_cursor: string;
     };
+    /** ProposalResponse */
+    ProposalResponse: {
+      /** Controlled Elements */
+      controlled_elements: string[];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Creative Direction */
+      creative_direction: string;
+      /** Data Trust Level */
+      data_trust_level: string;
+      /** Expected Learning */
+      expected_learning: string;
+      /** Hypothesis */
+      hypothesis: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Platform */
+      platform: string;
+      /** Primary Variable */
+      primary_variable: string;
+      /** Rationale */
+      rationale: string;
+      /** Recommended Measurement Window */
+      recommended_measurement_window: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Target Metric */
+      target_metric: string;
+    };
     /** PublicationDraftResponse */
     PublicationDraftResponse: {
       /** Approval Action Digest */
@@ -3130,6 +3332,56 @@ export interface components {
       target_canonical_id: string;
       /** Target Node Type */
       target_node_type: string;
+    };
+    /** ReportResponse */
+    ReportResponse: {
+      /**
+       * Agent Run Id
+       * Format: uuid
+       */
+      agent_run_id: string;
+      /** Candidates */
+      candidates?: components["schemas"]["CandidateResponse"][];
+      /** Comparative Findings */
+      comparative_findings: {
+        [key: string]: unknown;
+      }[];
+      /** Context Manifest Digest */
+      context_manifest_digest: string;
+      /**
+       * Context Manifest Id
+       * Format: uuid
+       */
+      context_manifest_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Data Trust Level */
+      data_trust_level: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Limitations */
+      limitations: string[];
+      /** Observations */
+      observations: {
+        [key: string]: unknown;
+      }[];
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Proposals */
+      proposals?: components["schemas"]["ProposalResponse"][];
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Summary */
+      summary: string;
     };
     /**
      * ResearchCategory
@@ -4492,6 +4744,162 @@ export interface operations {
       };
     };
   };
+  decide_experiment_v1_intelligence_experiments__proposal_id__decision_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        proposal_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DecisionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  generate_concepts_v1_intelligence_experiments__proposal_id__generate_concepts_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        proposal_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["GenerateConceptsRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  decide_insight_v1_intelligence_insights__candidate_id__decision_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        candidate_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DecisionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_report_v1_intelligence_reports__report_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        report_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReportResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   full_projection_v1_knowledge_projection_get: {
     parameters: {
       query?: never;
@@ -5265,6 +5673,80 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  analyze_v1_products__product_id__intelligence_analyze_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AnalyzeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_reports_v1_products__product_id__intelligence_reports_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReportResponse"][];
         };
       };
       /** @description Validation Error */

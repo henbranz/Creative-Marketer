@@ -17,10 +17,12 @@ from creative_marketer.agent_governance.domain import (
 )
 from creative_marketer.agent_runtime.application import (
     CreativePreparation,
+    IntelligencePreparation,
     ProducerPreparation,
     ResearcherPreparation,
     ResolvedResearcher,
     build_creative_model_context,
+    build_intelligence_model_context,
     build_producer_model_context,
 )
 from creative_marketer.agent_runtime.domain import (
@@ -52,6 +54,7 @@ from creative_marketer.catalog.domain import (
 )
 from creative_marketer.creative.domain import (
     ApprovedCreativeConcept,
+    ApprovedExperimentContext,
     ChannelIntent,
     CreativeConcept,
     CreativeConceptDecision,
@@ -74,6 +77,10 @@ from creative_marketer.infrastructure.database.agent_runtime_schema import (
     model_cost_reconciliations,
     research_snapshots,
 )
+from creative_marketer.infrastructure.database.assembly_schema import (
+    assembly_plans,
+    final_creatives,
+)
 from creative_marketer.infrastructure.database.catalog_schema import (
     assets,
     product_knowledge_snapshots,
@@ -83,11 +90,32 @@ from creative_marketer.infrastructure.database.creative_schema import (
     concept_sets,
     concepts,
 )
+from creative_marketer.infrastructure.database.intelligence_schema import (
+    context_manifests,
+    creative_feature_snapshots,
+    experiment_decisions,
+    experiment_proposals,
+    insight_candidates,
+    performance_comparisons,
+)
+from creative_marketer.infrastructure.database.intelligence_schema import (
+    reports as intelligence_reports,
+)
+from creative_marketer.infrastructure.database.measurement_schema import (
+    attribution_results,
+    collection_runs,
+    performance_observations,
+    performance_snapshots,
+)
 from creative_marketer.infrastructure.database.production_schema import (
     generation_segments,
     production_plans,
     production_scenes,
     production_shots,
+)
+from creative_marketer.infrastructure.database.publishing_schema import (
+    publication_drafts,
+    publications,
 )
 from creative_marketer.infrastructure.database.research_repositories import (
     _evidence,
@@ -98,6 +126,16 @@ from creative_marketer.infrastructure.database.research_schema import (
     research_targets,
     social_evidence_snapshots,
     sources,
+)
+from creative_marketer.intelligence.domain import (
+    CanonicalRef,
+    ComparableSnapshot,
+    CreativeFeatureSnapshot,
+    DataTrustLevel,
+    IntelligenceContextManifest,
+    IntelligenceResult,
+    PerformanceComparison,
+    build_comparisons,
 )
 from creative_marketer.production.application import production_context_from_payload
 from creative_marketer.production.domain import ProductionPlan, ProductionPlanningRequest
@@ -459,7 +497,9 @@ class SqlAlchemyAgentRunRepository:
         )
         return ResearcherPreparation(researcher, product_snapshot, manifest, evidence)
 
-    async def prepare_creative(self, product_id: UUID) -> CreativePreparation | None:
+    async def prepare_creative(
+        self, product_id: UUID, experiment_proposal_id: UUID | None = None
+    ) -> CreativePreparation | None:
         requested_rows = (
             await self._session.execute(
                 select(agent_definitions)
@@ -561,7 +601,477 @@ class SqlAlchemyAgentRunRepository:
             v["configuration_digest"],
             _configuration(v),
         )
-        return CreativePreparation(strategist, product, research, freshness, completeness)
+        approved_experiment: ApprovedExperimentContext | None = None
+        if experiment_proposal_id is not None:
+            proposal_row = (
+                await self._session.execute(
+                    select(experiment_proposals).where(
+                        experiment_proposals.c.id == experiment_proposal_id,
+                        experiment_proposals.c.product_id == product_id,
+                    )
+                )
+            ).first()
+            decision_row = (
+                await self._session.execute(
+                    select(experiment_decisions)
+                    .where(experiment_decisions.c.proposal_id == experiment_proposal_id)
+                    .order_by(
+                        experiment_decisions.c.created_at.desc(), experiment_decisions.c.id.desc()
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if proposal_row is None or decision_row is None:
+                return None
+            p, decision = proposal_row._mapping, decision_row._mapping
+            report_exists = await self._session.scalar(
+                select(intelligence_reports.c.id).where(
+                    intelligence_reports.c.id == p["report_id"],
+                    intelligence_reports.c.semantic_digest == p["report_digest"],
+                )
+            )
+            if (
+                decision["decision"] != "APPROVED_FOR_CREATIVE"
+                or decision["proposal_digest"] != p["semantic_digest"]
+                or report_exists is None
+            ):
+                return None
+            approved_experiment = ApprovedExperimentContext(
+                p["id"],
+                p["semantic_digest"],
+                p["report_id"],
+                p["report_digest"],
+                p["data_trust_level"],
+                p["hypothesis"],
+                p["primary_variable"],
+                tuple(p["controlled_elements"]),
+                p["target_metric"],
+                p["platform"],
+                p["measurement_window"],
+                p["creative_direction"],
+            )
+        return CreativePreparation(
+            strategist, product, research, freshness, completeness, approved_experiment
+        )
+
+    async def prepare_intelligence(self, product_id: UUID) -> IntelligencePreparation | None:
+        requested_rows = (
+            await self._session.execute(
+                select(agent_definitions)
+                .where(
+                    agent_definitions.c.tenant_id.is_not(None),
+                    agent_definitions.c.agent_type == "intelligence",
+                    agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                )
+                .order_by(agent_definitions.c.created_at)
+                .limit(2)
+            )
+        ).all()
+        if len(requested_rows) != 1:
+            return None
+        requested = requested_rows[0]._mapping
+        resolved_id = requested["id"]
+        activation = (
+            await self._session.execute(
+                select(agent_activations).where(agent_activations.c.definition_id == resolved_id)
+            )
+        ).first()
+        if activation is None and requested["platform_template_id"] is not None:
+            resolved_id = requested["platform_template_id"]
+            activation = (
+                await self._session.execute(
+                    select(agent_activations)
+                    .join(
+                        agent_definitions,
+                        agent_definitions.c.id == agent_activations.c.definition_id,
+                    )
+                    .where(
+                        agent_activations.c.definition_id == resolved_id,
+                        agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                    )
+                )
+            ).first()
+        if activation is None:
+            return None
+        version_row = (
+            await self._session.execute(
+                select(agent_versions).where(
+                    agent_versions.c.id == activation._mapping["active_version_id"]
+                )
+            )
+        ).first()
+        product_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots)
+                .where(product_knowledge_snapshots.c.product_id == product_id)
+                .order_by(
+                    product_knowledge_snapshots.c.created_at.desc(),
+                    product_knowledge_snapshots.c.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        snapshot_rows = (
+            await self._session.execute(
+                select(performance_snapshots)
+                .where(performance_snapshots.c.product_id == product_id)
+                .order_by(
+                    performance_snapshots.c.created_at.desc(), performance_snapshots.c.id.desc()
+                )
+            )
+        ).all()
+        if version_row is None or product_row is None or not snapshot_rows:
+            return None
+        subject_snapshot_id = snapshot_rows[0]._mapping["id"]
+        product_data = product_row._mapping
+        product = ProductKnowledgeSnapshot(
+            id=product_data["id"],
+            tenant_id=product_data["tenant_id"],
+            product_id=product_data["product_id"],
+            schema_version=product_data["schema_version"],
+            source_revision=product_data["source_revision"],
+            content=product_data["content"],
+            digest=product_data["digest"],
+            created_by=product_data["created_by"],
+            created_at=product_data["created_at"],
+        )
+        window_by_checkpoint = {
+            "schedule-v1:0": "+1h",
+            "schedule-v1:1": "+6h",
+            "schedule-v1:2": "+24h",
+            "schedule-v1:3": "+72h",
+            "schedule-v1:4": "+7d",
+        }
+        comparable: list[ComparableSnapshot] = []
+        feature_values: list[CreativeFeatureSnapshot] = []
+        publication_refs: list[CanonicalRef] = []
+        final_refs: list[CanonicalRef] = []
+        concept_refs: list[CanonicalRef] = []
+        snapshot_refs: list[CanonicalRef] = []
+        attribution_refs: list[CanonicalRef] = []
+        observation_facts: list[dict[str, object]] = []
+        feature_publications: set[UUID] = set()
+        for snapshot_row in snapshot_rows:
+            snap = snapshot_row._mapping
+            lineage = (
+                await self._session.execute(
+                    select(
+                        publications,
+                        publication_drafts,
+                        final_creatives,
+                        assembly_plans,
+                        production_plans,
+                        concepts,
+                    )
+                    .join(
+                        publication_drafts,
+                        and_(
+                            publication_drafts.c.tenant_id == publications.c.tenant_id,
+                            publication_drafts.c.id == publications.c.publication_draft_id,
+                        ),
+                    )
+                    .join(
+                        final_creatives,
+                        and_(
+                            final_creatives.c.tenant_id == publications.c.tenant_id,
+                            final_creatives.c.id == publications.c.final_creative_id,
+                        ),
+                    )
+                    .join(
+                        assembly_plans,
+                        and_(
+                            assembly_plans.c.tenant_id == final_creatives.c.tenant_id,
+                            assembly_plans.c.id == final_creatives.c.assembly_plan_id,
+                        ),
+                    )
+                    .join(
+                        production_plans,
+                        and_(
+                            production_plans.c.tenant_id == final_creatives.c.tenant_id,
+                            production_plans.c.id == final_creatives.c.production_plan_id,
+                        ),
+                    )
+                    .join(
+                        concepts,
+                        and_(
+                            concepts.c.tenant_id == final_creatives.c.tenant_id,
+                            concepts.c.id == final_creatives.c.creative_concept_id,
+                        ),
+                    )
+                    .where(publications.c.id == snap["publication_id"])
+                )
+            ).first()
+            if lineage is None:
+                continue
+            data = lineage._mapping
+            checkpoint = await self._session.scalar(
+                select(collection_runs.c.checkpoint)
+                .where(
+                    collection_runs.c.publication_id == snap["publication_id"],
+                    collection_runs.c.status == "SUCCEEDED",
+                    collection_runs.c.completed_at <= snap["created_at"],
+                )
+                .order_by(collection_runs.c.completed_at.desc())
+                .limit(1)
+            )
+            window = window_by_checkpoint.get(str(checkpoint), "UNMATCHED")
+            provider_rows = (
+                (
+                    await self._session.execute(
+                        select(performance_observations.c.provider).where(
+                            performance_observations.c.id.in_(list(snap["observation_ids"]))
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            trust = DataTrustLevel.SYNTHETIC if "fake" in provider_rows else DataTrustLevel.OBSERVED
+            metrics = {key: Decimal(value) for key, value in snap["latest_metrics"].items()}
+            for derived in snap["derived_metrics"]:
+                if derived.get("value") is not None:
+                    metrics[str(derived["key"])] = Decimal(str(derived["value"]))
+            feature = CreativeFeatureSnapshot.extract(
+                tenant_id=snap["tenant_id"],
+                product_id=product_id,
+                publication_id=data["id"],
+                final_creative_id=data["final_creative_id"],
+                concept=data["concept_payload"],
+                production_plan={"strategy": data["strategy"]},
+                assembly_plan={"duration_seconds": data["timeline_duration_ms"] // 1000},
+                final_creative={
+                    "duration_seconds": Decimal(data["duration_ms"]) / Decimal(1000),
+                    "aspect_ratio": f"{data['width']}:{data['height']}",
+                    "media_type": "video",
+                },
+                publication={
+                    "platform": data["platform"],
+                    "mode": data["mode"],
+                    "caption": data["caption"],
+                },
+            )
+            first_publication_snapshot = data["id"] not in feature_publications
+            if first_publication_snapshot:
+                feature_publications.add(data["id"])
+                feature_values.append(feature)
+            if window != "UNMATCHED":
+                comparable.append(
+                    ComparableSnapshot(
+                        snap["id"],
+                        snap["semantic_digest"],
+                        data["id"],
+                        data["final_creative_id"],
+                        snap["tenant_id"],
+                        product_id,
+                        data["platform"],
+                        "video",
+                        window,
+                        metrics,
+                        trust,
+                    )
+                )
+            observation_facts.append(
+                {
+                    "performance_snapshot_id": str(snap["id"]),
+                    "publication_id": str(data["id"]),
+                    "window": window,
+                    "platform": data["platform"],
+                    "metrics": {key: str(value) for key, value in metrics.items()},
+                    "attributed_conversions": snap["attributed_conversions"],
+                    "attributed_revenue": snap["attributed_revenue"],
+                    "data_trust_level": trust.value,
+                }
+            )
+            if first_publication_snapshot:
+                publication_refs.append(
+                    CanonicalRef("publication", data["id"], data["semantic_digest"])
+                )
+                final_refs.append(
+                    CanonicalRef(
+                        "final_creative",
+                        data["final_creative_id"],
+                        data["final_creative_digest"],
+                    )
+                )
+                concept_refs.append(
+                    CanonicalRef(
+                        "creative_concept",
+                        data["creative_concept_id"],
+                        data["creative_concept_digest"],
+                    )
+                )
+            snapshot_refs.append(
+                CanonicalRef("performance_snapshot", snap["id"], snap["semantic_digest"])
+            )
+            if first_publication_snapshot:
+                attr_rows = (
+                    (
+                        await self._session.execute(
+                            select(attribution_results.c.id).where(
+                                attribution_results.c.publication_id == data["id"]
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                attribution_refs.extend(
+                    CanonicalRef("attribution_result", item) for item in attr_rows
+                )
+        if not observation_facts:
+            return None
+        subject = next(
+            (item for item in comparable if item.snapshot_id == subject_snapshot_id), None
+        )
+        comparisons = build_comparisons(subject, comparable) if subject else ()
+        for feature_item in feature_values:
+            await self._session.execute(
+                pg_insert(creative_feature_snapshots)
+                .values(
+                    id=feature_item.id,
+                    tenant_id=feature_item.tenant_id,
+                    product_id=feature_item.product_id,
+                    publication_id=feature_item.publication_id,
+                    final_creative_id=feature_item.final_creative_id,
+                    extraction_version=feature_item.extraction_version,
+                    features=dict(feature_item.features),
+                    semantic_digest=feature_item.semantic_digest,
+                    created_at=feature_item.created_at,
+                )
+                .on_conflict_do_nothing()
+            )
+        for comparison_item in comparisons:
+            await self._session.execute(
+                insert(performance_comparisons).values(
+                    id=comparison_item.id,
+                    tenant_id=comparison_item.tenant_id,
+                    product_id=comparison_item.product_id,
+                    publication_id=comparison_item.publication_id,
+                    final_creative_id=comparison_item.final_creative_id,
+                    comparison_window=comparison_item.comparison_window,
+                    metric_key=comparison_item.metric_key,
+                    observed_value=comparison_item.observed_value,
+                    baseline_value=comparison_item.baseline_value,
+                    absolute_delta=comparison_item.absolute_delta,
+                    relative_delta=comparison_item.relative_delta,
+                    sample_size=comparison_item.sample_size,
+                    baseline_publication_ids=list(comparison_item.baseline_publication_ids),
+                    source_snapshot_ids=list(comparison_item.source_snapshot_ids),
+                    comparability_policy_version=comparison_item.comparability_policy_version,
+                    calculation_version=comparison_item.calculation_version,
+                    data_trust_level=comparison_item.data_trust_level.value,
+                    semantic_digest=comparison_item.semantic_digest,
+                    created_at=comparison_item.created_at,
+                )
+            )
+        research_row = (
+            await self._session.execute(
+                select(research_snapshots)
+                .where(research_snapshots.c.product_id == product_id)
+                .order_by(research_snapshots.c.created_at.desc(), research_snapshots.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        research_ref = (
+            CanonicalRef(
+                "research_snapshot",
+                research_row._mapping["id"],
+                research_row._mapping["semantic_digest"],
+            )
+            if research_row
+            else None
+        )
+        overall_trust = (
+            DataTrustLevel.SYNTHETIC
+            if any(item["data_trust_level"] == "SYNTHETIC" for item in observation_facts)
+            else DataTrustLevel.OBSERVED
+        )
+        manifest_id = uuid4()
+        product_ref = CanonicalRef("product_knowledge_snapshot", product.id, product.digest)
+        manifest_content = {
+            "product_snapshot": product_ref.primitive(),
+            "research_snapshot": research_ref.primitive() if research_ref else None,
+            "creative_concepts": [item.primitive() for item in concept_refs],
+            "final_creatives": [item.primitive() for item in final_refs],
+            "publications": [item.primitive() for item in publication_refs],
+            "performance_snapshots": [item.primitive() for item in snapshot_refs],
+            "attribution_results": [item.primitive() for item in attribution_refs],
+            "comparison_ids": [str(item.id) for item in comparisons],
+            "feature_snapshot_ids": [str(item.id) for item in feature_values],
+            "comparison_policy_version": "intelligence-comparability-v1",
+            "feature_extraction_version": "creative-features-v1",
+            "data_trust_level": overall_trust.value,
+        }
+        manifest = IntelligenceContextManifest(
+            product.tenant_id,
+            product_id,
+            product_ref,
+            research_ref,
+            tuple(concept_refs),
+            tuple(final_refs),
+            tuple(publication_refs),
+            tuple(snapshot_refs),
+            tuple(attribution_refs),
+            tuple(item.id for item in comparisons),
+            tuple(item.id for item in feature_values),
+            overall_trust,
+            canonical_digest(manifest_content),
+            id=manifest_id,
+        )
+        await self._session.execute(
+            insert(context_manifests).values(
+                id=manifest.id,
+                tenant_id=manifest.tenant_id,
+                product_id=manifest.product_id,
+                manifest=manifest.semantic_content(),
+                data_trust_level=manifest.data_trust_level.value,
+                semantic_digest=manifest.semantic_digest,
+                created_at=manifest.created_at,
+            )
+        )
+        payload: dict[str, object] = {
+            "manifest": manifest.semantic_content(),
+            "observed_facts": observation_facts,
+            "creative_features": [
+                {
+                    "id": str(item.id),
+                    "features": dict(item.features),
+                    "digest": item.semantic_digest,
+                }
+                for item in feature_values
+            ],
+            "performance_comparisons": [
+                {"id": str(item.id), **item.semantic_content()} for item in comparisons
+            ],
+            "deterministic_limitations": [
+                *(
+                    ["Synthetic demo data; not real market evidence."]
+                    if overall_trust is DataTrustLevel.SYNTHETIC
+                    else []
+                ),
+                "Observational evidence does not establish causality.",
+                *(
+                    [
+                        "Insufficient comparable matched-window sample; no baseline comparison "
+                        "is available."
+                    ]
+                    if not comparisons
+                    else []
+                ),
+                "No advertising spend facts are available; ROAS and spend recommendations "
+                "are prohibited.",
+            ],
+        }
+        v = version_row._mapping
+        resolved = ResolvedResearcher(
+            requested["id"],
+            resolved_id,
+            v["id"],
+            v["version_number"],
+            v["configuration_digest"],
+            _configuration(v),
+        )
+        return IntelligencePreparation(resolved, product, manifest, comparisons, payload)
 
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None:
         concept_row = (
@@ -625,6 +1135,8 @@ class SqlAlchemyAgentRunRepository:
             id=cs["id"],
             schema_version=cs["schema_version"],
             created_at=cs["created_at"],
+            experiment_proposal_id=cs["experiment_proposal_id"],
+            experiment_proposal_digest=cs["experiment_proposal_digest"],
         )
         decision = CreativeConceptDecision(
             d["tenant_id"],
@@ -1079,6 +1591,196 @@ class SqlAlchemyAgentRunRepository:
         s = snapshot_row._mapping
         if s["digest"] != run.product_snapshot_digest:
             raise ValueError("bound Product snapshot digest mismatch")
+        if run.agent_type == "intelligence":
+            manifest_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "intelligence_context_manifest"
+                ),
+                None,
+            )
+            comparison_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "performance_comparisons"
+                ),
+                None,
+            )
+            if manifest_ref is None or comparison_ref is None:
+                raise ValueError("Intelligence run context references are incomplete")
+            manifest_row = (
+                await self._session.execute(
+                    select(context_manifests).where(
+                        context_manifests.c.id == UUID(str(manifest_ref["id"]))
+                    )
+                )
+            ).one()
+            mr = manifest_row._mapping
+            if (
+                mr["semantic_digest"] != manifest_ref["digest"]
+                or mr["semantic_digest"] != run.input_context_digest
+            ):
+                raise ValueError("bound Intelligence manifest digest mismatch")
+            raw = mr["manifest"]
+
+            def ref(value: Mapping[str, object] | None) -> CanonicalRef | None:
+                return (
+                    CanonicalRef(
+                        str(value["kind"]),
+                        UUID(str(value["id"])),
+                        str(value["digest"]) if value.get("digest") else None,
+                    )
+                    if value
+                    else None
+                )
+
+            manifest = IntelligenceContextManifest(
+                mr["tenant_id"],
+                mr["product_id"],
+                cast(CanonicalRef, ref(raw["product_snapshot"])),
+                ref(raw.get("research_snapshot")),
+                tuple(cast(CanonicalRef, ref(item)) for item in raw["creative_concepts"]),
+                tuple(cast(CanonicalRef, ref(item)) for item in raw["final_creatives"]),
+                tuple(cast(CanonicalRef, ref(item)) for item in raw["publications"]),
+                tuple(cast(CanonicalRef, ref(item)) for item in raw["performance_snapshots"]),
+                tuple(cast(CanonicalRef, ref(item)) for item in raw["attribution_results"]),
+                tuple(UUID(item) for item in raw["comparison_ids"]),
+                tuple(UUID(item) for item in raw["feature_snapshot_ids"]),
+                DataTrustLevel(mr["data_trust_level"]),
+                mr["semantic_digest"],
+                mr["id"],
+                raw["comparison_policy_version"],
+                raw["feature_extraction_version"],
+                mr["created_at"],
+            )
+            raw_comparison_ids = comparison_ref.get("ids", ())
+            comparison_id_values = (
+                raw_comparison_ids if isinstance(raw_comparison_ids, (list, tuple)) else ()
+            )
+            comparison_ids = [UUID(str(item)) for item in comparison_id_values]
+            comparison_rows = (
+                (
+                    await self._session.execute(
+                        select(performance_comparisons).where(
+                            performance_comparisons.c.id.in_(comparison_ids)
+                        )
+                    )
+                ).all()
+                if comparison_ids
+                else []
+            )
+            by_id: dict[UUID, PerformanceComparison] = {}
+            for row in comparison_rows:
+                item = row._mapping
+                value = PerformanceComparison(
+                    item["tenant_id"],
+                    item["product_id"],
+                    item["publication_id"],
+                    item["final_creative_id"],
+                    item["comparison_window"],
+                    item["metric_key"],
+                    Decimal(item["observed_value"]),
+                    Decimal(item["baseline_value"]),
+                    Decimal(item["absolute_delta"]),
+                    Decimal(item["relative_delta"]) if item["relative_delta"] is not None else None,
+                    item["sample_size"],
+                    tuple(item["baseline_publication_ids"]),
+                    tuple(item["source_snapshot_ids"]),
+                    DataTrustLevel(item["data_trust_level"]),
+                    item["semantic_digest"],
+                    item["id"],
+                    item["comparability_policy_version"],
+                    item["calculation_version"],
+                    item["created_at"],
+                )
+                by_id[value.id] = value
+            comparisons = tuple(by_id[item] for item in comparison_ids)
+            snapshot_ids = [item.id for item in manifest.performance_snapshots]
+            observed_rows = (
+                await self._session.execute(
+                    select(performance_snapshots).where(
+                        performance_snapshots.c.id.in_(snapshot_ids)
+                    )
+                )
+            ).all()
+            observed = [
+                {
+                    "performance_snapshot_id": str(item._mapping["id"]),
+                    "publication_id": str(item._mapping["publication_id"]),
+                    "metrics": item._mapping["latest_metrics"],
+                    "derived_metrics": item._mapping["derived_metrics"],
+                    "attributed_conversions": item._mapping["attributed_conversions"],
+                    "attributed_revenue": item._mapping["attributed_revenue"],
+                }
+                for item in observed_rows
+            ]
+            feature_rows = (
+                await self._session.execute(
+                    select(creative_feature_snapshots).where(
+                        creative_feature_snapshots.c.id.in_(list(manifest.feature_snapshot_ids))
+                    )
+                )
+            ).all()
+            payload: dict[str, object] = {
+                "manifest": manifest.semantic_content(),
+                "observed_facts": observed,
+                "creative_features": [
+                    {
+                        "id": str(item._mapping["id"]),
+                        "features": item._mapping["features"],
+                        "digest": item._mapping["semantic_digest"],
+                    }
+                    for item in feature_rows
+                ],
+                "performance_comparisons": [
+                    {"id": str(item.id), **item.semantic_content()} for item in comparisons
+                ],
+                "deterministic_limitations": [
+                    *(
+                        ["Synthetic demo data; not real market evidence."]
+                        if manifest.data_trust_level is DataTrustLevel.SYNTHETIC
+                        else []
+                    ),
+                    "Observational evidence does not establish causality.",
+                    *(
+                        [
+                            "Insufficient comparable matched-window sample; no baseline "
+                            "comparison is available."
+                        ]
+                        if not comparisons
+                        else []
+                    ),
+                    "No advertising spend facts are available; ROAS and spend recommendations "
+                    "are prohibited.",
+                ],
+            }
+            preparation = IntelligencePreparation(
+                ResolvedResearcher(
+                    run.requested_agent_definition_id,
+                    run.resolved_agent_definition_id,
+                    run.agent_version_id,
+                    run.agent_version_number,
+                    run.agent_configuration_digest,
+                    _configuration(v),
+                ),
+                ProductKnowledgeSnapshot(
+                    id=s["id"],
+                    tenant_id=s["tenant_id"],
+                    product_id=s["product_id"],
+                    schema_version=s["schema_version"],
+                    source_revision=s["source_revision"],
+                    content=s["content"],
+                    digest=s["digest"],
+                    created_by=s["created_by"],
+                    created_at=s["created_at"],
+                ),
+                manifest,
+                comparisons,
+                payload,
+            )
+            return build_intelligence_model_context(preparation)
         if run.agent_type == "producer":
             concept_ref = next(
                 (item for item in run.input_context_refs if item.get("kind") == "approved_concept"),
@@ -1158,6 +1860,8 @@ class SqlAlchemyAgentRunRepository:
                 id=cs["id"],
                 schema_version=cs["schema_version"],
                 created_at=cs["created_at"],
+                experiment_proposal_id=cs["experiment_proposal_id"],
+                experiment_proposal_digest=cs["experiment_proposal_digest"],
             )
             decision_row = (
                 await self._session.execute(
@@ -1198,7 +1902,7 @@ class SqlAlchemyAgentRunRepository:
                 created_at=s["created_at"],
             )
             raw_assets = assets_ref.get("assets", ())
-            manifest = tuple(raw_assets) if isinstance(raw_assets, (list, tuple)) else ()
+            asset_manifest = tuple(raw_assets) if isinstance(raw_assets, (list, tuple)) else ()
             producer_preparation = ProducerPreparation(
                 ResolvedResearcher(
                     run.requested_agent_definition_id,
@@ -1211,7 +1915,7 @@ class SqlAlchemyAgentRunRepository:
                 ApprovedCreativeConcept(concept, concept_set, decision),
                 product,
                 research,
-                tuple(dict(item) for item in manifest if isinstance(item, Mapping)),
+                tuple(dict(item) for item in asset_manifest if isinstance(item, Mapping)),
             )
             frozen_context = production_context_from_payload(
                 {
@@ -1224,7 +1928,7 @@ class SqlAlchemyAgentRunRepository:
                     "research_snapshot_id": research_ref["id"],
                     "research_snapshot_digest": research_ref["digest"],
                     "creative_decision_id": concept_ref["creative_decision_id"],
-                    "selected_assets": manifest,
+                    "selected_assets": asset_manifest,
                     "production_request": {
                         "target_format": request_ref["target_format"],
                         "aspect_ratio": request_ref["aspect_ratio"],
@@ -1255,6 +1959,14 @@ class SqlAlchemyAgentRunRepository:
                 (item for item in run.input_context_refs if item.get("kind") == "strategy_request"),
                 None,
             )
+            experiment_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "approved_experiment_proposal"
+                ),
+                None,
+            )
             if research_ref is None or request_ref is None:
                 raise ValueError("Creative run context references are incomplete")
             research = await self.get_snapshot(UUID(str(research_ref["id"])))
@@ -1271,7 +1983,36 @@ class SqlAlchemyAgentRunRepository:
                 created_by=s["created_by"],
                 created_at=s["created_at"],
             )
-            preparation = CreativePreparation(
+            approved_experiment: ApprovedExperimentContext | None = None
+            if experiment_ref is not None:
+                proposal_row = (
+                    await self._session.execute(
+                        select(experiment_proposals).where(
+                            experiment_proposals.c.id == UUID(str(experiment_ref["id"]))
+                        )
+                    )
+                ).one()
+                p = proposal_row._mapping
+                if (
+                    p["semantic_digest"] != experiment_ref["digest"]
+                    or p["report_digest"] != experiment_ref["report_digest"]
+                ):
+                    raise ValueError("bound ExperimentProposal digest mismatch")
+                approved_experiment = ApprovedExperimentContext(
+                    p["id"],
+                    p["semantic_digest"],
+                    p["report_id"],
+                    p["report_digest"],
+                    p["data_trust_level"],
+                    p["hypothesis"],
+                    p["primary_variable"],
+                    tuple(p["controlled_elements"]),
+                    p["target_metric"],
+                    p["platform"],
+                    p["measurement_window"],
+                    p["creative_direction"],
+                )
+            creative_preparation = CreativePreparation(
                 ResolvedResearcher(
                     run.requested_agent_definition_id,
                     run.resolved_agent_definition_id,
@@ -1284,19 +2025,20 @@ class SqlAlchemyAgentRunRepository:
                 research,
                 "frozen",
                 100,
+                approved_experiment,
             )
             request = CreativeStrategyRequest(
                 cast(int, request_ref["concept_count"]),
                 ChannelIntent(str(request_ref["channel_intent"])),
             )
-            creative, model = build_creative_model_context(preparation, request)
+            creative, model = build_creative_model_context(creative_preparation, request)
             if creative.context_digest != run.input_context_digest:
                 raise ValueError("bound Creative context digest mismatch")
             return model
         blocks: list[EvidenceBlockRef] = []
         for identity in run.selected_evidence:
             evidence_id = UUID(str(identity["evidence_snapshot_id"]))
-            row = (
+            evidence_row = (
                 await self._session.execute(
                     select(evidence_snapshots, sources.c.display_name)
                     .join(
@@ -1310,10 +2052,10 @@ class SqlAlchemyAgentRunRepository:
                 )
             ).first()
             snapshot: EvidenceSnapshot | SocialEvidenceSnapshot
-            if row is not None:
-                snapshot = _evidence(row)
+            if evidence_row is not None:
+                snapshot = _evidence(evidence_row)
                 source_id = snapshot.source_id
-                source_label = row._mapping["display_name"]
+                source_label = evidence_row._mapping["display_name"]
                 source_blocks = snapshot.blocks
             else:
                 social_row = (
@@ -1401,6 +2143,14 @@ class SqlAlchemyAgentRunRepository:
             (item for item in run.input_context_refs if item.get("kind") == "strategy_request"),
             None,
         )
+        experiment_ref = next(
+            (
+                item
+                for item in run.input_context_refs
+                if item.get("kind") == "approved_experiment_proposal"
+            ),
+            None,
+        )
         if research_ref is None or request_ref is None or model.capability_context is None:
             raise ValueError("Creative strategy context is incomplete")
         research = await self.get_snapshot(UUID(str(research_ref["id"])))
@@ -1425,6 +2175,25 @@ class SqlAlchemyAgentRunRepository:
         asset_items = assets if isinstance(assets, (list, tuple)) else ()
         finding_items = findings if isinstance(findings, (list, tuple)) else ()
         gap_items = gaps if isinstance(gaps, (list, tuple)) else ()
+        experiment_value = model.capability_context.get("approved_experiment")
+        approved_experiment = (
+            ApprovedExperimentContext(
+                UUID(str(experiment_value["proposal_id"])),
+                str(experiment_value["proposal_digest"]),
+                UUID(str(experiment_value["source_intelligence_report_id"])),
+                str(experiment_value["source_intelligence_report_digest"]),
+                str(experiment_value["data_trust_level"]),
+                str(experiment_value["hypothesis"]),
+                str(experiment_value["primary_variable"]),
+                tuple(str(item) for item in experiment_value["controlled_elements"]),
+                str(experiment_value["target_metric"]),
+                str(experiment_value["platform"]),
+                str(experiment_value["measurement_window"]),
+                str(experiment_value["creative_direction"]),
+            )
+            if experiment_ref is not None and isinstance(experiment_value, Mapping)
+            else None
+        )
         return CreativeStrategyContext(
             run.product_snapshot_id,
             run.product_snapshot_digest,
@@ -1439,6 +2208,7 @@ class SqlAlchemyAgentRunRepository:
             product_claim_refs(run.product_snapshot_digest, product_content),
             request,
             run.input_context_digest,
+            approved_experiment,
         )
 
     async def finish_success(
@@ -1450,10 +2220,14 @@ class SqlAlchemyAgentRunRepository:
         attempt_id: UUID,
         workload_id: str,
     ) -> AgentRun:
-        if not isinstance(snapshot, (ResearchSnapshot, CreativeConceptSet, ProductionPlan)):
+        if not isinstance(
+            snapshot, (ResearchSnapshot, CreativeConceptSet, ProductionPlan, IntelligenceResult)
+        ):
             raise ValueError("unsupported capability result type")
         now = datetime.now(UTC)
-        if isinstance(snapshot, ProductionPlan):
+        if isinstance(snapshot, IntelligenceResult):
+            result_ref = f"intelligence-report://{snapshot.report.id}"
+        elif isinstance(snapshot, ProductionPlan):
             result_ref = f"production-plan://{snapshot.id}"
         elif isinstance(snapshot, CreativeConceptSet):
             result_ref = f"creative-concept-set://{snapshot.id}"
@@ -1485,7 +2259,83 @@ class SqlAlchemyAgentRunRepository:
         ).scalar_one_or_none()
         if attempt_row is None:
             raise AgentRunRecoveryConflict("stale model attempt cannot persist success")
-        if isinstance(snapshot, ProductionPlan):
+        if isinstance(snapshot, IntelligenceResult):
+            report = snapshot.report
+            await self._session.execute(
+                insert(intelligence_reports).values(
+                    id=report.id,
+                    tenant_id=report.tenant_id,
+                    product_id=report.product_id,
+                    agent_run_id=report.agent_run_id,
+                    agent_version_id=report.agent_version_id,
+                    context_manifest_id=report.context_manifest_id,
+                    context_manifest_digest=report.context_manifest_digest,
+                    schema_version=report.schema_version,
+                    data_trust_level=report.data_trust_level.value,
+                    summary=report.summary,
+                    observations=[dict(item) for item in report.observations],
+                    comparative_findings=[dict(item) for item in report.comparative_findings],
+                    limitations=list(report.limitations),
+                    semantic_digest=report.semantic_digest,
+                    created_at=report.created_at,
+                )
+            )
+            if snapshot.candidates:
+                await self._session.execute(
+                    insert(insight_candidates),
+                    [
+                        {
+                            "id": item.id,
+                            "tenant_id": item.tenant_id,
+                            "product_id": item.product_id,
+                            "report_id": item.report_id,
+                            "statement": item.statement,
+                            "evidence_refs": [ref.primitive() for ref in item.evidence_refs],
+                            "sample_size": item.sample_size,
+                            "metric": item.metric,
+                            "baseline": item.baseline,
+                            "observed_delta": item.observed_delta,
+                            "confidence": item.confidence.value,
+                            "scope": dict(item.scope),
+                            "limitations": list(item.limitations),
+                            "data_trust_level": item.data_trust_level.value,
+                            "status": item.status.value,
+                            "semantic_digest": item.semantic_digest,
+                            "created_at": item.created_at,
+                            "valid_until": item.valid_until,
+                        }
+                        for item in snapshot.candidates
+                    ],
+                )
+            if snapshot.proposals:
+                await self._session.execute(
+                    insert(experiment_proposals),
+                    [
+                        {
+                            "id": item.id,
+                            "tenant_id": item.tenant_id,
+                            "product_id": item.product_id,
+                            "report_id": item.source_intelligence_report_id,
+                            "report_digest": item.source_intelligence_report_digest,
+                            "candidate_ids": list(item.source_insight_candidate_ids),
+                            "hypothesis": item.hypothesis,
+                            "primary_variable": item.primary_variable,
+                            "controlled_elements": list(item.controlled_elements),
+                            "target_metric": item.target_metric,
+                            "platform": item.platform,
+                            "measurement_window": item.recommended_measurement_window,
+                            "creative_direction": item.creative_direction,
+                            "rationale": item.rationale,
+                            "expected_learning": item.expected_learning,
+                            "data_trust_level": item.data_trust_level.value,
+                            "schema_version": item.schema_version,
+                            "semantic_digest": item.semantic_digest,
+                            "created_at": item.created_at,
+                        }
+                        for item in snapshot.proposals
+                    ],
+                )
+        elif isinstance(snapshot, ProductionPlan):
             await self._session.execute(
                 insert(production_plans).values(
                     id=snapshot.id,
@@ -1593,6 +2443,8 @@ class SqlAlchemyAgentRunRepository:
                     input_context_digest=snapshot.input_context_digest,
                     semantic_digest=snapshot.semantic_digest,
                     created_at=snapshot.created_at,
+                    experiment_proposal_id=snapshot.experiment_proposal_id,
+                    experiment_proposal_digest=snapshot.experiment_proposal_digest,
                 )
             )
             await self._session.execute(

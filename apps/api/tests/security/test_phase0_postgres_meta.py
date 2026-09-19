@@ -260,11 +260,22 @@ async def test_missing_tenant_context_fails_closed_across_every_implemented_cont
         "publishing.publication_decisions",
         "publishing.publication_jobs",
         "publishing.publications",
+        "intelligence.context_manifests",
+        "intelligence.creative_feature_snapshots",
+        "intelligence.performance_comparisons",
+        "intelligence.reports",
+        "intelligence.insight_candidates",
+        "intelligence.insight_decisions",
+        "intelligence.experiment_proposals",
+        "intelligence.experiment_decisions",
     )
     for table in tables:
         try:
             async with runtime_engine.begin() as connection:
-                count = await connection.scalar(text(f"SELECT count(*) FROM {table}"))
+                where = (
+                    " WHERE tenant_id IS NOT NULL" if table.startswith("agent_governance.") else ""
+                )
+                count = await connection.scalar(text(f"SELECT count(*) FROM {table}{where}"))
                 assert count == 0, table
         except DBAPIError:
             # Absence of a read grant is also a valid fail-closed outcome.

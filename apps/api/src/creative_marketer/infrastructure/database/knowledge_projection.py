@@ -37,6 +37,16 @@ from creative_marketer.infrastructure.database.creative_schema import (
     concept_sets,
     concepts,
 )
+from creative_marketer.infrastructure.database.intelligence_schema import (
+    context_manifests,
+    experiment_decisions,
+    experiment_proposals,
+    insight_candidates,
+    insight_decisions,
+)
+from creative_marketer.infrastructure.database.intelligence_schema import (
+    reports as intelligence_reports,
+)
 from creative_marketer.infrastructure.database.knowledge_schema import (
     projection_changes,
     projection_nodes,
@@ -202,6 +212,24 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 ),
                 "attribution_results": select(attribution_results).where(
                     attribution_results.c.tenant_id == tenant
+                ),
+                "intelligence_manifests": select(context_manifests).where(
+                    context_manifests.c.tenant_id == tenant
+                ),
+                "intelligence_reports": select(intelligence_reports).where(
+                    intelligence_reports.c.tenant_id == tenant
+                ),
+                "insight_candidates": select(insight_candidates).where(
+                    insight_candidates.c.tenant_id == tenant
+                ),
+                "insight_decisions": select(insight_decisions).where(
+                    insight_decisions.c.tenant_id == tenant
+                ),
+                "experiment_proposals": select(experiment_proposals).where(
+                    experiment_proposals.c.tenant_id == tenant
+                ),
+                "experiment_decisions": select(experiment_decisions).where(
+                    experiment_decisions.c.tenant_id == tenant
                 ),
             }
             for key, statement in statements.items():
@@ -936,6 +964,27 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     )
                 )
         for row in rows["concept_sets"]:
+            concept_set_relationships = [
+                _rel(KnowledgeNodeType.AGENT_RUN, row["agent_run_id"], "produced_by_run"),
+                _rel(
+                    KnowledgeNodeType.RESEARCH_SNAPSHOT,
+                    row["research_snapshot_id"],
+                    "consumed_research_snapshot",
+                ),
+                _rel(
+                    KnowledgeNodeType.PRODUCT_KNOWLEDGE_SNAPSHOT,
+                    row["product_snapshot_id"],
+                    "consumed_product_snapshot",
+                ),
+            ]
+            if row.get("experiment_proposal_id"):
+                concept_set_relationships.append(
+                    _rel(
+                        KnowledgeNodeType.EXPERIMENT_PROPOSAL,
+                        row["experiment_proposal_id"],
+                        "tests_experiment_proposal",
+                    )
+                )
             nodes.append(
                 KnowledgeNode(
                     KnowledgeNodeType.CREATIVE_CONCEPT_SET,
@@ -945,19 +994,7 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     row["created_at"],
                     row["created_at"],
                     {"schema_version": row["schema_version"]},
-                    (
-                        _rel(KnowledgeNodeType.AGENT_RUN, row["agent_run_id"], "produced_by_run"),
-                        _rel(
-                            KnowledgeNodeType.RESEARCH_SNAPSHOT,
-                            row["research_snapshot_id"],
-                            "consumed_research_snapshot",
-                        ),
-                        _rel(
-                            KnowledgeNodeType.PRODUCT_KNOWLEDGE_SNAPSHOT,
-                            row["product_snapshot_id"],
-                            "consumed_product_snapshot",
-                        ),
-                    ),
+                    tuple(concept_set_relationships),
                     row["semantic_digest"],
                 )
             )
@@ -1259,6 +1296,141 @@ class SqlAlchemyCanonicalKnowledgeReader:
                         ),
                     ),
                     digest,
+                )
+            )
+        manifests = {row["id"]: row for row in rows.get("intelligence_manifests", [])}
+        candidate_decisions = {
+            row["candidate_id"]: row for row in rows.get("insight_decisions", [])
+        }
+        proposal_decisions = {
+            row["proposal_id"]: row for row in rows.get("experiment_decisions", [])
+        }
+        proposals_by_report: dict[object, list[Mapping[str, Any]]] = {}
+        for proposal in rows.get("experiment_proposals", []):
+            proposals_by_report.setdefault(proposal["report_id"], []).append(proposal)
+        for row in rows.get("intelligence_reports", []):
+            manifest = manifests.get(row["context_manifest_id"])
+            relationships = [
+                _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "analyzes_product"),
+                _rel(KnowledgeNodeType.AGENT_RUN, row["agent_run_id"], "produced_by_run"),
+            ]
+            if manifest:
+                for ref in manifest["manifest"].get("performance_snapshots", []):
+                    relationships.append(
+                        _rel(
+                            KnowledgeNodeType.PERFORMANCE_SNAPSHOT,
+                            ref["id"],
+                            "analyzes_performance_snapshot",
+                        )
+                    )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.INTELLIGENCE_REPORT,
+                    str(row["id"]),
+                    f"Intelligence Report {str(row['id'])[:8]}",
+                    row["data_trust_level"],
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "data_trust_level": row["data_trust_level"],
+                        "summary": row["summary"],
+                        "observations": row["observations"],
+                        "comparative_findings": row["comparative_findings"],
+                        "limitations": row["limitations"],
+                        "source_publications": manifest["manifest"].get("publications", [])
+                        if manifest
+                        else [],
+                        "experiment_proposal_ids": [
+                            str(item["id"]) for item in proposals_by_report.get(row["id"], [])
+                        ],
+                    },
+                    tuple(relationships),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("insight_candidates", []):
+            candidate_decision = candidate_decisions.get(row["id"])
+            status = candidate_decision["decision"] if candidate_decision else row["status"]
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.INSIGHT_CANDIDATE,
+                    str(row["id"]),
+                    row["statement"][:100],
+                    status,
+                    row["created_at"],
+                    candidate_decision["created_at"] if candidate_decision else row["created_at"],
+                    {
+                        "statement": row["statement"],
+                        "scope": row["scope"],
+                        "evidence_refs": row["evidence_refs"],
+                        "sample_size": row["sample_size"],
+                        "metric": row["metric"],
+                        "confidence": row["confidence"],
+                        "limitations": row["limitations"],
+                        "data_trust_level": row["data_trust_level"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.INTELLIGENCE_REPORT,
+                            row["report_id"],
+                            "candidate_from_report",
+                        ),
+                    ),
+                    row["semantic_digest"],
+                )
+            )
+        concept_sets_by_proposal: dict[object, list[Mapping[str, Any]]] = {}
+        for concept_set in rows.get("concept_sets", []):
+            if concept_set.get("experiment_proposal_id"):
+                concept_sets_by_proposal.setdefault(
+                    concept_set["experiment_proposal_id"], []
+                ).append(concept_set)
+        for row in rows.get("experiment_proposals", []):
+            proposal_decision = proposal_decisions.get(row["id"])
+            relationships = [
+                _rel(
+                    KnowledgeNodeType.INTELLIGENCE_REPORT,
+                    row["report_id"],
+                    "proposed_from_report",
+                ),
+                *[
+                    _rel(KnowledgeNodeType.INSIGHT_CANDIDATE, item, "tests_candidate")
+                    for item in row["candidate_ids"]
+                ],
+                *[
+                    _rel(
+                        KnowledgeNodeType.CREATIVE_CONCEPT_SET,
+                        item["id"],
+                        "resulted_in_concept_set",
+                    )
+                    for item in concept_sets_by_proposal.get(row["id"], [])
+                ],
+            ]
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.EXPERIMENT_PROPOSAL,
+                    str(row["id"]),
+                    row["hypothesis"][:100],
+                    proposal_decision["decision"] if proposal_decision else "PROPOSED",
+                    row["created_at"],
+                    proposal_decision["created_at"] if proposal_decision else row["created_at"],
+                    {
+                        "hypothesis": row["hypothesis"],
+                        "primary_variable": row["primary_variable"],
+                        "controlled_elements": row["controlled_elements"],
+                        "target_metric": row["target_metric"],
+                        "platform": row["platform"],
+                        "measurement_window": row["measurement_window"],
+                        "creative_direction": row["creative_direction"],
+                        "rationale": row["rationale"],
+                        "expected_learning": row["expected_learning"],
+                        "data_trust_level": row["data_trust_level"],
+                        "resulting_concept_set_ids": [
+                            str(item["id"]) for item in concept_sets_by_proposal.get(row["id"], [])
+                        ],
+                    },
+                    tuple(relationships),
+                    row["semantic_digest"],
                 )
             )
         by_ref = {node.ref: node for node in nodes}

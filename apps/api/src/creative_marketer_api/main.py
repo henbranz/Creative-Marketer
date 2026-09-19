@@ -12,6 +12,7 @@ from creative_marketer.agent_runtime.application import (
     ModelProviderRegistry,
     ModelRouter,
     initial_creative_strategist_route,
+    initial_intelligence_route,
     initial_researcher_route,
 )
 from creative_marketer.assembly.application import AssemblyService
@@ -28,6 +29,7 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyAssemblyUnitOfWorkFactory,
     SqlAlchemyCatalogUnitOfWorkFactory,
     SqlAlchemyCreativeUnitOfWorkFactory,
+    SqlAlchemyIntelligenceUnitOfWorkFactory,
     SqlAlchemyMeasurementUnitOfWorkFactory,
     SqlAlchemyProductionUnitOfWorkFactory,
     SqlAlchemyPublishingUnitOfWorkFactory,
@@ -44,6 +46,7 @@ from creative_marketer.infrastructure.model_providers import ExecutionProcessOnl
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.research import SafeWebFetcher
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
+from creative_marketer.intelligence.application import IntelligenceService
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.measurement.application import MeasurementService
 from creative_marketer.measurement.provider import FakeSocialMetricsProvider
@@ -65,6 +68,7 @@ from creative_marketer_api.authentication_routes import create_authentication_ro
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
+from creative_marketer_api.intelligence_routes import create_intelligence_router
 from creative_marketer_api.knowledge_routes import create_knowledge_router
 from creative_marketer_api.measurement_routes import create_measurement_router
 from creative_marketer_api.production_routes import create_production_router
@@ -183,6 +187,7 @@ def create_app(
     assembly_uow = SqlAlchemyAssemblyUnitOfWorkFactory(session_factory)
     publishing_uow = SqlAlchemyPublishingUnitOfWorkFactory(session_factory)
     measurement_uow = SqlAlchemyMeasurementUnitOfWorkFactory(session_factory)
+    intelligence_uow = SqlAlchemyIntelligenceUnitOfWorkFactory(session_factory)
     object_store = (
         S3ObjectStore(
             endpoint_url=str(resolved_settings.object_storage_endpoint_url),
@@ -222,11 +227,12 @@ def create_app(
                 initial_researcher_route(),
                 initial_creative_strategist_route(),
                 initial_producer_route(),
+                initial_intelligence_route(),
             )
         ),
         ModelProviderRegistry(
             {"openai": ExecutionProcessOnlyModelProvider()}
-            if resolved_settings.model_provider_backend == "openai"
+            if resolved_settings.model_provider_backend in {"openai", "fake"}
             else {}
         ),
         ConfiguredWorkloadIdentityProvider(
@@ -300,6 +306,16 @@ def create_app(
             authenticator,
             identity_uow,
             MeasurementService(measurement_uow, FakeSocialMetricsProvider()),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_intelligence_router(
+            authenticator,
+            identity_uow,
+            agent_service,
+            IntelligenceService(intelligence_uow),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

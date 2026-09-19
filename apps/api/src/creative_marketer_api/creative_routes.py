@@ -44,6 +44,7 @@ class CreativeRunStart(Contract):
     idempotency_key: str = Field(min_length=1, max_length=128)
     concept_count: int = Field(default=5, ge=3, le=5)
     channel_intent: ChannelIntent = ChannelIntent.ORGANIC_SHORT_FORM
+    approved_experiment_proposal_id: UUID | None = None
 
 
 class CreativeConceptResponse(Contract):
@@ -71,6 +72,8 @@ class CreativeConceptSetResponse(Contract):
     created_at: datetime
     freshness: str
     concepts: list[CreativeConceptResponse]
+    experiment_proposal_id: UUID | None = None
+    experiment_proposal_digest: str | None = None
 
 
 class CreativeDecisionRequest(Contract):
@@ -157,6 +160,8 @@ def create_creative_router(
             created_at=value.created_at,
             freshness="CURRENT" if research_freshness == "current" else "OUTDATED",
             concepts=concepts,
+            experiment_proposal_id=value.experiment_proposal_id,
+            experiment_proposal_digest=value.experiment_proposal_digest,
         )
 
     @router.post(
@@ -173,6 +178,7 @@ def create_creative_router(
                 product_id=product_id,
                 request=CreativeStrategyRequest(value.concept_count, value.channel_intent),
                 idempotency_key=value.idempotency_key,
+                approved_experiment_proposal_id=value.approved_experiment_proposal_id,
             )
             return _agent_run(run)
         except (AgentRuntimeError, CreativeError, ValueError) as error:

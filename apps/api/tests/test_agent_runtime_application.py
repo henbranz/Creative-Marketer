@@ -21,6 +21,7 @@ from creative_marketer.agent_runtime.application import (
     AgentRunService,
     CreativePreparation,
     CreativeStrategistCapability,
+    IntelligencePreparation,
     ModelProviderRegistry,
     ModelRouter,
     RecoveryOperator,
@@ -31,6 +32,7 @@ from creative_marketer.agent_runtime.application import (
     build_context,
     build_creative_model_context,
     initial_creative_strategist_route,
+    initial_intelligence_route,
     select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
@@ -74,6 +76,11 @@ from creative_marketer.identity.application.authentication import (
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
+from creative_marketer.intelligence.domain import (
+    CanonicalRef,
+    DataTrustLevel,
+    IntelligenceContextManifest,
+)
 from creative_marketer.research.domain import (
     EvidenceBlock,
     EvidenceBlockKind,
@@ -83,6 +90,7 @@ from creative_marketer.research.domain import (
     ResearchEvidenceReference,
     research_sha256_v1,
 )
+from scripts.bootstrap_intelligence import intelligence_configuration
 from tests.test_agent_runtime_domain import output, route, run
 from tests.test_creative_strategy import output as creative_output
 
@@ -196,7 +204,7 @@ def creative_configuration() -> AgentVersionConfiguration:
 def creative_preparation(
     base: ResearcherPreparation, snapshot: ResearchSnapshot, *, freshness: str = "current"
 ) -> CreativePreparation:
-    content = {
+    content: dict[str, object] = {
         "brand_profile": {"allowed_claims": [], "prohibited_claims": []},
         "profile": {"allowed_claims": ["Made from recycled steel"]},
         "brief": {"required_disclaimers": ["Results vary"], "secondary_audiences": []},
@@ -276,6 +284,7 @@ class MemoryRepository:
         self.agent_available = True
         self.budget_available = True
         self.creative_prepared = None
+        self.intelligence_prepared = None
 
     async def get_by_idempotency(self, key):
         return next((run for run in self.runs.values() if run.idempotency_key == key), None)
@@ -289,6 +298,15 @@ class MemoryRepository:
         return (
             self.creative_prepared
             if self.creative_prepared.product_snapshot.product_id == product_id
+            else None
+        )
+
+    async def prepare_intelligence(self, product_id):
+        if self.intelligence_prepared is None:
+            return None
+        return (
+            self.intelligence_prepared
+            if self.intelligence_prepared.product_snapshot.product_id == product_id
             else None
         )
 
@@ -635,11 +653,121 @@ def service(prepared, provider):
     uow = MemoryUow(repository, audit, outbox)
     value = AgentRunService(
         lambda _tenant_id: uow,
-        ModelRouter((route(), initial_creative_strategist_route())),
+        ModelRouter((route(), initial_creative_strategist_route(), initial_intelligence_route())),
         ModelProviderRegistry({"openai": provider}),
         IdentityProvider(),
     )
     return value, repository, audit, outbox
+
+
+def intelligence_preparation(base: ResearcherPreparation) -> IntelligencePreparation:
+    cfg = intelligence_configuration()
+    resolved = ResolvedResearcher(uuid4(), uuid4(), uuid4(), 1, cfg.configuration_digest, cfg)
+    product_ref = CanonicalRef(
+        "product_knowledge_snapshot", base.product_snapshot.id, base.product_snapshot.digest
+    )
+    content: dict[str, object] = {
+        "product_snapshot": product_ref.primitive(),
+        "research_snapshot": None,
+        "creative_concepts": [],
+        "final_creatives": [],
+        "publications": [],
+        "performance_snapshots": [],
+        "attribution_results": [],
+        "comparison_ids": [],
+        "feature_snapshot_ids": [],
+        "comparison_policy_version": "intelligence-comparability-v1",
+        "feature_extraction_version": "creative-features-v1",
+        "data_trust_level": "SYNTHETIC",
+    }
+    manifest = IntelligenceContextManifest(
+        base.product_snapshot.tenant_id,
+        base.product_snapshot.product_id,
+        product_ref,
+        None,
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        (),
+        DataTrustLevel.SYNTHETIC,
+        canonical_digest(content),
+    )
+    return IntelligencePreparation(
+        resolved,
+        base.product_snapshot,
+        manifest,
+        (),
+        {
+            "manifest": manifest.semantic_content(),
+            "observed_facts": [],
+            "creative_features": [],
+            "performance_comparisons": [],
+            "deterministic_limitations": ["Synthetic demo data."],
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_intelligence_request_guards_replay_and_active_reuse() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    runtime, repository, _, _ = service(
+        prepared,
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+        ),
+    )
+    repository.intelligence_prepared = intelligence_preparation(prepared)
+    with pytest.raises(AgentRunDenied):
+        await runtime.request_intelligence(
+            context(tenant_id, role=MembershipRole.MEMBER),
+            product_id=product_id,
+            idempotency_key="denied",
+        )
+    with pytest.raises(ValueError):
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=product_id, idempotency_key=" "
+        )
+    first = await runtime.request_intelligence(
+        context(tenant_id), product_id=product_id, idempotency_key="intelligence-first"
+    )
+    assert (
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=product_id, idempotency_key="intelligence-first"
+        )
+    ).id == first.id
+    assert (
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=product_id, idempotency_key="intelligence-active"
+        )
+    ).id == first.id
+    with pytest.raises(AgentRunNotReady, match="another request"):
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=uuid4(), idempotency_key="intelligence-first"
+        )
+    repository.runs.clear()
+    repository.intelligence_prepared = None
+    with pytest.raises(AgentRunNotReady, match="missing"):
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=product_id, idempotency_key="not-ready"
+        )
+    invalid = intelligence_preparation(prepared)
+    bad_cfg = replace(invalid.intelligence.configuration, read_scopes=())
+    repository.intelligence_prepared = replace(
+        invalid,
+        intelligence=replace(
+            invalid.intelligence,
+            configuration=bad_cfg,
+            configuration_digest=bad_cfg.configuration_digest,
+        ),
+    )
+    with pytest.raises(AgentRunNotReady, match="invariants"):
+        await runtime.request_intelligence(
+            context(tenant_id), product_id=product_id, idempotency_key="bad-config"
+        )
 
 
 @pytest.mark.asyncio

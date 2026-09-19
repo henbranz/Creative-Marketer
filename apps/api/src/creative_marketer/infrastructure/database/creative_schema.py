@@ -20,6 +20,8 @@ concept_sets = Table(
     Column("input_context_digest", String(71), nullable=False),
     Column("semantic_digest", String(71), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("experiment_proposal_id", UUID(as_uuid=True)),
+    Column("experiment_proposal_digest", String(71)),
     schema="creative",
 )
 

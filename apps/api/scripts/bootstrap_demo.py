@@ -21,6 +21,7 @@ from creative_marketer.agent_runtime.application import (
     ModelRouter,
     WorkloadIdentity,
     initial_creative_strategist_route,
+    initial_intelligence_route,
     initial_researcher_route,
 )
 from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
@@ -113,6 +114,10 @@ from creative_marketer.research.domain import ResearchCategory
 from creative_marketer.tool_governance.application import ResolveActiveTool
 from creative_marketer_api.config import Settings
 from scripts.bootstrap_creative_strategist import creative_strategist_configuration
+from scripts.bootstrap_intelligence import (
+    INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+    intelligence_configuration,
+)
 from scripts.bootstrap_media_tools import run as bootstrap_media_tools
 from scripts.bootstrap_producer import producer_configuration
 from scripts.bootstrap_researcher import researcher_configuration
@@ -184,6 +189,7 @@ async def _agent(
     agent_type: str,
     key: str,
     configuration: object,
+    platform_template_id: UUID | None = None,
 ) -> UUID:
     context = _context()
     matches = [
@@ -195,14 +201,20 @@ async def _agent(
         matches[0]
         if matches
         else await CreateTenantAgentDefinition(factory)(
-            context, agent_key=key, agent_type=agent_type
+            context,
+            agent_key=key,
+            agent_type=agent_type,
+            platform_template_id=platform_template_id,
         )
     )
     try:
         active = await ResolveActiveAgentVersion(factory)(context, definition.id)
     except AgentUnavailable:
         active = None
-    if active is None or active.configuration_digest != configuration.configuration_digest:  # type: ignore[attr-defined]
+    if platform_template_id is not None:
+        if active is None or active.configuration_digest != configuration.configuration_digest:  # type: ignore[attr-defined]
+            raise RuntimeError("platform Agent template is unavailable or incompatible")
+    elif active is None or active.configuration_digest != configuration.configuration_digest:  # type: ignore[attr-defined]
         version = await CreateAgentVersion(factory)(context, definition.id, configuration)  # type: ignore[arg-type]
         await ActivateAgentVersion(factory)(context, definition.id, version.id)
     return definition.id
@@ -382,6 +394,84 @@ def _production_output(invocation: object) -> dict[str, object]:
             },
         ],
         "required_assets": ["LOCAL DEMO voiceover"],
+    }
+
+
+def _intelligence_output(invocation: object) -> dict[str, object]:
+    sections = invocation.capability_context  # type: ignore[attr-defined]
+    comparisons = sections.get("performance_comparisons", [])
+    if not comparisons:
+        return {
+            "summary": "A single synthetic publication is available for workflow validation.",
+            "observations": [
+                {
+                    "statement": (
+                        "Synthetic performance facts were observed without a reliable "
+                        "matched baseline."
+                    ),
+                    "source_ref": "local-demo-performance",
+                    "window": "UNMATCHED",
+                }
+            ],
+            "comparative_findings": [],
+            "insight_candidates": [],
+            "limitations": [
+                "Synthetic demo data; not real market evidence.",
+                "Insufficient comparable matched-window sample; no trend conclusion is available.",
+            ],
+            "next_experiments": [],
+        }
+    comparison = comparisons[0]
+    return {
+        "summary": (
+            "A possible synthetic pattern is worth testing in a controlled creative experiment."
+        ),
+        "observations": [
+            {
+                "statement": "A deterministic matched-window comparison is available.",
+                "source_ref": comparison["id"],
+                "window": comparison["comparison_window"],
+            }
+        ],
+        "comparative_findings": [
+            {
+                "comparison_id": comparison["id"],
+                "interpretation": "This may indicate a creative feature worth isolating in a test.",
+            }
+        ],
+        "insight_candidates": [
+            {
+                "statement": (
+                    "The opening treatment may be worth testing while other elements remain fixed."
+                ),
+                "comparison_ids": [comparison["id"]],
+                "metric": comparison["metric_key"],
+                "confidence": "LOW",
+                "scope": {"platform": "local-demo"},
+                "limitations": ["Synthetic and observational evidence only."],
+            }
+        ],
+        "limitations": [
+            "Synthetic demo data; not real market evidence.",
+            "Observational evidence does not establish causality.",
+            "No advertising spend facts are available.",
+        ],
+        "next_experiments": [
+            {
+                "candidate_indexes": [0],
+                "hypothesis": "An alternate opening treatment may be worth further testing.",
+                "primary_variable": "opening treatment",
+                "controlled_elements": ["CTA", "caption", "duration"],
+                "target_metric": comparison["metric_key"],
+                "platform": "local-demo",
+                "recommended_measurement_window": comparison["comparison_window"],
+                "creative_direction": "Create variants that differ only in the opening treatment.",
+                "rationale": "A single-variable experiment supports clearer learning.",
+                "expected_learning": (
+                    "Whether the opening treatment merits a larger observed-data test."
+                ),
+            }
+        ],
     }
 
 
@@ -585,6 +675,13 @@ async def run() -> None:
         registry, "creative_strategist", "creative_strategist", creative_strategist_configuration()
     )
     producer_id = await _agent(registry, "producer", "producer", producer_configuration())
+    await _agent(
+        registry,
+        "intelligence",
+        "intelligence",
+        intelligence_configuration(),
+        INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+    )
     runtime = AgentRunService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
         ModelRouter(
@@ -592,6 +689,7 @@ async def run() -> None:
                 initial_researcher_route(),
                 initial_creative_strategist_route(),
                 initial_producer_route(),
+                initial_intelligence_route(),
             )
         ),
         ModelProviderRegistry(
@@ -633,6 +731,8 @@ async def run() -> None:
                             else _creative_output(invocation)
                             if invocation.output_contract_key == "creative.creative_concept_set"
                             else _production_output(invocation)
+                            if invocation.output_contract_key == "production.production_plan"
+                            else _intelligence_output(invocation)
                         ),
                         f"local-demo-{invocation.output_contract_key}",
                         ModelUsage(100, 100, 200),

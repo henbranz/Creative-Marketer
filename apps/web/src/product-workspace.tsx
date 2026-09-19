@@ -21,6 +21,7 @@ import {
   type CreativeConcept,
   type CreativeConceptSet,
   type FinalCreative,
+  type IntelligenceReport,
   catalogApi,
   obsidianOpenUrl,
   type Product,
@@ -3311,6 +3312,239 @@ function PerformancePanel({ workspace }: { workspace: Workspace }) {
   );
 }
 
+function InsightsPanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [reports, setReports] = useState<IntelligenceReport[]>([]);
+  const [runState, setRunState] = useState("");
+  const [approved, setApproved] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const refresh = useCallback(async () => {
+    setReports(
+      await catalogApi.listIntelligenceReports(session, workspace.product.id),
+    );
+  }, [session, workspace.product.id]);
+
+  useEffect(() => {
+    queueMicrotask(
+      () => void refresh().catch(() => setError("Insights are unavailable.")),
+    );
+  }, [refresh]);
+
+  const latest = reports[0];
+  const decide = async (
+    proposalId: string,
+    decision: "APPROVED_FOR_CREATIVE" | "REJECTED",
+  ) => {
+    setBusy(proposalId);
+    setError("");
+    try {
+      await catalogApi.decideExperiment(session, proposalId, decision);
+      if (decision === "APPROVED_FOR_CREATIVE")
+        setApproved((current) => new Set(current).add(proposalId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Decision failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="workspace-panel insights-panel">
+      <section className="panel-heading">
+        <div>
+          <p className="eyebrow">Governed creative learning</p>
+          <h2>Insights</h2>
+          <p>What happened, what it may mean, and what to test next.</p>
+        </div>
+        {workspace.product.can_edit && (
+          <Button
+            disabled={busy === "analyze"}
+            onClick={() => {
+              setBusy("analyze");
+              setError("");
+              void catalogApi
+                .analyzePerformance(session, workspace.product.id)
+                .then((run) => setRunState(run.status))
+                .catch((caught: unknown) =>
+                  setError(
+                    caught instanceof Error
+                      ? caught.message
+                      : "Analysis failed.",
+                  ),
+                )
+                .finally(() => setBusy(null));
+            }}
+          >
+            {busy === "analyze" ? "Queuing…" : "Analyze performance"}
+          </Button>
+        )}
+      </section>
+      {runState && <div className="info-banner">Analysis: {runState}</div>}
+      {error && (
+        <div className="error-banner" role="alert">
+          {error}
+        </div>
+      )}
+      {!latest ? (
+        <EmptyState icon="✦" title="No intelligence report yet">
+          Collect performance data, then analyze it to create bounded
+          hypotheses.
+        </EmptyState>
+      ) : (
+        <>
+          {latest.data_trust_level === "SYNTHETIC" && (
+            <div className="synthetic-warning" role="status">
+              <strong>Synthetic demo data</strong>
+              <span>
+                This analysis validates the Creative Marketer workflow and
+                should not be treated as real market evidence.
+              </span>
+            </div>
+          )}
+          <section className="insight-section" aria-labelledby="what-happened">
+            <p className="eyebrow">Observed · Derived</p>
+            <h3 id="what-happened">What happened</h3>
+            {latest.observations.map((item, index) => (
+              <article
+                key={`${item.source_ref}-${index}`}
+                className="insight-fact"
+              >
+                <StatusBadge status={item.window} />
+                <p>{item.statement}</p>
+                <small>{item.source_ref}</small>
+              </article>
+            ))}
+            {latest.candidates.map((item) => (
+              <div className="comparison-facts" key={item.id}>
+                <Metric
+                  label="Baseline"
+                  value={item.baseline ?? "Unavailable"}
+                />
+                <Metric
+                  label="Observed delta"
+                  value={item.observed_delta ?? "Unavailable"}
+                />
+                <Metric
+                  label="Baseline sample"
+                  value={String(item.sample_size)}
+                />
+              </div>
+            ))}
+          </section>
+          <section className="insight-section" aria-labelledby="what-it-means">
+            <p className="eyebrow">AI hypothesis · not established truth</p>
+            <h3 id="what-it-means">What it may mean</h3>
+            <p>{latest.summary}</p>
+            {latest.candidates.map((item) => (
+              <article className="hypothesis-card" key={item.id}>
+                <header>
+                  <strong>Possible pattern</strong>
+                  <StatusBadge status={item.confidence} />
+                </header>
+                <p>{item.statement}</p>
+                <small>
+                  Scope: {JSON.stringify(item.scope)} · Evidence sample:{" "}
+                  {item.sample_size}
+                </small>
+                <ul>
+                  {item.limitations.map((value) => (
+                    <li key={value}>{value}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+            <details open>
+              <summary>Limitations</summary>
+              <ul>
+                {latest.limitations.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </details>
+          </section>
+          <section className="insight-section" aria-labelledby="what-to-test">
+            <p className="eyebrow">Human approval required</p>
+            <h3 id="what-to-test">What to test next</h3>
+            {latest.proposals.map((proposal) => (
+              <article className="experiment-card" key={proposal.id}>
+                <header>
+                  <strong>{proposal.hypothesis}</strong>
+                  <StatusBadge status={proposal.data_trust_level} />
+                </header>
+                <dl>
+                  <div>
+                    <dt>Primary variable</dt>
+                    <dd>{proposal.primary_variable}</dd>
+                  </div>
+                  <div>
+                    <dt>Controlled elements</dt>
+                    <dd>{proposal.controlled_elements.join(", ")}</dd>
+                  </div>
+                  <div>
+                    <dt>Target metric</dt>
+                    <dd>{proposal.target_metric}</dd>
+                  </div>
+                  <div>
+                    <dt>Measurement window</dt>
+                    <dd>{proposal.recommended_measurement_window}</dd>
+                  </div>
+                  <div>
+                    <dt>Why test this</dt>
+                    <dd>{proposal.rationale}</dd>
+                  </div>
+                </dl>
+                {workspace.product.can_edit && (
+                  <div className="card-actions">
+                    <button
+                      disabled={busy === proposal.id}
+                      onClick={() =>
+                        void decide(proposal.id, "APPROVED_FOR_CREATIVE")
+                      }
+                    >
+                      Approve for creative
+                    </button>
+                    <button
+                      disabled={busy === proposal.id}
+                      onClick={() => void decide(proposal.id, "REJECTED")}
+                    >
+                      Reject
+                    </button>
+                    {approved.has(proposal.id) && (
+                      <Button
+                        disabled={busy === proposal.id}
+                        onClick={() => {
+                          setBusy(proposal.id);
+                          void catalogApi
+                            .generateExperimentConcepts(session, proposal.id)
+                            .then((run) =>
+                              setRunState(`Creative Strategist ${run.status}`),
+                            )
+                            .catch((caught: unknown) =>
+                              setError(
+                                caught instanceof Error
+                                  ? caught.message
+                                  : "Concept generation failed.",
+                              ),
+                            )
+                            .finally(() => setBusy(null));
+                        }}
+                      >
+                        Generate next concepts
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </article>
+            ))}
+          </section>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PillList({
   values,
   empty = "Not provided",
@@ -4702,6 +4936,8 @@ export function ProductWorkspaceApp() {
                     <PublishedPanel workspace={workspace} />
                   ) : tab === "Performance" ? (
                     <PerformancePanel workspace={workspace} />
+                  ) : tab === "Insights" ? (
+                    <InsightsPanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

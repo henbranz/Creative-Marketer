@@ -1,12 +1,18 @@
 import os
 from collections.abc import AsyncIterator
+from uuid import UUID
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
+from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from creative_marketer.audit.identity import IdentityAuditService
+from creative_marketer.infrastructure.database.agent_governance_schema import (
+    agent_activations,
+    agent_definitions,
+    agent_versions,
+)
 from creative_marketer.infrastructure.database.agent_governance_uow import (
     SqlAlchemyAgentRegistryUnitOfWorkFactory,
 )
@@ -32,7 +38,14 @@ from creative_marketer.infrastructure.database.tool_governance_uow import (
     SqlAlchemyToolRegistryUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.uow import SqlAlchemyUnitOfWorkFactory
+from scripts.bootstrap_intelligence import (
+    INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+    intelligence_configuration,
+)
 from tests.integration.support import IdentityStack
+
+INTELLIGENCE_PLATFORM_VERSION_ID = UUID("775ebee9-df02-59d5-a468-032fc7e21384")
+INTELLIGENCE_SYSTEM_ACTOR_ID = UUID("ffecd023-0ca1-5208-b90c-2fbc5370c07a")
 
 
 @pytest.fixture(scope="session")
@@ -66,6 +79,10 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text(
                 "TRUNCATE measurement.performance_snapshots, "
+                "intelligence.experiment_decisions, intelligence.experiment_proposals, "
+                "intelligence.insight_decisions, intelligence.insight_candidates, "
+                "intelligence.reports, intelligence.performance_comparisons, "
+                "intelligence.creative_feature_snapshots, intelligence.context_manifests, "
                 "measurement.attribution_results, measurement.conversion_observations, "
                 "measurement.attribution_references, measurement.collection_runs, "
                 "measurement.performance_observations, "
@@ -108,6 +125,43 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
         await connection.execute(text("TRUNCATE audit.audit_records"))
         await connection.execute(
             text("TRUNCATE identity.memberships, identity.users, identity.tenants CASCADE")
+        )
+        configuration = intelligence_configuration()
+        await connection.execute(
+            insert(agent_definitions).values(
+                id=INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                platform_template_id=None,
+                agent_key="performance_intelligence",
+                agent_type="intelligence",
+                status="active",
+                created_by_actor_kind="system",
+                created_by_actor_id=INTELLIGENCE_SYSTEM_ACTOR_ID,
+            )
+        )
+        await connection.execute(
+            insert(agent_versions).values(
+                id=INTELLIGENCE_PLATFORM_VERSION_ID,
+                definition_id=INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                version_number=1,
+                **configuration.primitive(),
+                configuration_digest=configuration.configuration_digest,
+                created_by_actor_kind="system",
+                created_by_actor_id=INTELLIGENCE_SYSTEM_ACTOR_ID,
+            )
+        )
+        await connection.execute(
+            insert(agent_activations).values(
+                definition_id=INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+                active_version_id=INTELLIGENCE_PLATFORM_VERSION_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                activated_by_actor_kind="system",
+                activated_by_actor_id=INTELLIGENCE_SYSTEM_ACTOR_ID,
+            )
         )
     yield engine
     await engine.dispose()

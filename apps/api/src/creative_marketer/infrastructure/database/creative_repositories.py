@@ -53,6 +53,8 @@ async def _set_with_concepts(session: AsyncSession, row: object) -> CreativeConc
         id=d["id"],
         schema_version=d["schema_version"],
         created_at=d["created_at"],
+        experiment_proposal_id=d["experiment_proposal_id"],
+        experiment_proposal_digest=d["experiment_proposal_digest"],
     )
 
 
@@ -75,6 +77,8 @@ class SqlAlchemyCreativeRepository:
                 input_context_digest=value.input_context_digest,
                 semantic_digest=value.semantic_digest,
                 created_at=value.created_at,
+                experiment_proposal_id=value.experiment_proposal_id,
+                experiment_proposal_digest=value.experiment_proposal_digest,
             )
         )
         await self._session.execute(

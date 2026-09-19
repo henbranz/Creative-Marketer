@@ -109,29 +109,27 @@ But distinguish user preference from market-performance evidence.
 
 ## Creative Feature Extraction
 
-To learn beyond individual posts, model creative features such as:
+`creative-features-v1` learns only from features already present in canonical artifacts, such as:
 
 - hook_type
 - duration
-- person_present
 - voiceover
-- music
-- camera_motion
 - shot_count
-- product_visible_first_3_sec
 - caption_length
 - CTA
-- UGC
-- B-roll
 - storytelling
 - problem_solution
 - price_visible
 - discount
-- lighting
-- background
 - aspect_ratio
 
-Over time this supports feature-level learning rather than merely “video #123 worked.”
+Unknown features remain unknown. Pixel-level properties such as person presence, emotion, lighting,
+camera motion, or UGC style are not inferred in V1. This supports traceable feature-level learning
+without inventing labels.
+
+Intelligence Agent output is not memory or Product truth. It creates immutable `CANDIDATE`
+insights only. A human may propose one for testing or reject it; `VALIDATED` and `ACTIVE` require
+future evidence rules. Synthetic candidates can never enter those states.
 
 ## Cross-Tenant Learning
 
