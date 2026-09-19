@@ -12,6 +12,7 @@ from creative_marketer.agent_runtime.application import (
     ModelProvider,
     ModelProviderRegistry,
     ModelRouter,
+    initial_commerce_operations_route,
     initial_creative_strategist_route,
     initial_intelligence_route,
     initial_researcher_route,
@@ -65,6 +66,72 @@ class DatabaseAgentTypeResolver:
         async with self._factory(tenant_id) as uow:
             run = await uow.runs.get(run_id)
             return run.agent_type if run else None
+
+
+def _fake_demo_result(invocation: object) -> ModelInvocationResult:
+    """Zero-network structured outputs for every Agent supported by the local worker."""
+    from scripts.bootstrap_demo import (
+        _creative_output,
+        _intelligence_output,
+        _production_output,
+    )
+
+    contract = invocation.output_contract_key  # type: ignore[attr-defined]
+    if contract == "creative.creative_concept_set":
+        output = _creative_output(invocation)
+    elif contract == "production.production_plan":
+        output = _production_output(invocation)
+    elif contract == "intelligence.intelligence_report":
+        output = _intelligence_output(invocation)
+    elif contract == "commerce.operations_report":
+        capability_context = invocation.capability_context or {}  # type: ignore[attr-defined]
+        inventories = capability_context.get("inventory", ())
+        orders = capability_context.get("orders", ())
+        deterministic = capability_context.get("deterministic_exceptions", ())
+        inventory_ids = {
+            str(item["observation_id"])
+            for item in inventories
+            if isinstance(item, dict) and "observation_id" in item
+        }
+        order_ids = {
+            str(item["observation_id"])
+            for item in orders
+            if isinstance(item, dict) and "observation_id" in item
+        }
+        inventory_exceptions = [
+            {
+                "observation_id": str(item["observation_id"]),
+                "explanation": f"Deterministic {item['kind']} rule matched.",
+            }
+            for item in deterministic
+            if isinstance(item, dict) and str(item.get("observation_id")) in inventory_ids
+        ]
+        order_exceptions = [
+            {
+                "observation_id": str(item["observation_id"]),
+                "explanation": f"Deterministic {item['kind']} rule matched.",
+            }
+            for item in deterministic
+            if isinstance(item, dict) and str(item.get("observation_id")) in order_ids
+        ]
+        output = {
+            "summary": "Fake Store commerce observations were analyzed without network access.",
+            "inventory_exceptions": inventory_exceptions,
+            "order_exceptions": order_exceptions,
+            "action_proposals": [],
+            "limitations": [
+                "Synthetic Fake Store analysis; exact human approval is required for mutations."
+            ],
+        }
+    else:
+        raise RuntimeError("fake worker does not support this structured output contract")
+    return ModelInvocationResult(
+        output,
+        f"local-demo-{contract}",
+        ModelUsage(100, 100, 200),
+        "openai",
+        "gpt-5.6-sol",
+    )
 
 
 async def _bridge_loop(
@@ -140,6 +207,7 @@ async def run() -> None:
         initial_creative_strategist_route(),
         initial_producer_route(),
         initial_intelligence_route(),
+        initial_commerce_operations_route(),
     )
     session_factory = create_session_factory(str(settings.database_url))
     runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
@@ -159,31 +227,7 @@ async def run() -> None:
     )
     provider: ModelProvider
     if settings.model_provider_backend == "fake":
-        from scripts.bootstrap_demo import (
-            _creative_output,
-            _intelligence_output,
-            _production_output,
-        )
-
-        def demo_result(invocation: object) -> ModelInvocationResult:
-            contract = invocation.output_contract_key  # type: ignore[attr-defined]
-            if contract == "creative.creative_concept_set":
-                output = _creative_output(invocation)
-            elif contract == "production.production_plan":
-                output = _production_output(invocation)
-            elif contract == "intelligence.intelligence_report":
-                output = _intelligence_output(invocation)
-            else:
-                raise RuntimeError("fake worker only supports bootstrapped demo follow-up runs")
-            return ModelInvocationResult(
-                output,
-                f"local-demo-{contract}",
-                ModelUsage(100, 100, 200),
-                "openai",
-                "gpt-5.6-sol",
-            )
-
-        provider = FakeModelProvider(demo_result)
+        provider = FakeModelProvider(_fake_demo_result)
     else:
         assert settings.openai_api_key is not None
         provider = (

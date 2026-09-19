@@ -16,6 +16,10 @@ from creative_marketer.tool_execution.domain import (
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionActivityResult,
     AgentExecutionWorkflowInput,
+    CommerceActionActivityResult,
+    CommerceActionWorkflowInput,
+    CommerceSyncActivityResult,
+    CommerceSyncWorkflowInput,
     FinalCreativeAssemblyResult,
     FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
@@ -78,6 +82,20 @@ class MeasurementJobExecutor(Protocol):
     ) -> MeasurementActivityResult: ...
 
 
+class CommerceSyncExecutor(Protocol):
+    async def sync(
+        self, tenant_id: UUID, connection_id: UUID, sync_type: str, cursor: str | None
+    ) -> CommerceSyncActivityResult: ...
+
+
+class CommerceActionExecutor(Protocol):
+    async def submit(self, tenant_id: UUID, proposal_id: UUID) -> CommerceActionActivityResult: ...
+
+    async def reconcile(
+        self, tenant_id: UUID, proposal_id: UUID
+    ) -> CommerceActionActivityResult: ...
+
+
 @dataclass(slots=True)
 class ToolGatewayWorkflowService:
     """Application-facing adapter; the existing Tool Gateway remains Temporal-unaware."""
@@ -129,6 +147,8 @@ class TemporalActivities:
     assembly_jobs: FinalAssemblyExecutor | None = None
     publication_jobs: PublicationJobExecutor | None = None
     measurement_jobs: MeasurementJobExecutor | None = None
+    commerce_sync: CommerceSyncExecutor | None = None
+    commerce_actions: CommerceActionExecutor | None = None
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:
@@ -202,6 +222,48 @@ class TemporalActivities:
             ) from error
         return AgentExecutionActivityResult(
             str(run.id), run.status.value, run.result_ref, run.failure_code
+        )
+
+    @activity.defn(name="workflow.sync_commerce")
+    async def sync_commerce(
+        self, request: CommerceSyncWorkflowInput, sync_type: str, cursor: str | None
+    ) -> CommerceSyncActivityResult:
+        if self.commerce_sync is None:
+            raise ApplicationError(
+                "Commerce sync executor is not composed",
+                type="COMMERCE_SYNC_UNAVAILABLE",
+                non_retryable=True,
+            )
+        return await self.commerce_sync.sync(
+            UUID(request.tenant_id), UUID(request.connection_id), sync_type, cursor
+        )
+
+    @activity.defn(name="workflow.submit_commerce_action")
+    async def submit_commerce_action(
+        self, request: CommerceActionWorkflowInput
+    ) -> CommerceActionActivityResult:
+        if self.commerce_actions is None:
+            raise ApplicationError(
+                "Commerce action executor is not composed",
+                type="COMMERCE_ACTION_UNAVAILABLE",
+                non_retryable=True,
+            )
+        return await self.commerce_actions.submit(
+            UUID(request.tenant_id), UUID(request.proposal_id)
+        )
+
+    @activity.defn(name="workflow.reconcile_commerce_action")
+    async def reconcile_commerce_action(
+        self, request: CommerceActionWorkflowInput
+    ) -> CommerceActionActivityResult:
+        if self.commerce_actions is None:
+            raise ApplicationError(
+                "Commerce action executor is not composed",
+                type="COMMERCE_ACTION_UNAVAILABLE",
+                non_retryable=True,
+            )
+        return await self.commerce_actions.reconcile(
+            UUID(request.tenant_id), UUID(request.proposal_id)
         )
 
     @activity.defn(name="workflow.start_generation")

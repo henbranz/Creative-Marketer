@@ -20,6 +20,17 @@ from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditActorKind, AuditOutcome, AuditRecord, AuditScopeKind
 from creative_marketer.audit.safety import safe_metadata
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
+from creative_marketer.commerce.application import (
+    COMMERCE_CONTRACT_KEY,
+    COMMERCE_CONTRACT_VERSION,
+    build_commerce_result,
+    load_commerce_output_schema,
+)
+from creative_marketer.commerce.domain import (
+    CommerceOperationsContextManifest,
+    InventoryObservation,
+    OrderObservation,
+)
 from creative_marketer.creative.application import (
     CREATIVE_CONTRACT_KEY,
     CREATIVE_CONTRACT_VERSION,
@@ -514,6 +525,92 @@ class IntelligenceCapability:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CommerceOperationsCapability:
+    agent_type: str = "commerce_operations"
+    output_contract_key: str = COMMERCE_CONTRACT_KEY
+    output_contract_version: int = COMMERCE_CONTRACT_VERSION
+
+    def supports_output_contract(self, key: str, version: int) -> bool:
+        return key == self.output_contract_key and version == self.output_contract_version
+
+    def output_schema(self, version: int) -> Mapping[str, object]:
+        if version != self.output_contract_version:
+            raise AgentCapabilityUnavailable("Commerce Operations output contract is unsupported")
+        return load_commerce_output_schema()
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation:
+        provider_context = {
+            key: value
+            for key, value in dict(context.capability_context or {}).items()
+            if key
+            not in {
+                "manifest_object",
+                "inventory_objects",
+                "order_objects",
+                "connection_id",
+            }
+        }
+        return ModelInvocation(
+            route,
+            context.system_instructions,
+            {},
+            (),
+            self.output_schema(run.output_contract_version),
+            run.output_contract_key,
+            run.output_contract_version,
+            route.max_output_tokens,
+            route.reasoning_effort,
+            capability_context=provider_context,
+            output_task=context.output_task,
+        )
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult:
+        values = context.capability_context or {}
+        manifest = values.get("manifest_object")
+        inventories = values.get("inventory_objects")
+        orders = values.get("order_objects")
+        connection_id = values.get("connection_id")
+        if (
+            not isinstance(manifest, CommerceOperationsContextManifest)
+            or not isinstance(inventories, tuple)
+            or not isinstance(orders, tuple)
+            or not isinstance(connection_id, UUID)
+        ):
+            raise AgentRunNotReady("Commerce Operations capability context is unavailable")
+        result = build_commerce_result(
+            output,
+            tenant_id=run.tenant_id,
+            product_id=run.product_id,
+            connection_id=connection_id,
+            agent_run_id=run.id,
+            agent_version_id=run.agent_version_id,
+            manifest=manifest,
+            inventories=cast(tuple[InventoryObservation, ...], inventories),
+            orders=cast(tuple[OrderObservation, ...], orders),
+        )
+        return CapabilityResult(
+            result,
+            "commerce.report.created.v1",
+            "commerce_operations_report",
+            result.report.id,
+            result.report.created_at,
+            {
+                "commerce_operations_report_id": str(result.report.id),
+                "agent_run_id": str(run.id),
+                "product_id": str(run.product_id),
+                "context_manifest_digest": result.report.context_manifest_digest,
+                "semantic_digest": result.report.semantic_digest,
+            },
+            "commerce.reports",
+            1,
+        )
+
+
 def default_capability_registry() -> AgentCapabilityRegistry:
     handlers = cast(
         tuple[AgentCapabilityHandler, ...],
@@ -522,6 +619,7 @@ def default_capability_registry() -> AgentCapabilityRegistry:
             CreativeStrategistCapability(),
             ProducerCapability(),
             IntelligenceCapability(),
+            CommerceOperationsCapability(),
         ),
     )
     return AgentCapabilityRegistry(handlers)
@@ -568,6 +666,21 @@ def initial_intelligence_route() -> ModelRoute:
         reasoning_effort="high",
         # Keeps the verified route inside the immutable USD 0.168/run envelope even
         # when every reserved output token is billed at the output-token rate.
+        max_output_tokens=4000,
+        pricing=ModelPricing(
+            "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
+        ),
+    )
+
+
+def initial_commerce_operations_route() -> ModelRoute:
+    return ModelRoute(
+        profile_key="commerce_operations",
+        route_version="openai-gpt-5.6-sol-commerce-2026-09-19",
+        provider="openai",
+        model="gpt-5.6-sol",
+        capabilities=frozenset({"text", "reasoning", "structured_output"}),
+        reasoning_effort="high",
         max_output_tokens=4000,
         pricing=ModelPricing(
             "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
@@ -652,6 +765,17 @@ class IntelligencePreparation:
 
 
 @dataclass(frozen=True, slots=True)
+class CommercePreparation:
+    commerce: ResolvedResearcher
+    product_snapshot: ProductKnowledgeSnapshot
+    manifest: CommerceOperationsContextManifest
+    connection_id: UUID
+    inventories: tuple[InventoryObservation, ...]
+    orders: tuple[OrderObservation, ...]
+    context_payload: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkloadIdentity:
     workload_id: str
     environment: str
@@ -690,6 +814,7 @@ class AgentRunRepository(Protocol):
     ) -> CreativePreparation | None: ...
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None: ...
     async def prepare_intelligence(self, product_id: UUID) -> IntelligencePreparation | None: ...
+    async def prepare_commerce(self, product_id: UUID) -> CommercePreparation | None: ...
     async def active_for_product(
         self, product_id: UUID, definition_id: UUID
     ) -> AgentRun | None: ...
@@ -1106,6 +1231,50 @@ def conservative_intelligence_input_token_bound(context: ModelContext) -> int:
         "context_sections": _plain_json(sections),
         "output_task": context.output_task,
         "output_schema": load_intelligence_output_schema(),
+    }
+    return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def build_commerce_model_context(preparation: CommercePreparation) -> ModelContext:
+    sections = dict(preparation.context_payload)
+    sections.update(
+        {
+            "manifest_object": preparation.manifest,
+            "inventory_objects": preparation.inventories,
+            "order_objects": preparation.orders,
+            "connection_id": preparation.connection_id,
+        }
+    )
+    return ModelContext(
+        preparation.commerce.configuration.system_instructions,
+        {},
+        (),
+        preparation.manifest.semantic_digest,
+        capability_context=sections,
+        output_task=(
+            "Return only commerce.operations_report.v1. Explain rule-based exceptions and "
+            "propose exact human-reviewed actions only."
+        ),
+    )
+
+
+def conservative_commerce_input_token_bound(context: ModelContext) -> int:
+    sections = {
+        key: value
+        for key, value in dict(context.capability_context or {}).items()
+        if key
+        not in {
+            "manifest_object",
+            "inventory_objects",
+            "order_objects",
+            "connection_id",
+        }
+    }
+    document = {
+        "system_instructions": context.system_instructions,
+        "context_sections": _plain_json(sections),
+        "output_task": context.output_task,
+        "output_schema": load_commerce_output_schema(),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -1850,6 +2019,173 @@ class AgentRunService:
             await uow.commit()
             self.telemetry.count(
                 "agent_runs", attributes={"agent.type": "intelligence", "result": "pending"}
+            )
+            return run
+
+    async def request_commerce_operations(
+        self,
+        context: ExecutionContext,
+        *,
+        product_id: UUID,
+        idempotency_key: str,
+    ) -> AgentRun:
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
+        if not idempotency_key.strip() or len(idempotency_key) > 128:
+            raise ValueError("idempotency key is required and bounded")
+        now = datetime.now(UTC)
+        async with self.uow_factory(context.tenant_id) as uow:
+            replay = await uow.runs.get_by_idempotency(idempotency_key)
+            if replay is not None:
+                if replay.product_id != product_id or replay.agent_type != "commerce_operations":
+                    raise AgentRunNotReady("idempotency key is bound to another request")
+                return replay
+            preparation = await uow.runs.prepare_commerce(product_id)
+            if preparation is None:
+                raise AgentRunNotReady(
+                    "Product snapshot, explicit commerce mapping, observations, or active "
+                    "Commerce Operations Agent is missing"
+                )
+            cfg = preparation.commerce.configuration
+            if (
+                cfg.output_contract_key != COMMERCE_CONTRACT_KEY
+                or cfg.output_contract_version != COMMERCE_CONTRACT_VERSION
+                or cfg.model_policy.max_turns != 1
+                or not cfg.model_policy.structured_output_required
+                or cfg.model_policy.fallback_allowed
+                or set(cfg.model_policy.required_capabilities)
+                != {"text", "reasoning", "structured_output"}
+                or cfg.allowed_tool_keys
+                or cfg.run_budget_policy.max_tool_calls != 0
+                or cfg.run_budget_policy.max_model_calls != 1
+                or cfg.memory_scopes
+                or set(cfg.read_scopes)
+                != {"catalog.product", "commerce.observations", "measurement.attribution"}
+                or set(cfg.write_scopes) != {"commerce.report", "commerce.proposal"}
+            ):
+                raise AgentRunNotReady(
+                    "active Commerce Operations Agent configuration violates v1 invariants"
+                )
+            route = self.router.resolve(
+                cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
+            )
+            self.providers.resolve(route.provider)
+            input_allowance = cfg.run_budget_policy.max_total_tokens - route.max_output_tokens
+            worst_cost = max(
+                route.pricing.cost(input_allowance, route.max_output_tokens),
+                route.pricing.cost(cfg.run_budget_policy.max_total_tokens, 0),
+            )
+            if (
+                route.pricing.currency != cfg.run_budget_policy.currency
+                or cfg.period_budget_policy.currency != cfg.run_budget_policy.currency
+                or input_allowance <= 0
+                or worst_cost > cfg.run_budget_policy.max_cost
+            ):
+                raise BudgetExceeded(
+                    "Commerce Operations model route cannot fit the budget envelope"
+                )
+            active = await uow.runs.active_for_product(
+                product_id, preparation.commerce.requested_definition_id
+            )
+            if active is not None:
+                return active
+            model_context = build_commerce_model_context(preparation)
+            if conservative_commerce_input_token_bound(model_context) > input_allowance:
+                raise BudgetExceeded(
+                    "bounded Commerce Operations context exceeds input token envelope"
+                )
+            refs: tuple[Mapping[str, object], ...] = (
+                {
+                    "kind": "commerce_context_manifest",
+                    "id": str(preparation.manifest.id),
+                    "digest": preparation.manifest.semantic_digest,
+                },
+            )
+            run = AgentRun(
+                tenant_id=context.tenant_id,
+                requested_agent_definition_id=preparation.commerce.requested_definition_id,
+                resolved_agent_definition_id=preparation.commerce.resolved_definition_id,
+                agent_version_id=preparation.commerce.version_id,
+                agent_version_number=preparation.commerce.version_number,
+                agent_configuration_digest=preparation.commerce.configuration_digest,
+                prompt_revision=cfg.prompt_revision,
+                product_id=product_id,
+                product_snapshot_id=preparation.product_snapshot.id,
+                product_snapshot_digest=preparation.product_snapshot.digest,
+                product_snapshot_schema_version=preparation.product_snapshot.schema_version,
+                research_context_digest=preparation.manifest.semantic_digest,
+                context_digest=preparation.manifest.semantic_digest,
+                selected_evidence=(),
+                model_profile_key=cfg.model_policy.profile_key,
+                output_contract_key=COMMERCE_CONTRACT_KEY,
+                output_contract_version=COMMERCE_CONTRACT_VERSION,
+                correlation_id=context.correlation_id,
+                initiated_by_actor_kind=context.actor.kind.value,
+                initiated_by_actor_id=context.actor.id,
+                period_start=_period_start(now, cfg.period_budget_policy.period),
+                reserved_cost=cfg.run_budget_policy.max_cost,
+                currency=cfg.run_budget_policy.currency,
+                idempotency_key=idempotency_key,
+                agent_type="commerce_operations",
+                input_context_kind="commerce_operations.v1",
+                input_context_schema_version=1,
+                input_context_digest=preparation.manifest.semantic_digest,
+                input_context_refs=refs,
+                max_total_tokens=cfg.run_budget_policy.max_total_tokens,
+                created_at=now,
+            )
+            await uow.runs.reserve_period_budget(
+                run_id=run.id,
+                definition_id=run.requested_agent_definition_id,
+                period_start=run.period_start,
+                max_runs=cfg.period_budget_policy.max_runs,
+                max_cost=cfg.period_budget_policy.max_cost,
+                reserve_cost=run.reserved_cost,
+                currency=run.currency,
+            )
+            if not await uow.runs.add(run):
+                raise AgentRunConflict("another Commerce Operations request won the race")
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="commerce.analysis.requested",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="agent_run",
+                    resource_id=str(run.id),
+                    agent_definition_id=run.requested_agent_definition_id,
+                    agent_version_id=run.agent_version_id,
+                    agent_run_id=run.id,
+                    metadata=safe_metadata(
+                        {
+                            "product_id": str(product_id),
+                            "context_manifest_id": str(preparation.manifest.id),
+                            "context_manifest_digest": preparation.manifest.semantic_digest,
+                        }
+                    ),
+                )
+            )
+            await _event(
+                uow,
+                context,
+                "agent.run.requested.v1",
+                "agent_run",
+                run.id,
+                {
+                    "agent_run_id": str(run.id),
+                    "product_id": str(product_id),
+                    "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                    "agent_version_id": str(run.agent_version_id),
+                    "product_snapshot_digest": run.product_snapshot_digest,
+                    "research_context_digest": run.research_context_digest,
+                    "context_digest": run.context_digest,
+                },
+            )
+            await uow.commit()
+            self.telemetry.count(
+                "agent_runs", attributes={"agent.type": "commerce_operations", "result": "pending"}
             )
             return run
 

@@ -8,6 +8,9 @@ from creative_marketer.infrastructure.database.assembly_uow import (
     SqlAlchemyAssemblyUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.catalog_uow import SqlAlchemyCatalogUnitOfWorkFactory
+from creative_marketer.infrastructure.database.commerce_uow import (
+    SqlAlchemyCommerceUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.creative_uow import (
     SqlAlchemyCreativeUnitOfWorkFactory,
 )
@@ -42,6 +45,7 @@ __all__ = [
     "SqlAlchemyAssemblyUnitOfWorkFactory",
     "SqlAlchemyCanonicalKnowledgeReader",
     "SqlAlchemyCatalogUnitOfWorkFactory",
+    "SqlAlchemyCommerceUnitOfWorkFactory",
     "SqlAlchemyCreativeUnitOfWorkFactory",
     "SqlAlchemyGatewayUnitOfWorkFactory",
     "SqlAlchemyIntelligenceUnitOfWorkFactory",

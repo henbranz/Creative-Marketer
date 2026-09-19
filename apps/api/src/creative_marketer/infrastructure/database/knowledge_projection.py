@@ -32,6 +32,21 @@ from creative_marketer.infrastructure.database.catalog_schema import (
     product_knowledge_snapshots,
     products,
 )
+from creative_marketer.infrastructure.database.commerce_schema import (
+    action_proposals as commerce_action_proposals,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    action_results as commerce_action_results,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    connections as commerce_connections,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    product_mappings as commerce_product_mappings,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    reports as commerce_reports,
+)
 from creative_marketer.infrastructure.database.creative_schema import (
     concept_decisions,
     concept_sets,
@@ -230,6 +245,21 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 ),
                 "experiment_decisions": select(experiment_decisions).where(
                     experiment_decisions.c.tenant_id == tenant
+                ),
+                "commerce_connections": select(commerce_connections).where(
+                    commerce_connections.c.tenant_id == tenant
+                ),
+                "commerce_mappings": select(commerce_product_mappings).where(
+                    commerce_product_mappings.c.tenant_id == tenant
+                ),
+                "commerce_reports": select(commerce_reports).where(
+                    commerce_reports.c.tenant_id == tenant
+                ),
+                "commerce_proposals": select(commerce_action_proposals).where(
+                    commerce_action_proposals.c.tenant_id == tenant
+                ),
+                "commerce_results": select(commerce_action_results).where(
+                    commerce_action_results.c.tenant_id == tenant
                 ),
             }
             for key, statement in statements.items():
@@ -1430,6 +1460,119 @@ class SqlAlchemyCanonicalKnowledgeReader:
                         ],
                     },
                     tuple(relationships),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("commerce_connections", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.COMMERCE_CONNECTION,
+                    str(row["id"]),
+                    row["display_name"],
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    {
+                        "provider": row["provider"],
+                        "safe_store_identifier": row["safe_store_identifier"],
+                        "is_fake": row["provider"] == "fake",
+                    },
+                )
+            )
+        for row in rows.get("commerce_mappings", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.PRODUCT_COMMERCE_MAPPING,
+                    str(row["id"]),
+                    "Commerce mapping",
+                    row["status"],
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "external_product_id": row["external_product_id"],
+                        "external_variant_id": row["external_variant_id"],
+                    },
+                    (
+                        _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "maps_product"),
+                        _rel(
+                            KnowledgeNodeType.COMMERCE_CONNECTION,
+                            row["connection_id"],
+                            "maps_to_store",
+                        ),
+                    ),
+                )
+            )
+        for row in rows.get("commerce_reports", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.COMMERCE_OPERATIONS_REPORT,
+                    str(row["id"]),
+                    "Commerce Operations Report",
+                    "CREATED",
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "summary": row["summary"],
+                        "inventory_exceptions": row["inventory_exceptions"],
+                        "order_exceptions": row["order_exceptions"],
+                        "limitations": row["limitations"],
+                    },
+                    (
+                        _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "analyzes_product"),
+                        _rel(KnowledgeNodeType.AGENT_RUN, row["agent_run_id"], "produced_by_run"),
+                    ),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("commerce_proposals", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.COMMERCE_ACTION_PROPOSAL,
+                    str(row["id"]),
+                    f"{row['action_type'].replace('_', ' ').title()} proposal",
+                    "PROPOSED",
+                    row["created_at"],
+                    row["created_at"],
+                    {
+                        "action_type": row["action_type"],
+                        "exact_quantity": row["exact_quantity"],
+                        "exact_amount": row["exact_amount"],
+                        "currency": row["currency"],
+                        "reason": row["reason"],
+                        "risk_level": "R6" if row["action_type"] == "REFUND" else "R5",
+                    },
+                    (
+                        _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "proposes_for_product"),
+                        _rel(
+                            KnowledgeNodeType.COMMERCE_CONNECTION,
+                            row["connection_id"],
+                            "targets_store",
+                        ),
+                    ),
+                    row["semantic_digest"],
+                )
+            )
+        for row in rows.get("commerce_results", []):
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.COMMERCE_ACTION_RESULT,
+                    str(row["id"]),
+                    "Commerce action result",
+                    row["status"],
+                    row["completed_at"],
+                    row["completed_at"],
+                    {
+                        "action_type": row["action_type"],
+                        "provider": row["provider"],
+                        "observed_fact_refs": row["observed_fact_refs"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.COMMERCE_ACTION_PROPOSAL,
+                            row["proposal_id"],
+                            "result_of_proposal",
+                        ),
+                    ),
                     row["semantic_digest"],
                 )
             )

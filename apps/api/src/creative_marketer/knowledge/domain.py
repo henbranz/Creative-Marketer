@@ -45,6 +45,11 @@ class KnowledgeNodeType(StrEnum):
     INTELLIGENCE_REPORT = "intelligence_report"
     INSIGHT_CANDIDATE = "insight_candidate"
     EXPERIMENT_PROPOSAL = "experiment_proposal"
+    COMMERCE_CONNECTION = "commerce_connection"
+    PRODUCT_COMMERCE_MAPPING = "product_commerce_mapping"
+    COMMERCE_OPERATIONS_REPORT = "commerce_operations_report"
+    COMMERCE_ACTION_PROPOSAL = "commerce_action_proposal"
+    COMMERCE_ACTION_RESULT = "commerce_action_result"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

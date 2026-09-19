@@ -48,6 +48,11 @@ TYPE_DIRECTORIES = {
     "intelligence_report": "Insights/Reports",
     "insight_candidate": "Insights/Candidates",
     "experiment_proposal": "Experiments/Proposals",
+    "commerce_connection": "Commerce",
+    "product_commerce_mapping": "Commerce",
+    "commerce_operations_report": "Commerce/Operations",
+    "commerce_action_proposal": "Commerce/Actions",
+    "commerce_action_result": "Commerce/Actions",
 }
 
 
@@ -330,6 +335,13 @@ class ObsidianBridge:
             "Performance.md": {"performance_snapshot", "attribution_result"},
             "Insights.md": {"intelligence_report", "insight_candidate"},
             "Experiments.md": {"experiment_proposal"},
+            "Commerce.md": {
+                "commerce_connection",
+                "product_commerce_mapping",
+                "commerce_operations_report",
+                "commerce_action_proposal",
+                "commerce_action_result",
+            },
         }
         all_entries = list(state["nodes"].values())
         for filename, types in groups.items():

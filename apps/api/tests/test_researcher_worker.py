@@ -140,3 +140,28 @@ def test_worker_main_owns_asyncio_entrypoint(monkeypatch) -> None:
     monkeypatch.setattr(asyncio, "run", run)
     researcher_worker.main()
     assert len(observed) == 1
+
+
+def test_fake_worker_supports_grounded_commerce_report_without_tools() -> None:
+    inventory_id = "00000000-0000-0000-0000-000000000101"
+    order_id = "00000000-0000-0000-0000-000000000102"
+    invocation = SimpleNamespace(
+        output_contract_key="commerce.operations_report",
+        capability_context={
+            "inventory": ({"observation_id": inventory_id},),
+            "orders": ({"observation_id": order_id},),
+            "deterministic_exceptions": (
+                {"observation_id": inventory_id, "kind": "LOW_STOCK"},
+                {"observation_id": order_id, "kind": "PAID_BUT_UNFULFILLED"},
+            ),
+        },
+    )
+    result = researcher_worker._fake_demo_result(invocation)
+    assert result.model == "gpt-5.6-sol"
+    assert isinstance(result.output, dict)
+    inventory_exceptions = result.output["inventory_exceptions"]
+    order_exceptions = result.output["order_exceptions"]
+    assert isinstance(inventory_exceptions, list) and isinstance(order_exceptions, list)
+    assert inventory_exceptions[0]["observation_id"] == inventory_id
+    assert order_exceptions[0]["observation_id"] == order_id
+    assert result.output["action_proposals"] == []

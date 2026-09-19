@@ -20,6 +20,7 @@ import {
   type BriefWrite,
   type CreativeConcept,
   type CreativeConceptSet,
+  type CommerceWorkspace,
   type FinalCreative,
   type IntelligenceReport,
   catalogApi,
@@ -94,6 +95,7 @@ const tabs = [
   "Published",
   "Performance",
   "Insights",
+  "Commerce",
 ];
 const briefSections = [
   "Product",
@@ -3080,6 +3082,218 @@ function formatRate(value: string | null): string {
   return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : "—";
 }
 
+function CommercePanel({ workspace }: { workspace: Workspace }) {
+  const session = useMemo(() => readSession(), []);
+  const [commerce, setCommerce] = useState<CommerceWorkspace | null>(null);
+  const [view, setView] = useState<
+    "Overview" | "Orders" | "Inventory" | "Actions"
+  >("Overview");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setCommerce(
+      await catalogApi.getCommerceWorkspace(session, workspace.product.id),
+    );
+  }, [session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void load().catch(() =>
+          setError("Commerce state could not be loaded."),
+        ),
+    );
+  }, [load]);
+  if (error)
+    return (
+      <p className="error-banner" role="alert">
+        {error}
+      </p>
+    );
+  if (!commerce) return <p>Loading commerce workspace…</p>;
+  if (!commerce.mapping)
+    return (
+      <EmptyState icon="C" title="No commerce mapping yet">
+        Connect the Fake Store and explicitly map this Product to an observed
+        commerce product. Names are never matched automatically.
+      </EmptyState>
+    );
+  return (
+    <div className="commerce-workspace">
+      <header className="workspace-section-heading">
+        <div>
+          <p className="eyebrow">Commerce operations</p>
+          <h2>Observed store state and governed actions</h2>
+        </div>
+        <StatusBadge status="FAKE" label="Fake Store" variant="info" />
+      </header>
+      <nav className="subtabs" aria-label="Commerce views">
+        {(["Overview", "Orders", "Inventory", "Actions"] as const).map(
+          (item) => (
+            <button
+              key={item}
+              className={view === item ? "active" : ""}
+              onClick={() => setView(item)}
+            >
+              {item}
+            </button>
+          ),
+        )}
+      </nav>
+      {view === "Overview" && (
+        <div className="summary-grid">
+          <article className="metric-card">
+            <small>Mapped product</small>
+            <strong>{commerce.mapping.external_product_id}</strong>
+            <span>Observed external representation</span>
+          </article>
+          <article className="metric-card">
+            <small>Inventory exceptions</small>
+            <strong>{commerce.inventory_exceptions.length}</strong>
+            <span>Rule-based · commerce-inventory-rules-v1</span>
+          </article>
+          <article className="metric-card">
+            <small>Recent orders</small>
+            <strong>{commerce.orders.length}</strong>
+            <span>
+              {commerce.orders.filter((item) => item.attributed).length}{" "}
+              attributed
+            </span>
+          </article>
+        </div>
+      )}
+      {view === "Orders" && (
+        <div className="concept-grid">
+          {commerce.orders.map((order) => (
+            <article className="concept-card" key={order.id}>
+              <div className="badge-row">
+                <StatusBadge
+                  status="OBSERVED"
+                  label="Observed"
+                  variant="info"
+                />
+                {order.attributed && (
+                  <StatusBadge
+                    status="ATTRIBUTED"
+                    label="Direct attribution"
+                    variant="success"
+                  />
+                )}
+              </div>
+              <h3>{order.order_reference}</h3>
+              <p>
+                {order.total} {order.currency}
+              </p>
+              <p>
+                Payment: {order.payment_state} · Fulfillment:{" "}
+                {order.fulfillment_state}
+              </p>
+              <small>{new Date(order.captured_at).toLocaleString()}</small>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Inventory" && (
+        <div className="concept-grid">
+          {commerce.inventory.map((item) => (
+            <article className="concept-card" key={item.id}>
+              <div className="badge-row">
+                <StatusBadge
+                  status="OBSERVED"
+                  label="Observed"
+                  variant="info"
+                />
+                <StatusBadge
+                  status={item.indicator}
+                  label={`Rule-based · ${item.indicator.replaceAll("_", " ")}`}
+                  variant={
+                    item.indicator === "IN_STOCK" ? "success" : "warning"
+                  }
+                />
+              </div>
+              <h3>{item.sku ?? item.external_variant_id}</h3>
+              <p>Available: {item.available_quantity ?? "Unavailable"}</p>
+              <button className="secondary" disabled>
+                Propose adjustment · R5
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+      {view === "Actions" && (
+        <section>
+          <div className="workspace-section-heading">
+            <div>
+              <p className="eyebrow">AI Proposal · not executed</p>
+              <h2>Approval-bound commerce actions</h2>
+              <p>
+                Inventory changes are R5. Every refund is R6 and requires an
+                exact financial approval through the Tool Gateway.
+              </p>
+            </div>
+          </div>
+          <div className="concept-grid">
+            {commerce.proposals.map((proposal) => (
+              <article className="concept-card" key={proposal.id}>
+                <div className="badge-row">
+                  <StatusBadge
+                    status="AI_PROPOSAL"
+                    label="AI Proposal"
+                    variant="warning"
+                  />
+                  <StatusBadge
+                    status={proposal.risk_level}
+                    label={proposal.risk_level}
+                    variant="danger"
+                  />
+                </div>
+                <h3>{proposal.action_type.replaceAll("_", " ")}</h3>
+                <p>{proposal.reason}</p>
+                {proposal.exact_quantity !== null && (
+                  <p>Set available to: {proposal.exact_quantity}</p>
+                )}
+                {proposal.exact_amount !== null && (
+                  <p>
+                    Exact refund: {proposal.exact_amount} {proposal.currency}
+                  </p>
+                )}
+                <small>{proposal.approval_state.replaceAll("_", " ")}</small>
+              </article>
+            ))}
+          </div>
+          {commerce.proposals.length === 0 && (
+            <div className="empty-panel">
+              <span className="empty-glyph">A</span>
+              <h2>No validated proposals yet</h2>
+              <p>An AI proposal is never an executed action.</p>
+            </div>
+          )}
+          <button
+            className="primary"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError("");
+              void catalogApi
+                .analyzeCommerce(session, workspace.product.id)
+                .then(() => setView("Overview"))
+                .catch((caught: unknown) =>
+                  setError(
+                    caught instanceof Error
+                      ? caught.message
+                      : "Analysis could not start.",
+                  ),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            {busy ? "Starting analysis…" : "Analyze commerce"}
+          </button>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function PerformancePanel({ workspace }: { workspace: Workspace }) {
   const session = useMemo(() => readSession(), []);
   const [publications, setPublications] = useState<Publication[]>([]);
@@ -4938,6 +5152,8 @@ export function ProductWorkspaceApp() {
                     <PerformancePanel workspace={workspace} />
                   ) : tab === "Insights" ? (
                     <InsightsPanel workspace={workspace} />
+                  ) : tab === "Commerce" ? (
+                    <CommercePanel workspace={workspace} />
                   ) : (
                     <EmptyPanel tab={tab} />
                   )}

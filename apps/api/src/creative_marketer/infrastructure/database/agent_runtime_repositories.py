@@ -16,11 +16,13 @@ from creative_marketer.agent_governance.domain import (
     AgentVersionConfiguration,
 )
 from creative_marketer.agent_runtime.application import (
+    CommercePreparation,
     CreativePreparation,
     IntelligencePreparation,
     ProducerPreparation,
     ResearcherPreparation,
     ResolvedResearcher,
+    build_commerce_model_context,
     build_creative_model_context,
     build_intelligence_model_context,
     build_producer_model_context,
@@ -51,6 +53,17 @@ from creative_marketer.agent_runtime.domain import (
 from creative_marketer.catalog.domain import (
     ProductKnowledgeSnapshot,
     evaluate_semantic_completeness,
+)
+from creative_marketer.commerce.domain import (
+    CommerceAgentResult,
+    CommerceOperationsContextManifest,
+    FulfillmentState,
+    InventoryObservation,
+    OrderLineObservation,
+    OrderObservation,
+    PaymentState,
+    inventory_exceptions,
+    order_exceptions,
 )
 from creative_marketer.creative.domain import (
     ApprovedCreativeConcept,
@@ -84,6 +97,24 @@ from creative_marketer.infrastructure.database.assembly_schema import (
 from creative_marketer.infrastructure.database.catalog_schema import (
     assets,
     product_knowledge_snapshots,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    action_proposals as commerce_action_proposals,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    context_manifests as commerce_context_manifests,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    inventory_observations as commerce_inventory_observations,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    order_observations as commerce_order_observations,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    product_mappings as commerce_product_mappings,
+)
+from creative_marketer.infrastructure.database.commerce_schema import (
+    reports as commerce_reports,
 )
 from creative_marketer.infrastructure.database.creative_schema import (
     concept_decisions,
@@ -1073,6 +1104,262 @@ class SqlAlchemyAgentRunRepository:
         )
         return IntelligencePreparation(resolved, product, manifest, comparisons, payload)
 
+    async def prepare_commerce(self, product_id: UUID) -> CommercePreparation | None:
+        requested_rows = (
+            await self._session.execute(
+                select(agent_definitions)
+                .where(
+                    agent_definitions.c.tenant_id.is_not(None),
+                    agent_definitions.c.agent_type == "commerce_operations",
+                    agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                )
+                .order_by(agent_definitions.c.created_at)
+                .limit(2)
+            )
+        ).all()
+        if len(requested_rows) != 1:
+            return None
+        requested = requested_rows[0]._mapping
+        resolved_id = requested["id"]
+        activation = (
+            await self._session.execute(
+                select(agent_activations).where(agent_activations.c.definition_id == resolved_id)
+            )
+        ).first()
+        if activation is None:
+            return None
+        version_row = (
+            await self._session.execute(
+                select(agent_versions).where(
+                    agent_versions.c.id == activation._mapping["active_version_id"]
+                )
+            )
+        ).first()
+        product_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots)
+                .where(product_knowledge_snapshots.c.product_id == product_id)
+                .order_by(product_knowledge_snapshots.c.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+        mapping_row = (
+            await self._session.execute(
+                select(commerce_product_mappings)
+                .where(
+                    commerce_product_mappings.c.product_id == product_id,
+                    commerce_product_mappings.c.status == "ACTIVE",
+                )
+                .order_by(commerce_product_mappings.c.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+        if version_row is None or product_row is None or mapping_row is None:
+            return None
+        s, mapping = product_row._mapping, mapping_row._mapping
+        product = ProductKnowledgeSnapshot(
+            id=s["id"],
+            tenant_id=s["tenant_id"],
+            product_id=s["product_id"],
+            schema_version=s["schema_version"],
+            source_revision=s["source_revision"],
+            content=s["content"],
+            digest=s["digest"],
+            created_by=s["created_by"],
+            created_at=s["created_at"],
+        )
+        inventory_rows = (
+            await self._session.execute(
+                select(commerce_inventory_observations)
+                .where(
+                    commerce_inventory_observations.c.connection_id == mapping["connection_id"],
+                    commerce_inventory_observations.c.external_product_id
+                    == mapping["external_product_id"],
+                )
+                .order_by(commerce_inventory_observations.c.captured_at.desc())
+            )
+        ).all()
+        inventories_by_variant: dict[str, InventoryObservation] = {}
+        for row in inventory_rows:
+            d = row._mapping
+            inventories_by_variant.setdefault(
+                d["external_variant_id"],
+                InventoryObservation(
+                    d["tenant_id"],
+                    d["connection_id"],
+                    d["external_product_id"],
+                    d["external_variant_id"],
+                    d["available_quantity"],
+                    d["captured_at"],
+                    d["source_digest"],
+                    d["sku"],
+                    d["location_id"],
+                    d["committed_quantity"],
+                    d["on_hand_quantity"],
+                    d["id"],
+                    d["provider"],
+                    d["provider_version"],
+                    d["schema_version"],
+                ),
+            )
+        order_rows = (
+            await self._session.execute(
+                select(commerce_order_observations)
+                .where(commerce_order_observations.c.connection_id == mapping["connection_id"])
+                .order_by(commerce_order_observations.c.captured_at.desc())
+                .limit(100)
+            )
+        ).all()
+        orders_by_external: dict[str, OrderObservation] = {}
+        for row in order_rows:
+            d = row._mapping
+            lines = tuple(
+                OrderLineObservation(
+                    str(item["external_line_id"]),
+                    str(item["external_product_id"]),
+                    item.get("external_variant_id"),
+                    item.get("sku"),
+                    int(item["quantity"]),
+                    Decimal(str(item["unit_price"])),
+                    str(item["currency"]),
+                    UUID(item["mapped_product_id"]) if item.get("mapped_product_id") else None,
+                )
+                for item in d["lines"]
+            )
+            if not any(
+                item.external_product_id == mapping["external_product_id"] for item in lines
+            ):
+                continue
+            orders_by_external.setdefault(
+                d["external_order_id"],
+                OrderObservation(
+                    d["tenant_id"],
+                    d["connection_id"],
+                    d["external_order_id"],
+                    d["order_reference"],
+                    d["currency"],
+                    Decimal(d["subtotal"]),
+                    Decimal(d["discount_total"]),
+                    Decimal(d["tax_total"]),
+                    Decimal(d["shipping_total"]),
+                    Decimal(d["total"]),
+                    PaymentState(d["financial_status"]),
+                    FulfillmentState(d["fulfillment_status"]),
+                    d["created_at_external"],
+                    d["updated_at_external"],
+                    d["captured_at"],
+                    lines,
+                    d["source_digest"],
+                    d["attribution_code"],
+                    d["id"],
+                    d["schema_version"],
+                ),
+            )
+        inventories, orders = (
+            tuple(inventories_by_variant.values()),
+            tuple(orders_by_external.values()),
+        )
+        if not inventories and not orders:
+            return None
+        observation_refs = tuple(
+            [
+                {"kind": "inventory_observation", "id": str(item.id), "digest": item.source_digest}
+                for item in inventories
+            ]
+            + [
+                {"kind": "order_observation", "id": str(item.id), "digest": item.source_digest}
+                for item in orders
+            ]
+        )
+        deterministic = (*inventory_exceptions(inventories), *order_exceptions(orders))
+        product_ref = {
+            "kind": "product_knowledge_snapshot",
+            "id": str(product.id),
+            "digest": product.digest,
+        }
+        mapping_ref = {"kind": "product_commerce_mapping", "id": str(mapping["id"])}
+        material = {
+            "product_snapshot_ref": product_ref,
+            "mapping_ref": mapping_ref,
+            "observation_refs": [dict(v) for v in observation_refs],
+            "deterministic_exceptions": [dict(v) for v in deterministic],
+            "schema_version": 1,
+        }
+        manifest = CommerceOperationsContextManifest(
+            product.tenant_id,
+            product_id,
+            product_ref,
+            mapping_ref,
+            observation_refs,
+            tuple(deterministic),
+            canonical_digest(material),
+        )
+        await self._session.execute(
+            insert(commerce_context_manifests).values(
+                id=manifest.id,
+                tenant_id=manifest.tenant_id,
+                product_id=manifest.product_id,
+                product_snapshot_ref=dict(manifest.product_snapshot_ref),
+                mapping_ref=dict(manifest.mapping_ref),
+                observation_refs=[dict(v) for v in manifest.observation_refs],
+                deterministic_exceptions=[dict(v) for v in manifest.deterministic_exceptions],
+                semantic_digest=manifest.semantic_digest,
+                schema_version=manifest.schema_version,
+                created_at=manifest.created_at,
+            )
+        )
+        v = version_row._mapping
+        resolved = ResolvedResearcher(
+            requested["id"],
+            resolved_id,
+            v["id"],
+            v["version_number"],
+            v["configuration_digest"],
+            _configuration(v),
+        )
+        payload = {
+            "manifest": {
+                "product_snapshot_ref": product_ref,
+                "mapping_ref": mapping_ref,
+                "observation_refs": [dict(v) for v in observation_refs],
+            },
+            "inventory": [
+                {
+                    "observation_id": str(item.id),
+                    "external_product_id": item.external_product_id,
+                    "external_variant_id": item.external_variant_id,
+                    "sku": item.sku,
+                    "available_quantity": item.available_quantity,
+                    "captured_at": item.captured_at.isoformat(),
+                    "source_digest": item.source_digest,
+                }
+                for item in inventories
+            ],
+            "orders": [
+                {
+                    "observation_id": str(item.id),
+                    "external_order_id": item.external_order_id,
+                    "order_reference": item.order_reference,
+                    "currency": item.currency,
+                    "total": str(item.total),
+                    "payment_state": item.financial_status.value,
+                    "fulfillment_state": item.fulfillment_status.value,
+                    "captured_at": item.captured_at.isoformat(),
+                    "source_digest": item.source_digest,
+                }
+                for item in orders
+            ],
+            "deterministic_exceptions": [dict(v) for v in deterministic],
+            "deterministic_limitations": [
+                "Fake Store observations; not real commerce data.",
+                "Refunded revenue reversal is deferred; historical purchases are never "
+                "overwritten.",
+            ],
+        }
+        return CommercePreparation(
+            resolved, product, manifest, mapping["connection_id"], inventories, orders, payload
+        )
+
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None:
         concept_row = (
             await self._session.execute(select(concepts).where(concepts.c.id == concept_id))
@@ -1591,6 +1878,206 @@ class SqlAlchemyAgentRunRepository:
         s = snapshot_row._mapping
         if s["digest"] != run.product_snapshot_digest:
             raise ValueError("bound Product snapshot digest mismatch")
+        if run.agent_type == "commerce_operations":
+            manifest_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "commerce_context_manifest"
+                ),
+                None,
+            )
+            if manifest_ref is None:
+                raise ValueError("Commerce run context reference is incomplete")
+            row = (
+                await self._session.execute(
+                    select(commerce_context_manifests).where(
+                        commerce_context_manifests.c.id == UUID(str(manifest_ref["id"]))
+                    )
+                )
+            ).one()
+            m = row._mapping
+            if (
+                m["semantic_digest"] != manifest_ref["digest"]
+                or m["semantic_digest"] != run.input_context_digest
+            ):
+                raise ValueError("bound Commerce manifest digest mismatch")
+            commerce_manifest = CommerceOperationsContextManifest(
+                m["tenant_id"],
+                m["product_id"],
+                m["product_snapshot_ref"],
+                m["mapping_ref"],
+                tuple(m["observation_refs"]),
+                tuple(m["deterministic_exceptions"]),
+                m["semantic_digest"],
+                m["id"],
+                m["schema_version"],
+                m["created_at"],
+            )
+            commerce_inventory_ids = [
+                UUID(str(item["id"]))
+                for item in commerce_manifest.observation_refs
+                if item["kind"] == "inventory_observation"
+            ]
+            commerce_order_ids = [
+                UUID(str(item["id"]))
+                for item in commerce_manifest.observation_refs
+                if item["kind"] == "order_observation"
+            ]
+            commerce_inventory_rows = (
+                (
+                    await self._session.execute(
+                        select(commerce_inventory_observations).where(
+                            commerce_inventory_observations.c.id.in_(commerce_inventory_ids)
+                        )
+                    )
+                ).all()
+                if commerce_inventory_ids
+                else []
+            )
+            commerce_order_rows = (
+                (
+                    await self._session.execute(
+                        select(commerce_order_observations).where(
+                            commerce_order_observations.c.id.in_(commerce_order_ids)
+                        )
+                    )
+                ).all()
+                if commerce_order_ids
+                else []
+            )
+            commerce_inventories = tuple(
+                InventoryObservation(
+                    commerce_inventory_data["tenant_id"],
+                    commerce_inventory_data["connection_id"],
+                    commerce_inventory_data["external_product_id"],
+                    commerce_inventory_data["external_variant_id"],
+                    commerce_inventory_data["available_quantity"],
+                    commerce_inventory_data["captured_at"],
+                    commerce_inventory_data["source_digest"],
+                    commerce_inventory_data["sku"],
+                    commerce_inventory_data["location_id"],
+                    commerce_inventory_data["committed_quantity"],
+                    commerce_inventory_data["on_hand_quantity"],
+                    commerce_inventory_data["id"],
+                    commerce_inventory_data["provider"],
+                    commerce_inventory_data["provider_version"],
+                    commerce_inventory_data["schema_version"],
+                )
+                for commerce_inventory_data in (
+                    commerce_row._mapping for commerce_row in commerce_inventory_rows
+                )
+            )
+            commerce_orders = []
+            for commerce_order_row in commerce_order_rows:
+                commerce_order_data = commerce_order_row._mapping
+                commerce_lines = tuple(
+                    OrderLineObservation(
+                        str(v["external_line_id"]),
+                        str(v["external_product_id"]),
+                        v.get("external_variant_id"),
+                        v.get("sku"),
+                        int(v["quantity"]),
+                        Decimal(str(v["unit_price"])),
+                        str(v["currency"]),
+                        UUID(v["mapped_product_id"]) if v.get("mapped_product_id") else None,
+                    )
+                    for v in commerce_order_data["lines"]
+                )
+                commerce_orders.append(
+                    OrderObservation(
+                        commerce_order_data["tenant_id"],
+                        commerce_order_data["connection_id"],
+                        commerce_order_data["external_order_id"],
+                        commerce_order_data["order_reference"],
+                        commerce_order_data["currency"],
+                        Decimal(commerce_order_data["subtotal"]),
+                        Decimal(commerce_order_data["discount_total"]),
+                        Decimal(commerce_order_data["tax_total"]),
+                        Decimal(commerce_order_data["shipping_total"]),
+                        Decimal(commerce_order_data["total"]),
+                        PaymentState(commerce_order_data["financial_status"]),
+                        FulfillmentState(commerce_order_data["fulfillment_status"]),
+                        commerce_order_data["created_at_external"],
+                        commerce_order_data["updated_at_external"],
+                        commerce_order_data["captured_at"],
+                        commerce_lines,
+                        commerce_order_data["source_digest"],
+                        commerce_order_data["attribution_code"],
+                        commerce_order_data["id"],
+                        commerce_order_data["schema_version"],
+                    )
+                )
+            commerce_mapping_result = await self._session.execute(
+                select(commerce_product_mappings).where(
+                    commerce_product_mappings.c.id == UUID(str(commerce_manifest.mapping_ref["id"]))
+                )
+            )
+            commerce_mapping_row = commerce_mapping_result.first()
+            if commerce_mapping_row is None:
+                raise ValueError("bound Commerce mapping is missing")
+            commerce_payload = {
+                "manifest": {
+                    "product_snapshot_ref": dict(commerce_manifest.product_snapshot_ref),
+                    "mapping_ref": dict(commerce_manifest.mapping_ref),
+                    "observation_refs": [dict(v) for v in commerce_manifest.observation_refs],
+                },
+                "inventory": [
+                    {
+                        "observation_id": str(v.id),
+                        "external_variant_id": v.external_variant_id,
+                        "available_quantity": v.available_quantity,
+                        "source_digest": v.source_digest,
+                    }
+                    for v in commerce_inventories
+                ],
+                "orders": [
+                    {
+                        "observation_id": str(v.id),
+                        "external_order_id": v.external_order_id,
+                        "currency": v.currency,
+                        "total": str(v.total),
+                        "payment_state": v.financial_status.value,
+                        "fulfillment_state": v.fulfillment_status.value,
+                        "source_digest": v.source_digest,
+                    }
+                    for v in commerce_orders
+                ],
+                "deterministic_exceptions": [
+                    dict(v) for v in commerce_manifest.deterministic_exceptions
+                ],
+                "deterministic_limitations": [
+                    "Fake Store observations; not real commerce data.",
+                    "AI proposals require deterministic validation and human approval.",
+                ],
+            }
+            commerce_preparation = CommercePreparation(
+                ResolvedResearcher(
+                    run.requested_agent_definition_id,
+                    run.resolved_agent_definition_id,
+                    run.agent_version_id,
+                    run.agent_version_number,
+                    run.agent_configuration_digest,
+                    _configuration(v),
+                ),
+                ProductKnowledgeSnapshot(
+                    id=s["id"],
+                    tenant_id=s["tenant_id"],
+                    product_id=s["product_id"],
+                    schema_version=s["schema_version"],
+                    source_revision=s["source_revision"],
+                    content=s["content"],
+                    digest=s["digest"],
+                    created_by=s["created_by"],
+                    created_at=s["created_at"],
+                ),
+                commerce_manifest,
+                commerce_mapping_row._mapping["connection_id"],
+                commerce_inventories,
+                tuple(commerce_orders),
+                commerce_payload,
+            )
+            return build_commerce_model_context(commerce_preparation)
         if run.agent_type == "intelligence":
             manifest_ref = next(
                 (
@@ -2221,11 +2708,20 @@ class SqlAlchemyAgentRunRepository:
         workload_id: str,
     ) -> AgentRun:
         if not isinstance(
-            snapshot, (ResearchSnapshot, CreativeConceptSet, ProductionPlan, IntelligenceResult)
+            snapshot,
+            (
+                ResearchSnapshot,
+                CreativeConceptSet,
+                ProductionPlan,
+                IntelligenceResult,
+                CommerceAgentResult,
+            ),
         ):
             raise ValueError("unsupported capability result type")
         now = datetime.now(UTC)
-        if isinstance(snapshot, IntelligenceResult):
+        if isinstance(snapshot, CommerceAgentResult):
+            result_ref = f"commerce-report://{snapshot.report.id}"
+        elif isinstance(snapshot, IntelligenceResult):
             result_ref = f"intelligence-report://{snapshot.report.id}"
         elif isinstance(snapshot, ProductionPlan):
             result_ref = f"production-plan://{snapshot.id}"
@@ -2259,7 +2755,52 @@ class SqlAlchemyAgentRunRepository:
         ).scalar_one_or_none()
         if attempt_row is None:
             raise AgentRunRecoveryConflict("stale model attempt cannot persist success")
-        if isinstance(snapshot, IntelligenceResult):
+        if isinstance(snapshot, CommerceAgentResult):
+            commerce_report = snapshot.report
+            await self._session.execute(
+                insert(commerce_reports).values(
+                    id=commerce_report.id,
+                    tenant_id=commerce_report.tenant_id,
+                    product_id=commerce_report.product_id,
+                    agent_run_id=commerce_report.agent_run_id,
+                    agent_version_id=commerce_report.agent_version_id,
+                    context_manifest_id=commerce_report.context_manifest_id,
+                    context_manifest_digest=commerce_report.context_manifest_digest,
+                    summary=commerce_report.summary,
+                    inventory_exceptions=[dict(v) for v in commerce_report.inventory_exceptions],
+                    order_exceptions=[dict(v) for v in commerce_report.order_exceptions],
+                    limitations=list(commerce_report.limitations),
+                    semantic_digest=commerce_report.semantic_digest,
+                    schema_version=commerce_report.schema_version,
+                    created_at=commerce_report.created_at,
+                )
+            )
+            if snapshot.proposals:
+                await self._session.execute(
+                    insert(commerce_action_proposals),
+                    [
+                        {
+                            "id": item.id,
+                            "tenant_id": item.tenant_id,
+                            "connection_id": item.connection_id,
+                            "product_id": item.product_id,
+                            "action_type": item.action_type.value,
+                            "external_product_id": item.external_product_id,
+                            "external_variant_id": item.external_variant_id,
+                            "external_order_id": item.external_order_id,
+                            "exact_quantity": item.exact_quantity,
+                            "exact_amount": item.exact_amount,
+                            "currency": item.currency,
+                            "reason": item.reason,
+                            "evidence_refs": [dict(v) for v in item.evidence_refs],
+                            "semantic_digest": item.semantic_digest,
+                            "schema_version": item.schema_version,
+                            "created_at": item.created_at,
+                        }
+                        for item in snapshot.proposals
+                    ],
+                )
+        elif isinstance(snapshot, IntelligenceResult):
             report = snapshot.report
             await self._session.execute(
                 insert(intelligence_reports).values(

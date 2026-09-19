@@ -1,0 +1,59 @@
+"""Idempotently register the fake-safe governed commerce Tool contracts."""
+
+import asyncio
+import os
+from uuid import UUID, uuid4
+
+from creative_marketer.commerce.tool_contracts import commerce_tool_contracts
+from creative_marketer.identity.application.authentication import ActorKind
+from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.tool_governance_uow import (
+    SqlAlchemyToolRegistryUnitOfWorkFactory,
+)
+from creative_marketer.tool_governance.application import (
+    ActivateToolVersion,
+    CreateToolDefinition,
+    CreateToolVersion,
+    PlatformControlContext,
+    ResolveActiveTool,
+)
+from creative_marketer.tool_governance.domain import ToolUnavailable
+from creative_marketer_api.config import Settings
+
+
+async def run() -> None:
+    settings = Settings()
+    if settings.app_env not in {"development", "test"}:
+        raise SystemExit("Commerce Tool bootstrap is forbidden outside development/test")
+    try:
+        actor_id = UUID(os.environ["BOOTSTRAP_PLATFORM_ACTOR_ID"])
+    except (KeyError, ValueError) as error:
+        raise SystemExit("BOOTSTRAP_PLATFORM_ACTOR_ID must be a UUID") from error
+    migration_database_url = os.environ.get("MIGRATION_DATABASE_URL", "").strip()
+    if not migration_database_url:
+        raise SystemExit("MIGRATION_DATABASE_URL is required for platform Tool Registry writes")
+    context = PlatformControlContext(ActorKind.WORKLOAD, actor_id, settings.app_env, uuid4())
+    factory = SqlAlchemyToolRegistryUnitOfWorkFactory(
+        create_session_factory(migration_database_url)
+    )
+    for contract in commerce_tool_contracts():
+        async with factory() as uow:
+            definition = await uow.definitions.get_by_key(contract.tool_key)
+        if definition is None:
+            definition = await CreateToolDefinition(factory)(
+                context, tool_key=contract.tool_key, category="commerce"
+            )
+        try:
+            active = await ResolveActiveTool(factory)(contract.tool_key)
+        except ToolUnavailable:
+            active = None
+        if active and active.configuration_digest == contract.configuration.configuration_digest:
+            print(f"{contract.tool_key} already active: version {active.version_number}")
+            continue
+        version = await CreateToolVersion(factory)(context, definition.id, contract.configuration)
+        await ActivateToolVersion(factory)(context, definition.id, version.id)
+        print(f"Activated {contract.tool_key} version {version.version_number}")
+
+
+if __name__ == "__main__":
+    asyncio.run(run())

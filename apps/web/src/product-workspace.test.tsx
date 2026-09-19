@@ -11,6 +11,7 @@ import {
   catalogApi,
   type AgentRun,
   type Asset,
+  type CommerceWorkspace,
   type CreativeConceptSet,
   type IntelligenceReport,
   type ProductionJob,
@@ -224,6 +225,60 @@ const intelligenceReport: IntelligenceReport = {
       created_at: product.created_at,
     },
   ],
+};
+
+const commerceWorkspace: CommerceWorkspace = {
+  mapping: {
+    id: "b1000000-0000-0000-0000-000000000001",
+    connection_id: "b2000000-0000-0000-0000-000000000001",
+    external_product_id: "fake-product-1",
+    external_variant_id: "fake-variant-1",
+    status: "ACTIVE",
+  },
+  inventory: [
+    {
+      id: "b3000000-0000-0000-0000-000000000001",
+      external_variant_id: "fake-variant-1",
+      sku: "DEMO-001",
+      available_quantity: 2,
+      indicator: "LOW_STOCK",
+      captured_at: product.created_at,
+      source: "Observed",
+    },
+  ],
+  orders: [
+    {
+      id: "b4000000-0000-0000-0000-000000000001",
+      order_reference: "FAKE-1001",
+      external_order_id: "fake-order-paid",
+      currency: "USD",
+      total: "49.00",
+      payment_state: "PAID",
+      fulfillment_state: "UNFULFILLED",
+      captured_at: product.created_at,
+      attributed: true,
+      source: "Observed",
+    },
+  ],
+  proposals: [],
+  inventory_exceptions: [
+    {
+      kind: "LOW_STOCK",
+      observation_id: "b3000000-0000-0000-0000-000000000001",
+      external_variant_id: "fake-variant-1",
+      available_quantity: 2,
+      rule_version: "commerce-inventory-rules-v1",
+    },
+  ],
+  order_exceptions: [
+    {
+      kind: "PAID_BUT_UNFULFILLED",
+      observation_id: "b4000000-0000-0000-0000-000000000001",
+      external_order_id: "fake-order-paid",
+      rule_version: "commerce-order-rules-v1",
+    },
+  ],
+  is_fake: true,
 };
 const brief = {
   product_id: product.id,
@@ -726,6 +781,10 @@ function mocks() {
     performanceSnapshot,
   );
   vi.spyOn(catalogApi, "listIntelligenceReports").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "getCommerceWorkspace").mockResolvedValue(
+    commerceWorkspace,
+  );
+  vi.spyOn(catalogApi, "analyzeCommerce").mockResolvedValue(agentRun);
   vi.spyOn(catalogApi, "analyzePerformance").mockResolvedValue(agentRun);
   vi.spyOn(catalogApi, "decideInsight").mockResolvedValue(undefined);
   vi.spyOn(catalogApi, "decideExperiment").mockResolvedValue(undefined);
@@ -1784,6 +1843,42 @@ describe("Product Workspace", () => {
     expect(
       screen.queryByText(/winner|guaranteed|roas|budget/i),
     ).not.toBeInTheDocument();
+  });
+
+  it("separates observed commerce facts, rules, and approval-bound AI proposals", async () => {
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Commerce" }));
+    expect(await screen.findByText("Fake Store")).toBeInTheDocument();
+    expect(
+      screen.getByText("Observed external representation"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Rule-based/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Orders" }));
+    expect(screen.getByText("FAKE-1001")).toBeInTheDocument();
+    expect(screen.getByText("Direct attribution")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/customer|email|phone|address/i),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Inventory" }));
+    expect(screen.getByText("Rule-based · LOW STOCK")).toBeInTheDocument();
+    expect(screen.getByText("Propose adjustment · R5")).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Actions" }));
+    expect(
+      screen.getByText(/AI proposal is never an executed action/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Every refund is R6/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Analyze commerce" }));
+    await waitFor(() =>
+      expect(catalogApi.analyzeCommerce).toHaveBeenCalledWith(
+        expect.anything(),
+        product.id,
+      ),
+    );
   });
 
   it("creates a product through the selected brand", async () => {

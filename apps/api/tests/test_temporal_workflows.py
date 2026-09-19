@@ -25,6 +25,8 @@ from creative_marketer.infrastructure.temporal.worker import create_worker
 from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
+    CommerceActionWorkflow,
+    CommerceSyncWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
     PerformanceCollectionWorkflow,
@@ -37,6 +39,10 @@ from creative_marketer.tool_execution.domain import ToolInvocationRequest, Trust
 from creative_marketer.tool_governance.domain import RiskLevel
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
+    CommerceActionActivityResult,
+    CommerceActionWorkflowInput,
+    CommerceSyncActivityResult,
+    CommerceSyncWorkflowInput,
     FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
@@ -51,6 +57,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     ToolWorkflowInput,
     WorkflowState,
     agent_execution_workflow_id,
+    commerce_action_workflow_id,
+    commerce_sync_workflow_id,
     generation_workflow_id,
     measurement_workflow_id,
     publication_workflow_id,
@@ -179,6 +187,32 @@ class FakeAssemblyExecutor:
         return SimpleNamespace(id=self.final_id)
 
 
+class FakeCommerceSyncExecutor:
+    def __init__(self):
+        self.calls = []
+
+    async def sync(self, tenant_id, connection_id, sync_type, cursor):
+        self.calls.append((tenant_id, connection_id, sync_type, cursor))
+        next_cursor = "page-2" if cursor is None and sync_type == "ORDERS" else None
+        return CommerceSyncActivityResult(str(connection_id), sync_type, "SUCCEEDED", next_cursor)
+
+
+class FakeCommerceActionExecutor:
+    def __init__(self):
+        self.submissions = 0
+        self.reconciliations = 0
+
+    async def submit(self, tenant_id, proposal_id):
+        self.submissions += 1
+        return CommerceActionActivityResult(str(proposal_id), "OUTCOME_UNKNOWN")
+
+    async def reconcile(self, tenant_id, proposal_id):
+        self.reconciliations += 1
+        return CommerceActionActivityResult(
+            str(proposal_id), "SUCCEEDED", "result://commerce/fake-operation"
+        )
+
+
 async def wait_for_status(handle, expected: str) -> None:
     for _ in range(100):
         try:
@@ -231,6 +265,57 @@ async def test_approval_signal_is_only_a_wakeup_and_duplicates_are_safe(temporal
     assert gateway.effects == 1
     replay = await Replayer(workflows=[ApprovalBlockingWorkflow]).replay_workflow(history)
     assert replay.replay_failure is None
+
+
+@pytest.mark.asyncio
+async def test_commerce_sync_workflow_is_finite_and_cursor_resumable(temporal_environment):
+    service = FakeCommerceSyncExecutor()
+    activities = TemporalActivities(
+        FakeGatewayService(),
+        FakeGenerationService(),
+        commerce_sync=service,
+    )
+    request = CommerceSyncWorkflowInput(
+        str(uuid4()), str(uuid4()), str(uuid4()), ("INVENTORY", "ORDERS")
+    )
+    async with create_worker(
+        temporal_environment.client,
+        activities,
+        graceful_shutdown_timeout=timedelta(0),
+    ):
+        result = await temporal_environment.client.execute_workflow(
+            CommerceSyncWorkflow.run,
+            request,
+            id=commerce_sync_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+    assert [value.sync_type for value in result] == ["INVENTORY", "ORDERS", "ORDERS"]
+    assert [call[3] for call in service.calls] == [None, None, "page-2"]
+
+
+@pytest.mark.asyncio
+async def test_commerce_action_unknown_reconciles_without_resubmission(temporal_environment):
+    service = FakeCommerceActionExecutor()
+    activities = TemporalActivities(
+        FakeGatewayService(),
+        FakeGenerationService(),
+        commerce_actions=service,
+    )
+    request = CommerceActionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()), 1, 2)
+    async with create_worker(
+        temporal_environment.client,
+        activities,
+        graceful_shutdown_timeout=timedelta(0),
+    ):
+        result = await temporal_environment.client.execute_workflow(
+            CommerceActionWorkflow.run,
+            request,
+            id=commerce_action_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+    assert result.status == "SUCCEEDED"
+    assert service.submissions == 1
+    assert service.reconciliations == 1
 
 
 @pytest.mark.asyncio

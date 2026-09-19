@@ -262,6 +262,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/commerce/connections": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Connections */
+    get: operations["connections_v1_commerce_connections_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/commerce/connections/fake": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Fake */
+    post: operations["create_fake_v1_commerce_connections_fake_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/commerce/connections/{connection_id}/sync": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Sync */
+    post: operations["sync_v1_commerce_connections__connection_id__sync_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/commerce/mappings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Mapping */
+    post: operations["create_mapping_v1_commerce_mappings_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/creative/concept-sets/{set_id}": {
     parameters: {
       query?: never;
@@ -718,6 +786,40 @@ export interface paths {
     get: operations["get_completeness_v1_products__product_id__brief_completeness_get"];
     put?: never;
     post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/commerce": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Workspace */
+    get: operations["workspace_v1_products__product_id__commerce_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/commerce/analyze": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Analyze */
+    post: operations["analyze_v1_products__product_id__commerce_analyze_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -2168,6 +2270,31 @@ export interface components {
       /** Score */
       score: number;
     };
+    /** ConnectionResponse */
+    ConnectionResponse: {
+      /** Capabilities */
+      capabilities: string[];
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Display Name */
+      display_name: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Is Fake */
+      is_fake: boolean;
+      /** Provider */
+      provider: string;
+      /** Safe Store Identifier */
+      safe_store_identifier: string;
+      /** Status */
+      status: string;
+    };
     /** CreativeConceptResponse */
     CreativeConceptResponse: {
       /** Concept Key */
@@ -2453,6 +2580,14 @@ export interface components {
        */
       user_id: string;
     };
+    /** FakeConnectionCreate */
+    FakeConnectionCreate: {
+      /**
+       * Display Name
+       * @default Fake Store
+       */
+      display_name: string;
+    };
     /** FakeConversionResponse */
     FakeConversionResponse: {
       /** Attribution Result Id */
@@ -2709,6 +2844,23 @@ export interface components {
        * Format: uuid
        */
       asset_id: string;
+    };
+    /** MappingCreate */
+    MappingCreate: {
+      /**
+       * Connection Id
+       * Format: uuid
+       */
+      connection_id: string;
+      /** External Product Id */
+      external_product_id: string;
+      /** External Variant Id */
+      external_variant_id?: string | null;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
     };
     /**
      * MediaKind
@@ -3766,6 +3918,17 @@ export interface components {
       | "GENERATE_IMAGE"
       | "GENERATE_VIDEO"
       | "MANUAL_CAPTURE";
+    /** SyncRequest */
+    SyncRequest: {
+      /** Cursor */
+      cursor?: string | null;
+      sync_type: components["schemas"]["SyncType"];
+    };
+    /**
+     * SyncType
+     * @enum {string}
+     */
+    SyncType: "CATALOG" | "INVENTORY" | "ORDERS" | "ALL";
     /** UploadGrantResponse */
     UploadGrantResponse: {
       asset: components["schemas"]["AssetResponse"];
@@ -4478,6 +4641,156 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkspaceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  connections_v1_commerce_connections_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConnectionResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_fake_v1_commerce_connections_fake_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["FakeConnectionCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ConnectionResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  sync_v1_commerce_connections__connection_id__sync_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        connection_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SyncRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  create_mapping_v1_commerce_mappings_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MappingCreate"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
         };
       };
       /** @description Validation Error */
@@ -5564,6 +5877,82 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CompletenessResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  workspace_v1_products__product_id__commerce_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  analyze_v1_products__product_id__commerce_analyze_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AnalyzeRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
         };
       };
       /** @description Validation Error */

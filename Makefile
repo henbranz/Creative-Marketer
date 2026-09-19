@@ -1,4 +1,4 @@
-.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap intelligence-bootstrap media-tools-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap intelligence-bootstrap commerce-agent-bootstrap commerce-tools-bootstrap commerce-demo-bootstrap media-tools-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -63,6 +63,15 @@ producer-bootstrap:
 
 intelligence-bootstrap:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_intelligence.py
+
+commerce-agent-bootstrap:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_commerce_agent.py
+
+commerce-tools-bootstrap:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_commerce_tools.py
+
+commerce-demo-bootstrap:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.bootstrap_commerce_demo
 
 media-tools-bootstrap:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_media_tools.py

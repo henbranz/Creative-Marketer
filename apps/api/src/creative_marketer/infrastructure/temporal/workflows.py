@@ -17,6 +17,10 @@ with workflow.unsafe.imports_passed_through():
     from creative_marketer.workflow_orchestration.contracts import (
         AgentExecutionActivityResult,
         AgentExecutionWorkflowInput,
+        CommerceActionActivityResult,
+        CommerceActionWorkflowInput,
+        CommerceSyncActivityResult,
+        CommerceSyncWorkflowInput,
         FinalCreativeAssemblyResult,
         FinalCreativeAssemblyWorkflowInput,
         GenerationPollResult,
@@ -484,3 +488,95 @@ class AgentExecutionWorkflow:
             WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
         )
         return result
+
+
+@workflow.defn(name="CommerceSyncWorkflow")
+class CommerceSyncWorkflow:
+    """Finite IDs-only coordinator; each activity owns one cursor-bounded sync type."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(
+        self, request: CommerceSyncWorkflowInput
+    ) -> tuple[CommerceSyncActivityResult, ...]:
+        self._state = WorkflowState.EXECUTING
+        results: list[CommerceSyncActivityResult] = []
+        for sync_type in request.sync_types:
+            cursor: str | None = None
+            while True:
+                result = cast(
+                    CommerceSyncActivityResult,
+                    await workflow.execute_activity(
+                        "workflow.sync_commerce",
+                        args=[request, sync_type, cursor],
+                        result_type=CommerceSyncActivityResult,
+                        start_to_close_timeout=timedelta(minutes=5),
+                        schedule_to_close_timeout=timedelta(minutes=15),
+                        retry_policy=RESEARCHER_RETRY_POLICY,
+                    ),
+                )
+                results.append(result)
+                if result.status != "SUCCEEDED":
+                    self._state = WorkflowState.FAILED
+                    return tuple(results)
+                cursor = result.next_cursor
+                if cursor is None:
+                    break
+        self._state = WorkflowState.COMPLETED
+        return tuple(results)
+
+
+@workflow.defn(name="CommerceActionWorkflow")
+class CommerceActionWorkflow:
+    """Approval-bound submission followed by finite reconciliation; never resubmits."""
+
+    def __init__(self) -> None:
+        self._state = WorkflowState.STARTING
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._state.value
+
+    @workflow.run
+    async def run(self, request: CommerceActionWorkflowInput) -> CommerceActionActivityResult:
+        self._state = WorkflowState.EXECUTING
+        result = await self._invoke("workflow.submit_commerce_action", request)
+        if result.status != "OUTCOME_UNKNOWN":
+            self._state = (
+                WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED
+            )
+            return result
+        for _ in range(request.maximum_reconcile_attempts):
+            await workflow.sleep(timedelta(seconds=request.reconcile_interval_seconds))
+            result = await self._invoke("workflow.reconcile_commerce_action", request)
+            if result.status != "OUTCOME_UNKNOWN":
+                self._state = (
+                    WorkflowState.COMPLETED
+                    if result.status == "SUCCEEDED"
+                    else WorkflowState.FAILED
+                )
+                return result
+        self._state = WorkflowState.EXPIRED
+        return result
+
+    @staticmethod
+    async def _invoke(
+        activity_name: str, request: CommerceActionWorkflowInput
+    ) -> CommerceActionActivityResult:
+        return cast(
+            CommerceActionActivityResult,
+            await workflow.execute_activity(
+                activity_name,
+                request,
+                result_type=CommerceActionActivityResult,
+                start_to_close_timeout=timedelta(minutes=5),
+                schedule_to_close_timeout=timedelta(minutes=10),
+                retry_policy=TOOL_RETRY_POLICY,
+            ),
+        )

@@ -249,6 +249,67 @@ export interface PerformanceObservation {
   provider: "fake";
   provider_version: string;
 }
+export interface CommerceWorkspace {
+  mapping: {
+    id: string;
+    connection_id: string;
+    external_product_id: string;
+    external_variant_id: string | null;
+    status: string;
+  } | null;
+  inventory: {
+    id: string;
+    external_variant_id: string;
+    sku: string | null;
+    available_quantity: number | null;
+    indicator: "OUT_OF_STOCK" | "LOW_STOCK" | "IN_STOCK" | "UNAVAILABLE";
+    captured_at: string;
+    source: "Observed";
+  }[];
+  orders: {
+    id: string;
+    order_reference: string;
+    external_order_id: string;
+    currency: string;
+    total: string;
+    payment_state: string;
+    fulfillment_state: string;
+    captured_at: string;
+    attributed: boolean;
+    source: "Observed";
+  }[];
+  proposals: {
+    id: string;
+    action_type: "INVENTORY_ADJUSTMENT" | "REFUND";
+    external_product_id: string | null;
+    external_variant_id: string | null;
+    external_order_id: string | null;
+    exact_quantity: number | null;
+    exact_amount: string | null;
+    currency: string | null;
+    reason: string;
+    risk_level: "R5" | "R6";
+    semantic_digest: string;
+    approval_state: "REQUIRES_EXACT_APPROVAL";
+    job_status: string | null;
+    source: "AI Proposal";
+    created_at: string;
+  }[];
+  inventory_exceptions: {
+    kind: string;
+    observation_id: string;
+    external_variant_id: string;
+    available_quantity: number;
+    rule_version: string;
+  }[];
+  order_exceptions: {
+    kind: string;
+    observation_id: string;
+    external_order_id: string;
+    rule_version: string;
+  }[];
+  is_fake: boolean;
+}
 export interface IntelligenceCandidate {
   id: string;
   statement: string;
@@ -670,6 +731,13 @@ export const catalogApi = {
       session,
       `/v1/products/${productId}/intelligence/reports`,
     ),
+  getCommerceWorkspace: (session: Session, productId: string) =>
+    request<CommerceWorkspace>(session, `/v1/products/${productId}/commerce`),
+  analyzeCommerce: (session: Session, productId: string) =>
+    request<AgentRun>(session, `/v1/products/${productId}/commerce/analyze`, {
+      method: "POST",
+      body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+    }),
   analyzePerformance: (session: Session, productId: string) =>
     request<AgentRun>(
       session,
@@ -802,6 +870,11 @@ export async function obsidianOpenUrl(
     intelligence_report: "Insights/Reports",
     insight_candidate: "Insights/Candidates",
     experiment_proposal: "Experiments/Proposals",
+    commerce_connection: "Commerce",
+    product_commerce_mapping: "Commerce",
+    commerce_operations_report: "Commerce/Operations",
+    commerce_action_proposal: "Commerce/Actions",
+    commerce_action_result: "Commerce/Actions",
   };
   const directory = directories[nodeType];
   if (!directory || !canonicalId.trim())

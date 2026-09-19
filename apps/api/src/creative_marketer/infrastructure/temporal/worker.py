@@ -11,6 +11,8 @@ from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TAS
 from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
     ApprovalBlockingWorkflow,
+    CommerceActionWorkflow,
+    CommerceSyncWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
     MediaProductionWorkflow,
@@ -35,6 +37,8 @@ def create_worker(
         workflows=[
             AgentExecutionWorkflow,
             ApprovalBlockingWorkflow,
+            CommerceSyncWorkflow,
+            CommerceActionWorkflow,
             MediaGenerationWorkflow,
             FinalCreativeAssemblyWorkflow,
             MediaProductionWorkflow,
@@ -45,6 +49,9 @@ def create_worker(
         ],
         activities=[
             activities.execute_agent,
+            activities.sync_commerce,
+            activities.submit_commerce_action,
+            activities.reconcile_commerce_action,
             activities.invoke_tool,
             activities.start_generation,
             activities.poll_generation,

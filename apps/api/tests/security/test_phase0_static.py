@@ -463,6 +463,15 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "intelligence.report.created.v1": (
             "sha256:cabc689a79c2f19dd57b647ed20914cd1254ee0ae308b5ed6e129b0960c278bf"
         ),
+        "commerce.action.proposed.v1": (
+            "sha256:39cd72a7277c4d4bd41c989d686ed157eacc08d1a67862a97f092edb06b59445"
+        ),
+        "commerce.report.created.v1": (
+            "sha256:e8d2be00a693b3a3c9ee678d51e001260885989e76471d25befe4e16ac0030cb"
+        ),
+        "commerce.sync.completed.v1": (
+            "sha256:a4f1f967b1444f126bcc9b463487f086b5a09a3f5d9b52f0521159fa4ecdb9d2"
+        ),
     }
     schema_root = PRODUCT_SOURCE / "events" / "schemas"
     actual = {
@@ -478,6 +487,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260919_0026"]
+    assert script.get_heads() == ["20260919_0027"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

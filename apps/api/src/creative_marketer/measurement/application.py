@@ -269,11 +269,53 @@ class MeasurementService:
         observed_at: datetime,
         public_code: str | None,
     ) -> tuple[ConversionObservation, AttributionResult | None]:
+        return await self._ingest_conversion(
+            context,
+            source="fake",
+            external_id=external_id,
+            amount=amount,
+            currency=currency,
+            observed_at=observed_at,
+            public_code=public_code,
+        )
+
+    async def ingest_commerce_conversion(
+        self,
+        context: ExecutionContext,
+        *,
+        external_id: str,
+        amount: Decimal,
+        currency: str,
+        observed_at: datetime,
+        public_code: str,
+    ) -> tuple[ConversionObservation, AttributionResult | None]:
+        """Clean commerce-to-measurement boundary; repositories remain isolated."""
+        return await self._ingest_conversion(
+            context,
+            source="commerce.fake",
+            external_id=external_id,
+            amount=amount,
+            currency=currency,
+            observed_at=observed_at,
+            public_code=public_code,
+        )
+
+    async def _ingest_conversion(
+        self,
+        context: ExecutionContext,
+        *,
+        source: str,
+        external_id: str,
+        amount: Decimal,
+        currency: str,
+        observed_at: datetime,
+        public_code: str | None,
+    ) -> tuple[ConversionObservation, AttributionResult | None]:
         self._write(context)
         code_hash = AttributionReference.hash_code(public_code) if public_code else None
         value = ConversionObservation(
             context.tenant_id,
-            "fake",
+            source,
             external_id,
             amount,
             currency,
@@ -281,7 +323,7 @@ class MeasurementService:
             code_hash,
         )
         async with self.uow_factory(context.tenant_id) as uow:
-            existing = await uow.measurement.conversion_by_external_id("fake", external_id)
+            existing = await uow.measurement.conversion_by_external_id(source, external_id)
             if existing is not None:
                 if existing.semantic_digest != value.semantic_digest:
                     raise ConversionConflict("conversion idempotency key reused with new facts")
@@ -335,7 +377,7 @@ class MeasurementService:
             await uow.audit.append(
                 tenant_audit(
                     context,
-                    action="measurement.fake_conversion.ingested",
+                    action="measurement.conversion.ingested",
                     outcome=AuditOutcome.SUCCESS,
                     resource_type="conversion_observation",
                     resource_id=str(value.id),

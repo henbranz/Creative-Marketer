@@ -78,7 +78,14 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE measurement.performance_snapshots, "
+                "TRUNCATE commerce.action_results, commerce.action_jobs, "
+                "commerce.action_decisions, commerce.action_proposals, commerce.reports, "
+                "commerce.context_manifests, commerce.fulfillment_observations, "
+                "commerce.payment_observations, commerce.order_observations, "
+                "commerce.inventory_observations, commerce.product_mappings, "
+                "commerce.variant_observations, commerce.product_observations, "
+                "commerce.sync_runs, commerce.connections, "
+                "measurement.performance_snapshots, "
                 "intelligence.experiment_decisions, intelligence.experiment_proposals, "
                 "intelligence.insight_decisions, intelligence.insight_candidates, "
                 "intelligence.reports, intelligence.performance_comparisons, "

@@ -254,7 +254,7 @@ class ConversionObservation:
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
-        if self.source != "fake" or not self.external_id.strip():
+        if self.source not in {"fake", "commerce.fake"} or not self.external_id.strip():
             raise ValueError("conversion source is invalid")
         if self.amount < 0 or not self.amount.is_finite():
             raise ValueError("conversion amount is invalid")

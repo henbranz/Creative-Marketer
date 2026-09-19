@@ -304,3 +304,68 @@ class MeasurementActivityResult:
 
 def measurement_workflow_id(value: MeasurementWorkflowInput) -> str:
     return f"tenant/{value.tenant_id}/publication/{value.publication_id}/measurement-v1"
+
+
+@dataclass(frozen=True, slots=True)
+class CommerceSyncWorkflowInput:
+    """IDs-only request for one finite, resumable commerce synchronization."""
+
+    tenant_id: str
+    connection_id: str
+    correlation_id: str
+    sync_types: tuple[str, ...] = ("CATALOG", "INVENTORY", "ORDERS")
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.connection_id, "connection_id")
+        _uuid(self.correlation_id, "correlation_id")
+        allowed = {"CATALOG", "INVENTORY", "ORDERS"}
+        if not self.sync_types or len(self.sync_types) > 3 or set(self.sync_types) - allowed:
+            raise ValueError("commerce sync types must be a finite canonical subset")
+        if len(set(self.sync_types)) != len(self.sync_types):
+            raise ValueError("commerce sync types must be unique")
+
+
+@dataclass(frozen=True, slots=True)
+class CommerceSyncActivityResult:
+    connection_id: str
+    sync_type: str
+    status: str
+    next_cursor: str | None = None
+    safe_failure_code: str | None = None
+
+
+def commerce_sync_workflow_id(value: CommerceSyncWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/commerce-connection/{value.connection_id}/sync"
+
+
+@dataclass(frozen=True, slots=True)
+class CommerceActionWorkflowInput:
+    """Exact immutable proposal identity; PostgreSQL remains the authority."""
+
+    tenant_id: str
+    proposal_id: str
+    correlation_id: str
+    reconcile_interval_seconds: int = 10
+    maximum_reconcile_attempts: int = 6
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.proposal_id, "proposal_id")
+        _uuid(self.correlation_id, "correlation_id")
+        if not 1 <= self.reconcile_interval_seconds <= 3600:
+            raise ValueError("commerce reconcile interval is invalid")
+        if not 1 <= self.maximum_reconcile_attempts <= 100:
+            raise ValueError("commerce reconcile attempts are invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CommerceActionActivityResult:
+    proposal_id: str
+    status: str
+    result_ref: str | None = None
+    safe_failure_code: str | None = None
+
+
+def commerce_action_workflow_id(value: CommerceActionWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/commerce-proposal/{value.proposal_id}"
