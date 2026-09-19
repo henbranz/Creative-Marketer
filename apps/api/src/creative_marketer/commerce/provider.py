@@ -9,7 +9,7 @@ from typing import Protocol
 
 from creative_marketer.agent_runtime.domain import canonical_digest
 
-from .domain import FulfillmentState, PaymentState
+from .domain import FulfillmentState, PaymentState, canonical_money_text
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +119,7 @@ class FakeCommerceProvider(CommerceReadProvider, CommerceMutationProvider):
     pending_effects: dict[str, Mapping[str, object]] = field(default_factory=dict)
     fail_next_read: bool = False
     next_mutation_disposition: MutationDisposition | None = None
+    next_refund_disposition: MutationDisposition | None = None
 
     def seed_store(self, external_store_id: str, *, attribution_code: str | None = None) -> None:
         if external_store_id in self.products:
@@ -295,13 +296,16 @@ class FakeCommerceProvider(CommerceReadProvider, CommerceMutationProvider):
         currency: str,
         idempotency_key: str,
     ) -> ProviderMutationResult:
+        if self.next_refund_disposition is not None:
+            self.next_mutation_disposition = self.next_refund_disposition
+            self.next_refund_disposition = None
         result = self._result(
             idempotency_key,
             {
                 "kind": "REFUND",
                 "store": external_store_id,
                 "order": external_order_id,
-                "amount": str(amount),
+                "amount": canonical_money_text(amount),
                 "currency": currency,
             },
         )
@@ -362,3 +366,39 @@ class FakeCommerceProvider(CommerceReadProvider, CommerceMutationProvider):
             value = ProviderMutationResult(operation_id, MutationDisposition.ACCEPTED)
             self.operations[operation_id] = value
         return value
+
+    def restore_unknown_operation(
+        self,
+        operation_id: str,
+        effect: Mapping[str, object],
+    ) -> None:
+        """Reconstruct minimum fake state after a worker restart.
+
+        The operation identifier is derived from immutable mutation material. A mismatch
+        fails closed, so restart recovery cannot invent or redirect an effect.
+        """
+        material = (
+            {
+                "kind": "SET_AVAILABLE_TO",
+                "store": effect["store"],
+                "variant": effect["variant"],
+                "quantity": effect["quantity"],
+            }
+            if effect["kind"] == "SET_AVAILABLE_TO"
+            else {
+                "kind": "REFUND",
+                "store": effect["store"],
+                "order": effect["order"],
+                "amount": canonical_money_text(Decimal(str(effect["amount"]))),
+                "currency": effect["currency"],
+            }
+        )
+        expected = canonical_digest(material)[7:31]
+        if expected != operation_id:
+            raise ValueError("fake operation identity does not match immutable proposal")
+        self.seed_store(str(effect["store"]))
+        self.operations.setdefault(
+            operation_id,
+            ProviderMutationResult(operation_id, MutationDisposition.OUTCOME_UNKNOWN),
+        )
+        self.pending_effects.setdefault(operation_id, effect)

@@ -220,7 +220,7 @@ def test_tool_executors_are_invoked_only_inside_the_gateway() -> None:
             owner = node.func.value
             if isinstance(owner, ast.Attribute) and owner.attr == "executor":
                 calls.append(f"{path.relative_to(API_ROOT)}:{node.lineno}")
-    assert calls == ["src/creative_marketer/tool_execution/application.py:573"]
+    assert calls == ["src/creative_marketer/tool_execution/application.py:602"]
 
 
 def test_expired_agent_run_lease_has_no_automatic_reinference_path() -> None:
@@ -487,6 +487,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260919_0027"]
+    assert script.get_heads() == ["20260919_0028"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

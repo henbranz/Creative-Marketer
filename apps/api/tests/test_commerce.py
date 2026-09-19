@@ -1,5 +1,5 @@
 import inspect
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
@@ -20,6 +20,7 @@ from creative_marketer.commerce.domain import (
     CommerceActionProposal,
     CommerceConnection,
     CommerceProductObservation,
+    CommerceSyncRequest,
     CommerceVariantObservation,
     FulfillmentObservation,
     FulfillmentState,
@@ -31,6 +32,7 @@ from creative_marketer.commerce.domain import (
     PaymentObservation,
     PaymentState,
     ProductCommerceMapping,
+    SyncType,
     inventory_exceptions,
     order_exceptions,
 )
@@ -388,6 +390,59 @@ async def test_unknown_action_is_not_retried_and_status_tool_reconciles() -> Non
         MutationDisposition.OUTCOME_UNKNOWN,
         MutationDisposition.ACCEPTED,
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action_type", "tool_key"),
+    (
+        (ActionType.INVENTORY_ADJUSTMENT, "commerce.inventory.adjust"),
+        (ActionType.REFUND, "commerce.refund.submit"),
+    ),
+)
+async def test_unknown_action_reconciliation_survives_fake_worker_restart(
+    action_type: ActionType, tool_key: str
+) -> None:
+    value = proposal(action_type)
+    authority = FakeAuthority(value)
+    provider = FakeCommerceProvider()
+    provider.next_mutation_disposition = MutationDisposition.OUTCOME_UNKNOWN
+    context = ToolExecutionContext(
+        value.tenant_id, uuid4(), "op-exact", uuid4(), uuid4(), uuid4(), uuid4()
+    )
+    normalized = normalize_commerce_input({"commerce_action_proposal_id": str(value.id)})
+    with pytest.raises(OutcomeUnknown):
+        await CommerceToolExecutor(tool_key, authority, provider).execute(context, normalized)
+
+    restarted = FakeCommerceProvider()
+    result = await CommerceToolExecutor("commerce.operation.status", authority, restarted).execute(
+        context, normalized
+    )
+
+    assert isinstance(result.output, dict)
+    assert result.output["status"] == "SUCCEEDED"
+    assert len(restarted.operations) == 1
+
+
+def test_commerce_domain_rejects_ambiguous_syncs_proposals_and_effects() -> None:
+    with pytest.raises(ValueError, match="catalog observation"):
+        CommerceProductObservation(uuid4(), uuid4(), "product", "title", "ACTIVE", "invalid")
+    with pytest.raises(ValueError, match="non-empty unique"):
+        CommerceSyncRequest(uuid4(), uuid4(), uuid4(), uuid4(), ())
+    with pytest.raises(ValueError, match="non-empty unique"):
+        CommerceSyncRequest(
+            uuid4(), uuid4(), uuid4(), uuid4(), (SyncType.CATALOG, SyncType.CATALOG)
+        )
+    with pytest.raises(ValueError, match="exact variant"):
+        replace(proposal(), external_variant_id=None)
+    with pytest.raises(ValueError, match="exact order"):
+        replace(proposal(ActionType.REFUND), currency=None)
+    with pytest.raises(ValueError, match="digest"):
+        replace(proposal(), semantic_digest="invalid")
+    with pytest.raises(ValueError, match="integer"):
+        FakeCommerceProvider()._apply_effect(
+            {"kind": "SET_AVAILABLE_TO", "store": "store", "quantity": True}
+        )
 
 
 @pytest.mark.asyncio

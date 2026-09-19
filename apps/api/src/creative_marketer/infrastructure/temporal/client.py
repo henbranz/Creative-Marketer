@@ -1,9 +1,16 @@
+from typing import Any
+
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TASK_QUEUE
+from creative_marketer.infrastructure.temporal.configuration import (
+    COMMERCE_TASK_QUEUE,
+    WORKFLOW_TASK_QUEUE,
+)
 from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
+    CommerceActionWorkflow,
+    CommerceSyncWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaProductionWorkflow,
     PerformanceCollectionWorkflow,
@@ -12,18 +19,52 @@ from creative_marketer.infrastructure.temporal.workflows import (
 )
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
+    CommerceActionWorkflowInput,
+    CommerceSyncWorkflowInput,
     FinalCreativeAssemblyWorkflowInput,
     MeasurementWorkflowInput,
     MediaProductionWorkflowInput,
     PublicationWorkflowInput,
     ResearcherWorkflowInput,
     agent_execution_workflow_id,
+    commerce_action_workflow_id,
+    commerce_sync_workflow_id,
     final_creative_assembly_workflow_id,
     measurement_workflow_id,
     media_production_workflow_id,
     publication_workflow_id,
     researcher_workflow_id,
 )
+
+
+class TemporalCommerceWorkflowStarter:
+    def __init__(self, client: Client, task_queue: str = COMMERCE_TASK_QUEUE) -> None:
+        self._client, self._task_queue = client, task_queue
+
+    async def start_sync(self, request: CommerceSyncWorkflowInput) -> None:
+        await self._start(CommerceSyncWorkflow.run, request, commerce_sync_workflow_id(request))
+
+    async def start_action(self, request: CommerceActionWorkflowInput) -> None:
+        await self._start(CommerceActionWorkflow.run, request, commerce_action_workflow_id(request))
+
+    async def signal_action(self, request: CommerceActionWorkflowInput) -> None:
+        handle = self._client.get_workflow_handle(commerce_action_workflow_id(request))
+        await handle.signal("approval_state_may_have_changed")
+
+    async def _start(self, workflow_run: Any, request: Any, workflow_id: str) -> None:
+        try:
+            await self._client.start_workflow(
+                workflow_run, request, id=workflow_id, task_queue=self._task_queue
+            )
+        except WorkflowAlreadyStartedError:
+            handle = self._client.get_workflow_handle(workflow_id)
+            description = await handle.describe()
+            if description.status not in {
+                WorkflowExecutionStatus.RUNNING,
+                WorkflowExecutionStatus.COMPLETED,
+                WorkflowExecutionStatus.FAILED,
+            }:
+                raise
 
 
 class TemporalWorkflowSignalClient:

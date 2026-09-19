@@ -87,6 +87,7 @@ services:
       OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
       MODEL_PROVIDER_BACKEND: ${MODEL_PROVIDER_BACKEND:-disabled}
+      TEMPORAL_ADDRESS: temporal:7233
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}
       MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}
@@ -158,6 +159,26 @@ services:
       LIVE_E2E_MAX_USD: ${LIVE_E2E_MAX_USD:-10}
       LIVE_E2E_PRODUCT_ID: ${LIVE_E2E_PRODUCT_ID:-}
       AGENT_WORKLOAD_ID: ${AGENT_WORKLOAD_ID:-local-agent-worker}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+
+  commerce-worker:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "creative_marketer_api.commerce_worker"]
+    profiles: ["temporal"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+      TEMPORAL_ADDRESS: temporal:7233
+      COMMERCE_WORKLOAD_ID: ${COMMERCE_WORKLOAD_ID:-local-commerce-worker}
     depends_on:
       migrate:
         condition: service_completed_successfully

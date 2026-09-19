@@ -3085,17 +3085,32 @@ function formatRate(value: string | null): string {
 function CommercePanel({ workspace }: { workspace: Workspace }) {
   const session = useMemo(() => readSession(), []);
   const [commerce, setCommerce] = useState<CommerceWorkspace | null>(null);
+  const [connections, setConnections] = useState<
+    Awaited<ReturnType<typeof catalogApi.listCommerceConnections>>
+  >([]);
+  const [connectionId, setConnectionId] = useState("");
+  const [externalProductId, setExternalProductId] = useState("fake-product-1");
+  const [externalVariantId, setExternalVariantId] = useState("fake-variant-1");
   const [view, setView] = useState<
     "Overview" | "Orders" | "Inventory" | "Actions"
-  >("Overview");
-  const [busy, setBusy] = useState(false);
+  >(() =>
+    sessionStorage.getItem("cm-commerce-view") === "Actions"
+      ? "Actions"
+      : "Overview",
+  );
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
-    setCommerce(
-      await catalogApi.getCommerceWorkspace(session, workspace.product.id),
-    );
+    const [nextCommerce, nextConnections] = await Promise.all([
+      catalogApi.getCommerceWorkspace(session, workspace.product.id),
+      catalogApi.listCommerceConnections(session),
+    ]);
+    setCommerce(nextCommerce);
+    setConnections(nextConnections);
+    setConnectionId((current) => current || nextConnections[0]?.id || "");
   }, [session, workspace.product.id]);
   useEffect(() => {
+    sessionStorage.removeItem("cm-commerce-view");
     queueMicrotask(
       () =>
         void load().catch(() =>
@@ -3103,6 +3118,52 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
         ),
     );
   }, [load]);
+  useEffect(() => {
+    if (
+      !commerce ||
+      (!commerce.proposals.some((proposal) =>
+        ["APPROVED", "QUEUED", "SUBMITTING", "OUTCOME_UNKNOWN"].includes(
+          proposal.approval_state,
+        ),
+      ) &&
+        !["QUEUED", "RUNNING"].includes(commerce.sync_status?.status ?? ""))
+    )
+      return;
+    const timer = window.setInterval(() => void load(), 1500);
+    return () => window.clearInterval(timer);
+  }, [commerce, load]);
+  const requestAction = async (proposalId: string) => {
+    setBusy(proposalId);
+    setError("");
+    try {
+      await catalogApi.requestCommerceAction(session, proposalId);
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Action request failed.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+  const decideAction = async (
+    proposalId: string,
+    approvalId: string,
+    decision: "APPROVE" | "DENY",
+  ) => {
+    setBusy(proposalId);
+    setError("");
+    try {
+      await catalogApi.decideCommerceApproval(session, approvalId, decision);
+      await load();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Approval decision failed.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
   if (error)
     return (
       <p className="error-banner" role="alert">
@@ -3112,10 +3173,94 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
   if (!commerce) return <p>Loading commerce workspace…</p>;
   if (!commerce.mapping)
     return (
-      <EmptyState icon="C" title="No commerce mapping yet">
-        Connect the Fake Store and explicitly map this Product to an observed
-        commerce product. Names are never matched automatically.
-      </EmptyState>
+      <div className="commerce-workspace">
+        <EmptyState icon="C" title="No commerce mapping yet">
+          Connect the Fake Store and explicitly map this Product to an observed
+          commerce product. Names are never matched automatically.
+        </EmptyState>
+        <section className="form-card" aria-label="Explicit Commerce mapping">
+          {connections.length === 0 ? (
+            <button
+              disabled={busy === "connect"}
+              onClick={() => {
+                setBusy("connect");
+                void catalogApi
+                  .createFakeCommerceConnection(session)
+                  .then(() => load())
+                  .catch((caught: unknown) =>
+                    setError(
+                      caught instanceof Error
+                        ? caught.message
+                        : "Connection failed.",
+                    ),
+                  )
+                  .finally(() => setBusy(null));
+              }}
+            >
+              {busy === "connect" ? "Connecting…" : "Connect Fake Store"}
+            </button>
+          ) : (
+            <>
+              <label>
+                Store
+                <select
+                  value={connectionId}
+                  onChange={(event) => setConnectionId(event.target.value)}
+                >
+                  {connections.map((connection) => (
+                    <option key={connection.id} value={connection.id}>
+                      {connection.display_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Observed product ID
+                <input
+                  value={externalProductId}
+                  onChange={(event) => setExternalProductId(event.target.value)}
+                />
+              </label>
+              <label>
+                Observed variant ID
+                <input
+                  value={externalVariantId}
+                  onChange={(event) => setExternalVariantId(event.target.value)}
+                />
+              </label>
+              <button
+                disabled={
+                  busy === "mapping" ||
+                  !connectionId ||
+                  !externalProductId.trim()
+                }
+                onClick={() => {
+                  setBusy("mapping");
+                  setError("");
+                  void catalogApi
+                    .mapProductCommerce(session, {
+                      product_id: workspace.product.id,
+                      connection_id: connectionId,
+                      external_product_id: externalProductId.trim(),
+                      external_variant_id: externalVariantId.trim() || null,
+                    })
+                    .then(() => load())
+                    .catch((caught: unknown) =>
+                      setError(
+                        caught instanceof Error
+                          ? caught.message
+                          : "Mapping failed.",
+                      ),
+                    )
+                    .finally(() => setBusy(null));
+                }}
+              >
+                {busy === "mapping" ? "Mapping…" : "Confirm explicit mapping"}
+              </button>
+            </>
+          )}
+        </section>
+      </div>
     );
   return (
     <div className="commerce-workspace">
@@ -3125,6 +3270,41 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
           <h2>Observed store state and governed actions</h2>
         </div>
         <StatusBadge status="FAKE" label="Fake Store" variant="info" />
+        {commerce.sync_status && (
+          <StatusBadge
+            status={commerce.sync_status.status}
+            {...(commerce.sync_status.status === "QUEUED"
+              ? { label: "Syncing…" }
+              : {})}
+          />
+        )}
+        <button
+          className="secondary"
+          disabled={
+            busy === "sync" ||
+            commerce.sync_status?.status === "QUEUED" ||
+            commerce.sync_status?.status === "RUNNING"
+          }
+          onClick={() => {
+            setBusy("sync");
+            setError("");
+            void catalogApi
+              .syncCommerce(session, commerce.mapping!.connection_id)
+              .then(() => load())
+              .catch((caught: unknown) =>
+                setError(
+                  caught instanceof Error ? caught.message : "Sync failed.",
+                ),
+              )
+              .finally(() => setBusy(null));
+          }}
+        >
+          {busy === "sync" ||
+          commerce.sync_status?.status === "QUEUED" ||
+          commerce.sync_status?.status === "RUNNING"
+            ? "Syncing…"
+            : "Sync Commerce"}
+        </button>
       </header>
       <nav className="subtabs" aria-label="Commerce views">
         {(["Overview", "Orders", "Inventory", "Actions"] as const).map(
@@ -3257,6 +3437,100 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
                   </p>
                 )}
                 <small>{proposal.approval_state.replaceAll("_", " ")}</small>
+                <StatusBadge
+                  status={proposal.job_status ?? proposal.approval_state}
+                />
+                <dl>
+                  <div>
+                    <dt>Store</dt>
+                    <dd>{proposal.store}</dd>
+                  </div>
+                  {proposal.action_type === "INVENTORY_ADJUSTMENT" && (
+                    <>
+                      <div>
+                        <dt>SKU / variant</dt>
+                        <dd>{proposal.sku_or_variant}</dd>
+                      </div>
+                      <div>
+                        <dt>Current observed quantity</dt>
+                        <dd>{proposal.current_quantity ?? "Unavailable"}</dd>
+                      </div>
+                      <div>
+                        <dt>New exact quantity</dt>
+                        <dd>{proposal.exact_quantity}</dd>
+                      </div>
+                    </>
+                  )}
+                  {proposal.action_type === "REFUND" && (
+                    <>
+                      <div>
+                        <dt>Order reference</dt>
+                        <dd>{proposal.order_reference}</dd>
+                      </div>
+                      <div>
+                        <dt>Refund amount</dt>
+                        <dd>
+                          {proposal.exact_amount} {proposal.currency}
+                        </dd>
+                      </div>
+                    </>
+                  )}
+                </dl>
+                {proposal.action_type === "REFUND" && (
+                  <p>
+                    <strong>
+                      This approval authorizes this exact financial refund.
+                    </strong>
+                  </p>
+                )}
+                {proposal.approval_state === "NEEDS_APPROVAL" &&
+                  !proposal.approval_request_id && (
+                    <button
+                      disabled={busy === proposal.id}
+                      onClick={() => void requestAction(proposal.id)}
+                    >
+                      Request approval
+                    </button>
+                  )}
+                {proposal.approval_state === "NEEDS_APPROVAL" &&
+                  proposal.approval_request_id && (
+                    <div
+                      className="card-actions"
+                      aria-label="Commerce approval decision"
+                    >
+                      <button
+                        disabled={busy === proposal.id}
+                        onClick={() =>
+                          void decideAction(
+                            proposal.id,
+                            proposal.approval_request_id!,
+                            "APPROVE",
+                          )
+                        }
+                      >
+                        Approve {proposal.risk_level}
+                      </button>
+                      <button
+                        className="secondary"
+                        disabled={busy === proposal.id}
+                        onClick={() =>
+                          void decideAction(
+                            proposal.id,
+                            proposal.approval_request_id!,
+                            "DENY",
+                          )
+                        }
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  )}
+                {proposal.result_ref && <small>Result confirmed</small>}
+                {proposal.safe_failure_code && (
+                  <small>
+                    {proposal.safe_failure_code.replaceAll("_", " ")}
+                  </small>
+                )}
               </article>
             ))}
           </div>
@@ -3269,9 +3543,9 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
           )}
           <button
             className="primary"
-            disabled={busy}
+            disabled={busy !== null}
             onClick={() => {
-              setBusy(true);
+              setBusy("analyze");
               setError("");
               void catalogApi
                 .analyzeCommerce(session, workspace.product.id)
@@ -3283,10 +3557,10 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
                       : "Analysis could not start.",
                   ),
                 )
-                .finally(() => setBusy(false));
+                .finally(() => setBusy(null));
             }}
           >
-            {busy ? "Starting analysis…" : "Analyze commerce"}
+            {busy === "analyze" ? "Starting analysis…" : "Analyze commerce"}
           </button>
         </section>
       )}
@@ -4929,11 +5203,18 @@ export function ProductWorkspaceApp() {
             <button
               key={item}
               className={item === "Products" ? "active" : ""}
-              disabled={item !== "Products"}
+              disabled={item !== "Products" && item !== "Approvals"}
+              onClick={() => {
+                if (item === "Approvals" && workspace) {
+                  sessionStorage.setItem("cm-commerce-view", "Actions");
+                  setTab("Commerce");
+                  setNavigationOpen(false);
+                }
+              }}
             >
               <i aria-hidden="true">{navigationIcons[item]}</i>
               <b>{item}</b>
-              {item !== "Products" && <span>Soon</span>}
+              {item !== "Products" && item !== "Approvals" && <span>Soon</span>}
             </button>
           ))}
         </nav>

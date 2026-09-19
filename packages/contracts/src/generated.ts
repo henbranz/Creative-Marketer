@@ -72,6 +72,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/approvals/{approval_id}/decision": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Decide Approval */
+    post: operations["decide_approval_v1_approvals__approval_id__decision_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/assembly/jobs/{job_id}": {
     parameters: {
       query?: never;
@@ -256,6 +273,40 @@ export interface paths {
     put?: never;
     /** Create Product */
     post: operations["create_product_v1_brands__brand_id__products_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/commerce/actions/{proposal_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Action Status */
+    get: operations["action_status_v1_commerce_actions__proposal_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/commerce/actions/{proposal_id}/request": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Request Action */
+    post: operations["request_action_v1_commerce_actions__proposal_id__request_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1637,6 +1688,12 @@ export interface components {
       /** Idempotency Key */
       idempotency_key: string;
     };
+    /** ApprovalDecisionInput */
+    ApprovalDecisionInput: {
+      decision: components["schemas"]["HumanDecision"];
+      /** Reason Code */
+      reason_code?: string | null;
+    };
     /** AssemblyItemResponse */
     AssemblyItemResponse: {
       /** Audio Behavior */
@@ -2746,6 +2803,11 @@ export interface components {
       /** Detail */
       detail?: components["schemas"]["ValidationError"][];
     };
+    /**
+     * HumanDecision
+     * @enum {string}
+     */
+    HumanDecision: "APPROVE" | "DENY";
     /** KnowledgeEdgeResponse */
     KnowledgeEdgeResponse: {
       /** Relationship Type */
@@ -3920,9 +3982,9 @@ export interface components {
       | "MANUAL_CAPTURE";
     /** SyncRequest */
     SyncRequest: {
-      /** Cursor */
-      cursor?: string | null;
-      sync_type: components["schemas"]["SyncType"];
+      /** Idempotency Key */
+      idempotency_key: string;
+      sync_type?: components["schemas"]["SyncType"] | null;
     };
     /**
      * SyncType
@@ -4141,6 +4203,47 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  decide_approval_v1_approvals__approval_id__decision_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        approval_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ApprovalDecisionInput"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
         };
       };
       /** @description Validation Error */
@@ -4641,6 +4744,80 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkspaceResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  action_status_v1_commerce_actions__proposal_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        proposal_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  request_action_v1_commerce_actions__proposal_id__request_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        proposal_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            [key: string]: unknown;
+          };
         };
       };
       /** @description Validation Error */

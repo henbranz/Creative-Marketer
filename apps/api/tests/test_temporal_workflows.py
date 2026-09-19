@@ -191,8 +191,8 @@ class FakeCommerceSyncExecutor:
     def __init__(self):
         self.calls = []
 
-    async def sync(self, tenant_id, connection_id, sync_type, cursor):
-        self.calls.append((tenant_id, connection_id, sync_type, cursor))
+    async def sync(self, tenant_id, sync_request_id, connection_id, sync_type, cursor):
+        self.calls.append((tenant_id, sync_request_id, connection_id, sync_type, cursor))
         next_cursor = "page-2" if cursor is None and sync_type == "ORDERS" else None
         return CommerceSyncActivityResult(str(connection_id), sync_type, "SUCCEEDED", next_cursor)
 
@@ -202,11 +202,11 @@ class FakeCommerceActionExecutor:
         self.submissions = 0
         self.reconciliations = 0
 
-    async def submit(self, tenant_id, proposal_id):
+    async def submit(self, tenant_id, proposal_id, request_ref):
         self.submissions += 1
         return CommerceActionActivityResult(str(proposal_id), "OUTCOME_UNKNOWN")
 
-    async def reconcile(self, tenant_id, proposal_id):
+    async def reconcile(self, tenant_id, proposal_id, request_ref):
         self.reconciliations += 1
         return CommerceActionActivityResult(
             str(proposal_id), "SUCCEEDED", "result://commerce/fake-operation"
@@ -276,7 +276,7 @@ async def test_commerce_sync_workflow_is_finite_and_cursor_resumable(temporal_en
         commerce_sync=service,
     )
     request = CommerceSyncWorkflowInput(
-        str(uuid4()), str(uuid4()), str(uuid4()), ("INVENTORY", "ORDERS")
+        str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4()), ("INVENTORY", "ORDERS")
     )
     async with create_worker(
         temporal_environment.client,
@@ -290,7 +290,7 @@ async def test_commerce_sync_workflow_is_finite_and_cursor_resumable(temporal_en
             task_queue=WORKFLOW_TASK_QUEUE,
         )
     assert [value.sync_type for value in result] == ["INVENTORY", "ORDERS", "ORDERS"]
-    assert [call[3] for call in service.calls] == [None, None, "page-2"]
+    assert [call[4] for call in service.calls] == [None, None, "page-2"]
 
 
 @pytest.mark.asyncio
@@ -301,7 +301,16 @@ async def test_commerce_action_unknown_reconciles_without_resubmission(temporal_
         FakeGenerationService(),
         commerce_actions=service,
     )
-    request = CommerceActionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()), 1, 2)
+    request = CommerceActionWorkflowInput(
+        str(uuid4()),
+        str(uuid4()),
+        str(uuid4()),
+        "tool-request://" + uuid4().hex,
+        approval_timeout_seconds=60,
+        approval_fallback_poll_seconds=1,
+        reconcile_interval_seconds=1,
+        maximum_reconcile_attempts=2,
+    )
     async with create_worker(
         temporal_environment.client,
         activities,

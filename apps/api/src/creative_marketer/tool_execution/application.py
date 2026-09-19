@@ -246,6 +246,21 @@ class ToolGateway:
     async def invoke(
         self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
     ) -> GatewayResult:
+        return await self._observed_invoke(invocation, request, execute=True)
+
+    async def request(
+        self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
+    ) -> GatewayResult:
+        """Create/replay governance state without permitting executor I/O in the caller."""
+        return await self._observed_invoke(invocation, request, execute=False)
+
+    async def _observed_invoke(
+        self,
+        invocation: TrustedAgentInvocation,
+        request: ToolInvocationRequest,
+        *,
+        execute: bool,
+    ) -> GatewayResult:
         context = invocation.initiating_context
         started = monotonic()
         observation = {"risk": "unknown"}
@@ -253,7 +268,7 @@ class ToolGateway:
             "tool_gateway.invoke",
             {"correlation_id": str(context.correlation_id), "tool.key": request.tool_key},
         ) as span:
-            result = await self._invoke(invocation, request, observation)
+            result = await self._invoke(invocation, request, observation, execute=execute)
             attributes = {
                 "tool.key": request.tool_key,
                 "risk": observation["risk"],
@@ -293,6 +308,8 @@ class ToolGateway:
         invocation: TrustedAgentInvocation,
         request: ToolInvocationRequest,
         observation: dict[str, str],
+        *,
+        execute: bool,
     ) -> GatewayResult:
         context = invocation.initiating_context
         operation = _operation(request)
@@ -363,7 +380,9 @@ class ToolGateway:
             resource_type=resources.resource_type,
             resource_id=resources.resource_id,
         )
-        return await self._prepare_and_execute(context, tool, binding, decision, action, normalized)
+        return await self._prepare_and_execute(
+            context, tool, binding, decision, action, normalized, execute=execute
+        )
 
     async def _record_pre_call_denial(
         self,
@@ -431,6 +450,8 @@ class ToolGateway:
         decision: PermissionDecision,
         action: ActionBindingV1,
         normalized: NormalizedToolInput,
+        *,
+        execute: bool,
     ) -> GatewayResult:
         now = self.clock()
         initial = ToolCall(
@@ -500,6 +521,14 @@ class ToolGateway:
             if not await uow.verify_authorization_snapshot(call):
                 return _result(
                     GatewayStatus.DENIED, call.operation_id, reason_code="STALE_AUTHORIZATION"
+                )
+            if not execute:
+                return _result(
+                    GatewayStatus.IN_PROGRESS,
+                    call.operation_id,
+                    tool_call_id=call.id,
+                    approval_request_id=call.approval_request_id,
+                    reason_code="EXECUTION_DEFERRED_TO_WORKER",
                 )
             with self.telemetry.span("tool_gateway.idempotency"):
                 record, was_created = await uow.idempotency.reserve(

@@ -235,6 +235,7 @@ const commerceWorkspace: CommerceWorkspace = {
     external_variant_id: "fake-variant-1",
     status: "ACTIVE",
   },
+  sync_status: null,
   inventory: [
     {
       id: "b3000000-0000-0000-0000-000000000001",
@@ -784,6 +785,45 @@ function mocks() {
   vi.spyOn(catalogApi, "getCommerceWorkspace").mockResolvedValue(
     commerceWorkspace,
   );
+  vi.spyOn(catalogApi, "listCommerceConnections").mockResolvedValue([
+    {
+      id: commerceWorkspace.mapping!.connection_id,
+      provider: "fake",
+      display_name: "Fake Store",
+      safe_store_identifier: "fake.local",
+      status: "ACTIVE",
+      capabilities: ["inventory.read"],
+      is_fake: true,
+      created_at: product.created_at,
+    },
+  ]);
+  vi.spyOn(catalogApi, "createFakeCommerceConnection").mockResolvedValue({
+    id: commerceWorkspace.mapping!.connection_id,
+    provider: "fake",
+    display_name: "Fake Store",
+    safe_store_identifier: "fake.local",
+    status: "ACTIVE",
+    capabilities: ["inventory.read"],
+    is_fake: true,
+    created_at: product.created_at,
+  });
+  vi.spyOn(catalogApi, "mapProductCommerce").mockResolvedValue({
+    id: commerceWorkspace.mapping!.id,
+  });
+  vi.spyOn(catalogApi, "syncCommerce").mockResolvedValue({
+    sync_request_id: "b5000000-0000-0000-0000-000000000001",
+    status: "QUEUED",
+  });
+  vi.spyOn(catalogApi, "requestCommerceAction").mockResolvedValue({
+    proposal_id: "b6000000-0000-0000-0000-000000000001",
+    state: "NEEDS_APPROVAL",
+    approval_request_id: "b7000000-0000-0000-0000-000000000001",
+  });
+  vi.spyOn(catalogApi, "decideCommerceApproval").mockResolvedValue({
+    approval_request_id: "b7000000-0000-0000-0000-000000000001",
+    decision: "APPROVE",
+    proposal_id: "b6000000-0000-0000-0000-000000000001",
+  });
   vi.spyOn(catalogApi, "analyzeCommerce").mockResolvedValue(agentRun);
   vi.spyOn(catalogApi, "analyzePerformance").mockResolvedValue(agentRun);
   vi.spyOn(catalogApi, "decideInsight").mockResolvedValue(undefined);
@@ -1877,6 +1917,172 @@ describe("Product Workspace", () => {
       expect(catalogApi.analyzeCommerce).toHaveBeenCalledWith(
         expect.anything(),
         product.id,
+      ),
+    );
+  });
+
+  it("requires explicit user confirmation before mapping a Product to Fake Store", async () => {
+    vi.mocked(catalogApi.getCommerceWorkspace).mockResolvedValue({
+      ...commerceWorkspace,
+      mapping: null,
+    });
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Commerce" }));
+    expect(
+      await screen.findByText("No commerce mapping yet"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Observed product ID")).toHaveValue(
+      "fake-product-1",
+    );
+    expect(screen.getByLabelText("Observed variant ID")).toHaveValue(
+      "fake-variant-1",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Confirm explicit mapping" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.mapProductCommerce).toHaveBeenCalledWith(
+        expect.anything(),
+        {
+          product_id: product.id,
+          connection_id: commerceWorkspace.mapping!.connection_id,
+          external_product_id: "fake-product-1",
+          external_variant_id: "fake-variant-1",
+        },
+      ),
+    );
+  });
+
+  it("renders exact R5/R6 approval summaries and real execution states", async () => {
+    const inventoryProposal: CommerceWorkspace["proposals"][number] = {
+      id: "b6000000-0000-0000-0000-000000000001",
+      action_type: "INVENTORY_ADJUSTMENT",
+      external_product_id: "fake-product-1",
+      external_variant_id: "fake-variant-1",
+      external_order_id: null,
+      exact_quantity: 8,
+      exact_amount: null,
+      currency: null,
+      reason: "Restore a reviewed buffer.",
+      risk_level: "R5",
+      semantic_digest: `sha256:${"1".repeat(64)}`,
+      approval_state: "NEEDS_APPROVAL",
+      job_status: "NEEDS_APPROVAL",
+      approval_request_id: null,
+      store: "Fake Store",
+      sku_or_variant: "DEMO-001",
+      current_quantity: 2,
+      order_reference: null,
+      result_ref: null,
+      safe_failure_code: null,
+      source: "AI Proposal",
+      created_at: product.created_at,
+    };
+    const refundProposal: CommerceWorkspace["proposals"][number] = {
+      ...inventoryProposal,
+      id: "b6000000-0000-0000-0000-000000000002",
+      action_type: "REFUND",
+      external_product_id: null,
+      external_variant_id: null,
+      external_order_id: "fake-order-paid",
+      exact_quantity: null,
+      exact_amount: "10.00",
+      currency: "USD",
+      reason: "Issue the exact reviewed partial refund.",
+      risk_level: "R6",
+      approval_state: "OUTCOME_UNKNOWN",
+      job_status: "OUTCOME_UNKNOWN",
+      approval_request_id: "b7000000-0000-0000-0000-000000000002",
+      sku_or_variant: null,
+      current_quantity: null,
+      order_reference: "FAKE-1001",
+    };
+    const reviewProposal: CommerceWorkspace["proposals"][number] = {
+      ...inventoryProposal,
+      id: "b6000000-0000-0000-0000-000000000003",
+      approval_request_id: "b7000000-0000-0000-0000-000000000003",
+    };
+    const approvedProposal: CommerceWorkspace["proposals"][number] = {
+      ...inventoryProposal,
+      id: "b6000000-0000-0000-0000-000000000004",
+      approval_state: "APPROVED",
+      job_status: "APPROVED",
+      approval_request_id: "b7000000-0000-0000-0000-000000000004",
+    };
+    const succeededProposal: CommerceWorkspace["proposals"][number] = {
+      ...inventoryProposal,
+      id: "b6000000-0000-0000-0000-000000000005",
+      approval_state: "SUCCEEDED",
+      job_status: "SUCCEEDED",
+      approval_request_id: "b7000000-0000-0000-0000-000000000005",
+      result_ref: "result://commerce/operations/fake",
+    };
+    const failedProposal: CommerceWorkspace["proposals"][number] = {
+      ...inventoryProposal,
+      id: "b6000000-0000-0000-0000-000000000006",
+      approval_state: "FAILED",
+      job_status: "FAILED",
+      approval_request_id: "b7000000-0000-0000-0000-000000000006",
+      safe_failure_code: "PRE_EFFECT_FAILURE",
+    };
+    vi.mocked(catalogApi.getCommerceWorkspace).mockResolvedValue({
+      ...commerceWorkspace,
+      sync_status: {
+        request_id: "b5000000-0000-0000-0000-000000000001",
+        status: "SUCCEEDED",
+        safe_failure_code: null,
+      },
+      proposals: [
+        inventoryProposal,
+        refundProposal,
+        reviewProposal,
+        approvedProposal,
+        succeededProposal,
+        failedProposal,
+      ],
+    });
+
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Commerce" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Actions" }));
+
+    expect(screen.getAllByText("DEMO-001").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText("Current observed quantity").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("New exact quantity").length).toBeGreaterThan(0);
+    expect(screen.getByText("FAKE-1001")).toBeInTheDocument();
+    expect(screen.getByText("10.00 USD")).toBeInTheDocument();
+    expect(
+      screen.getByText("This approval authorizes this exact financial refund."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("OUTCOME UNKNOWN").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("APPROVED").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("SUCCEEDED").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("FAILED").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("button", { name: "Approve R5" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+    expect(screen.queryByText("[object Object]")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Request approval" }));
+    await waitFor(() =>
+      expect(catalogApi.requestCommerceAction).toHaveBeenCalledWith(
+        expect.anything(),
+        inventoryProposal.id,
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve R5" }));
+    await waitFor(() =>
+      expect(catalogApi.decideCommerceApproval).toHaveBeenCalledWith(
+        expect.anything(),
+        reviewProposal.approval_request_id,
+        "APPROVE",
       ),
     );
   });

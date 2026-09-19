@@ -63,7 +63,12 @@ class RouteAgentWorkflow:
             await self.researcher.start_researcher(
                 ResearcherWorkflowInput(str(event.tenant_id), run_id, str(event.correlation_id))
             )
-        elif agent_type in {"creative_strategist", "producer", "intelligence"}:
+        elif agent_type in {
+            "creative_strategist",
+            "producer",
+            "intelligence",
+            "commerce_operations",
+        }:
             await self.agent.start_agent(
                 AgentExecutionWorkflowInput(str(event.tenant_id), run_id, str(event.correlation_id))
             )

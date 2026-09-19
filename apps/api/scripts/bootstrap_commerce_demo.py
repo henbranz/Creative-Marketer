@@ -26,6 +26,11 @@ async def run() -> None:
     settings = Settings()
     if settings.app_env not in {"development", "test"}:
         raise SystemExit("Commerce demo bootstrap is forbidden outside development/test")
+    # The demo command composes the exact Agent declarations and tenant permissions after
+    # the platform Tool contracts have been bootstrapped.
+    from scripts.bootstrap_commerce_agent import run as bootstrap_commerce_agent
+
+    await bootstrap_commerce_agent()
     try:
         tenant_id, user_id = (
             UUID(os.environ["BOOTSTRAP_TENANT_ID"]),

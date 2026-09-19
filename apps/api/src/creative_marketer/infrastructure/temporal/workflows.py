@@ -538,6 +538,11 @@ class CommerceActionWorkflow:
 
     def __init__(self) -> None:
         self._state = WorkflowState.STARTING
+        self._approval_wakeups = 0
+
+    @workflow.signal(name="approval_state_may_have_changed")
+    def approval_state_may_have_changed(self) -> None:
+        self._approval_wakeups += 1
 
     @workflow.query(name="status")
     def status(self) -> str:
@@ -547,6 +552,30 @@ class CommerceActionWorkflow:
     async def run(self, request: CommerceActionWorkflowInput) -> CommerceActionActivityResult:
         self._state = WorkflowState.EXECUTING
         result = await self._invoke("workflow.submit_commerce_action", request)
+        if result.status in {"AWAITING_APPROVAL", "NEEDS_APPROVAL"}:
+            self._state = WorkflowState.WAITING_APPROVAL
+            deadline = workflow.now() + timedelta(seconds=request.approval_timeout_seconds)
+            observed = 0
+            while workflow.now() < deadline:
+                wait_for = min(
+                    deadline - workflow.now(),
+                    timedelta(seconds=request.approval_fallback_poll_seconds),
+                )
+                with suppress(TimeoutError):
+
+                    def approval_changed(current: int = observed) -> bool:
+                        return self._approval_wakeups > current
+
+                    await workflow.wait_condition(approval_changed, timeout=wait_for)
+                observed = self._approval_wakeups
+                self._state = WorkflowState.EXECUTING
+                result = await self._invoke("workflow.submit_commerce_action", request)
+                if result.status not in {"AWAITING_APPROVAL", "NEEDS_APPROVAL"}:
+                    break
+                self._state = WorkflowState.WAITING_APPROVAL
+            if result.status in {"AWAITING_APPROVAL", "NEEDS_APPROVAL"}:
+                self._state = WorkflowState.EXPIRED
+                return result
         if result.status != "OUTCOME_UNKNOWN":
             self._state = (
                 WorkflowState.COMPLETED if result.status == "SUCCEEDED" else WorkflowState.FAILED

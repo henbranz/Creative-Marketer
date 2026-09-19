@@ -96,6 +96,13 @@ class SyncStatus(StrEnum):
     TEMPORARILY_UNAVAILABLE = "TEMPORARILY_UNAVAILABLE"
 
 
+class DurableSyncStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+
+
 class ActionType(StrEnum):
     INVENTORY_ADJUSTMENT = "INVENTORY_ADJUSTMENT"
     REFUND = "REFUND"
@@ -402,6 +409,24 @@ class CommerceSyncRun:
     id: UUID = field(default_factory=uuid4)
     started_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CommerceSyncRequest:
+    tenant_id: UUID
+    connection_id: UUID
+    requested_by_user_id: UUID
+    correlation_id: UUID
+    sync_types: tuple[SyncType, ...]
+    status: DurableSyncStatus = DurableSyncStatus.QUEUED
+    safe_failure_code: str | None = None
+    id: UUID = field(default_factory=uuid4)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if not self.sync_types or len(set(self.sync_types)) != len(self.sync_types):
+            raise ValueError("durable sync types must be a non-empty unique set")
 
 
 @dataclass(frozen=True, slots=True)

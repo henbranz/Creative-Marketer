@@ -16,6 +16,52 @@ async def test_bridge_requires_publisher_database() -> None:
 
 
 @pytest.mark.asyncio
+async def test_database_agent_type_resolver_reads_run_from_tenant_uow() -> None:
+    holder = {"run": SimpleNamespace(agent_type="commerce_operations")}
+
+    class Runs:
+        async def get(self, _run_id):
+            return holder["run"]
+
+    class Uow:
+        runs = Runs()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    resolver = researcher_worker.DatabaseAgentTypeResolver(lambda _tenant_id: Uow())
+    assert await resolver.agent_type(object(), object()) == "commerce_operations"
+    holder["run"] = None
+    assert await resolver.agent_type(object(), object()) is None
+
+
+def test_researcher_worker_main_delegates_to_async_runtime(monkeypatch) -> None:
+    observed: list[object] = []
+    sentinel = object()
+    monkeypatch.setattr(researcher_worker, "run", lambda: sentinel)
+    monkeypatch.setattr(asyncio, "run", observed.append)
+
+    researcher_worker.main()
+
+    assert observed == [sentinel]
+
+
+@pytest.mark.asyncio
+async def test_researcher_worker_rejects_openai_without_key(monkeypatch) -> None:
+    monkeypatch.setattr(
+        researcher_worker,
+        "Settings",
+        lambda: SimpleNamespace(model_provider_backend="openai", openai_api_key=None),
+    )
+
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        await researcher_worker.run()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("consumer_fails", [False, True])
 async def test_bridge_marks_started_events_published_or_retryable(
     monkeypatch, consumer_fails: bool
@@ -148,8 +194,20 @@ def test_fake_worker_supports_grounded_commerce_report_without_tools() -> None:
     invocation = SimpleNamespace(
         output_contract_key="commerce.operations_report",
         capability_context={
-            "inventory": ({"observation_id": inventory_id},),
-            "orders": ({"observation_id": order_id},),
+            "inventory": (
+                {
+                    "observation_id": inventory_id,
+                    "external_variant_id": "fake-variant-1",
+                },
+            ),
+            "orders": (
+                {
+                    "observation_id": order_id,
+                    "external_order_id": "fake-order-paid",
+                    "payment_state": "PAID",
+                    "currency": "USD",
+                },
+            ),
             "deterministic_exceptions": (
                 {"observation_id": inventory_id, "kind": "LOW_STOCK"},
                 {"observation_id": order_id, "kind": "PAID_BUT_UNFULFILLED"},
@@ -164,4 +222,44 @@ def test_fake_worker_supports_grounded_commerce_report_without_tools() -> None:
     assert isinstance(inventory_exceptions, list) and isinstance(order_exceptions, list)
     assert inventory_exceptions[0]["observation_id"] == inventory_id
     assert order_exceptions[0]["observation_id"] == order_id
-    assert result.output["action_proposals"] == []
+    assert result.output["action_proposals"] == [
+        {
+            "action_type": "INVENTORY_ADJUSTMENT",
+            "external_variant_id": "fake-variant-1",
+            "exact_quantity": 8,
+            "reason": "Restore the reviewed local-demo inventory buffer.",
+        },
+        {
+            "action_type": "INVENTORY_ADJUSTMENT",
+            "external_variant_id": "fake-variant-1",
+            "exact_quantity": 6,
+            "reason": "Alternative local-demo buffer for rejection-path validation.",
+        },
+        {
+            "action_type": "REFUND",
+            "external_order_id": "fake-order-paid",
+            "exact_amount": "10.00",
+            "currency": "USD",
+            "reason": "Issue the exact reviewed local-demo partial refund.",
+        },
+    ]
+
+
+def test_fake_worker_routes_each_non_commerce_demo_contract(monkeypatch) -> None:
+    from scripts import bootstrap_demo
+
+    cases = (
+        ("creative.creative_concept_set", "_creative_output"),
+        ("production.production_plan", "_production_output"),
+        ("intelligence.intelligence_report", "_intelligence_output"),
+    )
+    for contract, function_name in cases:
+        monkeypatch.setattr(
+            bootstrap_demo,
+            function_name,
+            lambda _invocation, value=contract: {"contract": value},
+        )
+        result = researcher_worker._fake_demo_result(SimpleNamespace(output_contract_key=contract))
+        assert result.output == {"contract": contract}
+    with pytest.raises(RuntimeError, match="does not support"):
+        researcher_worker._fake_demo_result(SimpleNamespace(output_contract_key="unknown"))

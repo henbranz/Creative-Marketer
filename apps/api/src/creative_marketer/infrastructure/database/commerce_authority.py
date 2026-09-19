@@ -22,6 +22,7 @@ from creative_marketer.commerce.domain import (
     canonical_money_text,
     proposal_digest,
 )
+from creative_marketer.commerce.execution import CommerceWorkloadIdentity
 from creative_marketer.commerce.provider import MutationDisposition, ProviderMutationResult
 
 from .commerce_schema import (
@@ -58,8 +59,13 @@ def _proposal(row: Mapping[str, Any]) -> CommerceActionProposal:
 class SqlAlchemyCommerceExecutionAuthority:
     """Reloads immutable proposal and current external facts immediately before provider I/O."""
 
-    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        workload: CommerceWorkloadIdentity | None = None,
+    ) -> None:
         self._factory = factory
+        self._workload = workload
 
     @staticmethod
     async def _tenant(session: AsyncSession, tenant_id: UUID) -> None:
@@ -129,6 +135,12 @@ class SqlAlchemyCommerceExecutionAuthority:
                     proposal_digest=proposal.semantic_digest,
                     idempotency_key=idempotency_key,
                     status=ActionJobStatus.SUBMITTING.value,
+                    executing_workload_actor_id=(
+                        self._workload.actor_id if self._workload is not None else None
+                    ),
+                    executing_workload_id=(
+                        self._workload.workload_id if self._workload is not None else None
+                    ),
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
                 )
@@ -185,6 +197,9 @@ class SqlAlchemyCommerceExecutionAuthority:
                 if replay is None:
                     raise CommercePermissionDenied("commerce action job authority changed")
             if result.disposition is MutationDisposition.ACCEPTED:
+                await self._record_confirmed_observation(
+                    session, tenant_id, proposal, result.operation_id, now
+                )
                 material: dict[str, object] = {
                     "proposal_id": str(proposal.id),
                     "proposal_digest": proposal.semantic_digest,
@@ -213,6 +228,119 @@ class SqlAlchemyCommerceExecutionAuthority:
                         index_elements=["tenant_id", "proposal_id", "proposal_digest"]
                     )
                 )
+
+    @staticmethod
+    async def _record_confirmed_observation(
+        session: AsyncSession,
+        tenant_id: UUID,
+        proposal: CommerceActionProposal,
+        external_operation_id: str,
+        now: datetime,
+    ) -> None:
+        """Project a confirmed fake mutation into the immutable observation stream."""
+
+        if proposal.action_type is ActionType.INVENTORY_ADJUSTMENT:
+            current = (
+                (
+                    await session.execute(
+                        select(inventory_observations)
+                        .where(
+                            inventory_observations.c.tenant_id == tenant_id,
+                            inventory_observations.c.connection_id == proposal.connection_id,
+                            inventory_observations.c.external_variant_id
+                            == proposal.external_variant_id,
+                        )
+                        .order_by(inventory_observations.c.captured_at.desc())
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            digest = canonical_digest(
+                {
+                    "kind": "confirmed_inventory_mutation",
+                    "operation_id": external_operation_id,
+                    "quantity": proposal.exact_quantity,
+                }
+            )
+            await session.execute(
+                pg_insert(inventory_observations)
+                .values(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    connection_id=proposal.connection_id,
+                    external_product_id=current["external_product_id"],
+                    external_variant_id=current["external_variant_id"],
+                    sku=current["sku"],
+                    location_id=current["location_id"],
+                    available_quantity=proposal.exact_quantity,
+                    committed_quantity=current["committed_quantity"],
+                    on_hand_quantity=current["on_hand_quantity"],
+                    provider="fake",
+                    provider_version="fake-commerce-v1",
+                    source_digest=digest,
+                    schema_version=1,
+                    captured_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=["tenant_id", "source_digest"])
+            )
+            return
+
+        current_order = (
+            (
+                await session.execute(
+                    select(order_observations)
+                    .where(
+                        order_observations.c.tenant_id == tenant_id,
+                        order_observations.c.connection_id == proposal.connection_id,
+                        order_observations.c.external_order_id == proposal.external_order_id,
+                    )
+                    .order_by(order_observations.c.captured_at.desc())
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one()
+        )
+        financial_status = (
+            "REFUNDED"
+            if cast(Decimal, proposal.exact_amount) == Decimal(current_order["total"])
+            else "PARTIALLY_REFUNDED"
+        )
+        digest = canonical_digest(
+            {
+                "kind": "confirmed_refund_mutation",
+                "operation_id": external_operation_id,
+                "financial_status": financial_status,
+            }
+        )
+        await session.execute(
+            pg_insert(order_observations)
+            .values(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                connection_id=proposal.connection_id,
+                external_order_id=current_order["external_order_id"],
+                order_reference=current_order["order_reference"],
+                currency=current_order["currency"],
+                subtotal=current_order["subtotal"],
+                discount_total=current_order["discount_total"],
+                tax_total=current_order["tax_total"],
+                shipping_total=current_order["shipping_total"],
+                total=current_order["total"],
+                financial_status=financial_status,
+                fulfillment_status=current_order["fulfillment_status"],
+                created_at_external=current_order["created_at_external"],
+                updated_at_external=now,
+                captured_at=now,
+                lines=current_order["lines"],
+                attribution_code=current_order["attribution_code"],
+                source_digest=digest,
+                schema_version=1,
+            )
+            .on_conflict_do_nothing(index_elements=["tenant_id", "source_digest"])
+        )
 
     async def _load(
         self, session: AsyncSession, tenant_id: UUID, proposal_id: UUID

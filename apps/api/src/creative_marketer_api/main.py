@@ -21,8 +21,10 @@ from creative_marketer.audit.identity import IdentityAuditService
 from creative_marketer.catalog.application import CatalogService
 from creative_marketer.catalog.asset_application import AssetService, UnavailableObjectStore
 from creative_marketer.commerce.application import CommerceService
+from creative_marketer.commerce.gateway_composition import CommerceGatewayFactory
 from creative_marketer.commerce.measurement import MeasurementConversionSink
 from creative_marketer.commerce.provider import FakeCommerceProvider
+from creative_marketer.commerce.workflow_execution import CommerceGovernedExecutionService
 from creative_marketer.creative.application import CreativeService
 from creative_marketer.infrastructure.authentication import (
     DevelopmentAuthenticationAdapter,
@@ -42,7 +44,16 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyUnitOfWorkFactory,
     create_session_factory,
 )
+from creative_marketer.infrastructure.database.approval_uow import (
+    SqlAlchemyApprovalUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.audit import PostgresStandaloneAuditWriter
+from creative_marketer.infrastructure.database.commerce_authority import (
+    SqlAlchemyCommerceExecutionAuthority,
+)
+from creative_marketer.infrastructure.database.commerce_worker import (
+    SqlAlchemyCommerceGovernanceStore,
+)
 from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
@@ -72,6 +83,7 @@ from creative_marketer_api.assembly_routes import create_assembly_router
 from creative_marketer_api.authentication_routes import create_authentication_router
 from creative_marketer_api.catalog_routes import create_catalog_router
 from creative_marketer_api.commerce_routes import create_commerce_router
+from creative_marketer_api.commerce_temporal import LazyCommerceWorkflowStarter
 from creative_marketer_api.config import Settings, get_settings
 from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.intelligence_routes import create_intelligence_router
@@ -320,6 +332,17 @@ def create_app(
         )
     )
     fake_commerce = FakeCommerceProvider()
+    commerce_governance = CommerceGovernedExecutionService(
+        SqlAlchemyCommerceGovernanceStore(session_factory),
+        CommerceGatewayFactory(
+            session_factory,
+            SqlAlchemyCommerceExecutionAuthority(session_factory),
+            fake_commerce,
+        ),
+        LazyCommerceWorkflowStarter(
+            resolved_settings.temporal_address, resolved_settings.temporal_namespace
+        ),
+    )
     application.include_router(
         create_commerce_router(
             authenticator,
@@ -333,6 +356,8 @@ def create_app(
             fake_commerce,
             resolved_settings.app_env,
             resolved_identity_audit,
+            commerce_governance,
+            SqlAlchemyApprovalUnitOfWorkFactory(session_factory),
         )
     )
     application.include_router(

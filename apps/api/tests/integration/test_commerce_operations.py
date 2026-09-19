@@ -147,6 +147,9 @@ async def test_commerce_agent_and_governed_unknown_outcome_are_end_to_end(
     assert pending == await runtime.request_commerce_operations(
         context, product_id=product.id, idempotency_key="commerce-integration"
     )
+    assert pending == await runtime.request_commerce_operations(
+        context, product_id=product.id, idempotency_key="commerce-integration-active-retry"
+    )
     completed = await runtime.execute(context.tenant_id, pending.id)
     assert completed.status is AgentRunStatus.SUCCEEDED
     assert len(fake_model.calls) == 1

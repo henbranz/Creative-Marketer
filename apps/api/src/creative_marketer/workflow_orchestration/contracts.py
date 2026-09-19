@@ -311,12 +311,14 @@ class CommerceSyncWorkflowInput:
     """IDs-only request for one finite, resumable commerce synchronization."""
 
     tenant_id: str
+    sync_request_id: str
     connection_id: str
     correlation_id: str
     sync_types: tuple[str, ...] = ("CATALOG", "INVENTORY", "ORDERS")
 
     def __post_init__(self) -> None:
         _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.sync_request_id, "sync_request_id")
         _uuid(self.connection_id, "connection_id")
         _uuid(self.correlation_id, "correlation_id")
         allowed = {"CATALOG", "INVENTORY", "ORDERS"}
@@ -336,7 +338,7 @@ class CommerceSyncActivityResult:
 
 
 def commerce_sync_workflow_id(value: CommerceSyncWorkflowInput) -> str:
-    return f"tenant/{value.tenant_id}/commerce-connection/{value.connection_id}/sync"
+    return f"tenant/{value.tenant_id}/commerce-sync/{value.sync_request_id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -346,6 +348,9 @@ class CommerceActionWorkflowInput:
     tenant_id: str
     proposal_id: str
     correlation_id: str
+    request_ref: str
+    approval_timeout_seconds: int = 86_400
+    approval_fallback_poll_seconds: int = 30
     reconcile_interval_seconds: int = 10
     maximum_reconcile_attempts: int = 6
 
@@ -353,6 +358,12 @@ class CommerceActionWorkflowInput:
         _uuid(self.tenant_id, "tenant_id")
         _uuid(self.proposal_id, "proposal_id")
         _uuid(self.correlation_id, "correlation_id")
+        if _REFERENCE_PATTERN.fullmatch(self.request_ref) is None:
+            raise ValueError("request_ref must be an opaque internal request reference")
+        if not 1 <= self.approval_timeout_seconds <= 604_800:
+            raise ValueError("commerce approval timeout is invalid")
+        if not 1 <= self.approval_fallback_poll_seconds <= 3_600:
+            raise ValueError("commerce approval poll interval is invalid")
         if not 1 <= self.reconcile_interval_seconds <= 3600:
             raise ValueError("commerce reconcile interval is invalid")
         if not 1 <= self.maximum_reconcile_attempts <= 100:

@@ -130,6 +130,17 @@ sync_runs = _table(
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True)),
 )
+sync_requests = _table(
+    "sync_requests",
+    Column("connection_id", UUID(as_uuid=True), nullable=False),
+    Column("requested_by_user_id", UUID(as_uuid=True), nullable=False),
+    Column("correlation_id", UUID(as_uuid=True), nullable=False),
+    Column("sync_types", JSONB, nullable=False),
+    Column("status", String(32), nullable=False),
+    Column("safe_failure_code", String(100)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 context_manifests = _table(
     "context_manifests",
     Column("product_id", UUID(as_uuid=True), nullable=False),
@@ -189,6 +200,8 @@ action_jobs = _table(
     Column("status", String(32), nullable=False),
     Column("external_operation_id", String(255)),
     Column("safe_failure_code", String(100)),
+    Column("executing_workload_actor_id", UUID(as_uuid=True)),
+    Column("executing_workload_id", String(128)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )

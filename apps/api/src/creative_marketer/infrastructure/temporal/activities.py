@@ -84,15 +84,22 @@ class MeasurementJobExecutor(Protocol):
 
 class CommerceSyncExecutor(Protocol):
     async def sync(
-        self, tenant_id: UUID, connection_id: UUID, sync_type: str, cursor: str | None
+        self,
+        tenant_id: UUID,
+        sync_request_id: UUID,
+        connection_id: UUID,
+        sync_type: str,
+        cursor: str | None,
     ) -> CommerceSyncActivityResult: ...
 
 
 class CommerceActionExecutor(Protocol):
-    async def submit(self, tenant_id: UUID, proposal_id: UUID) -> CommerceActionActivityResult: ...
+    async def submit(
+        self, tenant_id: UUID, proposal_id: UUID, request_ref: str
+    ) -> CommerceActionActivityResult: ...
 
     async def reconcile(
-        self, tenant_id: UUID, proposal_id: UUID
+        self, tenant_id: UUID, proposal_id: UUID, request_ref: str
     ) -> CommerceActionActivityResult: ...
 
 
@@ -235,7 +242,11 @@ class TemporalActivities:
                 non_retryable=True,
             )
         return await self.commerce_sync.sync(
-            UUID(request.tenant_id), UUID(request.connection_id), sync_type, cursor
+            UUID(request.tenant_id),
+            UUID(request.sync_request_id),
+            UUID(request.connection_id),
+            sync_type,
+            cursor,
         )
 
     @activity.defn(name="workflow.submit_commerce_action")
@@ -249,7 +260,7 @@ class TemporalActivities:
                 non_retryable=True,
             )
         return await self.commerce_actions.submit(
-            UUID(request.tenant_id), UUID(request.proposal_id)
+            UUID(request.tenant_id), UUID(request.proposal_id), request.request_ref
         )
 
     @activity.defn(name="workflow.reconcile_commerce_action")
@@ -263,7 +274,7 @@ class TemporalActivities:
                 non_retryable=True,
             )
         return await self.commerce_actions.reconcile(
-            UUID(request.tenant_id), UUID(request.proposal_id)
+            UUID(request.tenant_id), UUID(request.proposal_id), request.request_ref
         )
 
     @activity.defn(name="workflow.start_generation")

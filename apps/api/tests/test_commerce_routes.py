@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 import creative_marketer_api.commerce_routes as commerce_routes
 from creative_marketer.agent_runtime.domain import AgentRunNotReady
+from creative_marketer.approval_governance.domain import HumanDecision
 from creative_marketer.commerce.domain import (
     CommerceConflict,
     CommerceConnection,
@@ -17,6 +18,7 @@ from creative_marketer.commerce.domain import (
     SyncType,
 )
 from creative_marketer.commerce.provider import FakeCommerceProvider
+from creative_marketer.commerce.workflow_execution import CommerceActionView, CommerceSyncView
 from creative_marketer.identity.application.errors import (
     AuthenticationUnavailable,
     TenantAccessDenied,
@@ -103,11 +105,57 @@ class Service:
         }
 
 
+class Governance:
+    def __init__(self, service: Service) -> None:
+        self.service = service
+        self.store = self
+
+    async def request_sync(self, _ctx, connection_id, _sync_types, _idempotency_key):
+        if self.service.error:
+            raise self.service.error
+        return CommerceSyncView(uuid4(), connection_id, "QUEUED")
+
+    async def latest_sync_view(self, _tenant_id, _connection_id):
+        return None
+
+    async def action_view(self, _tenant_id, proposal_id):
+        return CommerceActionView(
+            proposal_id,
+            "commerce.inventory.adjust",
+            "R5",
+            "NEEDS_APPROVAL",
+            None,
+            None,
+            None,
+            None,
+            None,
+            "Fake Store",
+            "DEMO-001",
+            2,
+            9,
+            None,
+            None,
+            None,
+            "replenish",
+        )
+
+    async def request_action(self, ctx, proposal_id):
+        return await self.action_view(ctx.tenant_id, proposal_id)
+
+    async def proposal_for_approval(self, _tenant_id, _approval_id):
+        return self.service.product_id
+
+    async def wake_action(self, ctx, proposal_id):
+        return await self.action_view(ctx.tenant_id, proposal_id)
+
+
 @pytest.mark.asyncio
 async def test_commerce_routes_expose_fake_store_sync_workspace_and_analysis() -> None:
     runtime, service, provider = Runtime(), Service(), FakeCommerceProvider()
-    router = create_commerce_router(None, None, runtime, service, provider, "test", None)
-    ctx = object()
+    router = create_commerce_router(
+        None, None, runtime, service, provider, "test", None, Governance(service)
+    )
+    ctx = SimpleNamespace(tenant_id=service.connection.tenant_id)
 
     connections = await endpoint(router, "/v1/commerce/connections", "GET")(ctx)
     created = await endpoint(router, "/v1/commerce/connections/fake", "POST")(
@@ -123,7 +171,9 @@ async def test_commerce_routes_expose_fake_store_sync_workspace_and_analysis() -
         ctx,
     )
     synced = await endpoint(router, "/v1/commerce/connections/{connection_id}/sync", "POST")(
-        service.connection.id, SyncRequest(sync_type=SyncType.ORDERS), ctx
+        service.connection.id,
+        SyncRequest(sync_type=SyncType.ORDERS, idempotency_key="sync-route"),
+        ctx,
     )
     workspace = await endpoint(router, "/v1/products/{product_id}/commerce", "GET")(
         service.product_id, ctx
@@ -136,11 +186,9 @@ async def test_commerce_routes_expose_fake_store_sync_workspace_and_analysis() -
     assert service.connection.external_store_id in provider.products
     assert mapped["external_variant_id"] == "variant-1"
     assert synced == {
-        "sync_run_id": synced["sync_run_id"],
-        "status": "SUCCEEDED",
-        "added": 2,
-        "unchanged": 1,
-        "next_cursor": None,
+        "sync_request_id": synced["sync_request_id"],
+        "status": "QUEUED",
+        "safe_failure_code": None,
     }
     assert workspace["inventory"][0]["source"] == "Observed"
     assert workspace["orders"][0]["attributed"] is False
@@ -152,7 +200,9 @@ async def test_commerce_routes_expose_fake_store_sync_workspace_and_analysis() -
 @pytest.mark.asyncio
 async def test_commerce_routes_return_unmapped_workspace_and_safe_conflicts() -> None:
     runtime, service, provider = Runtime(), Service(), FakeCommerceProvider()
-    router = create_commerce_router(None, None, runtime, service, provider, "test", None)
+    router = create_commerce_router(
+        None, None, runtime, service, provider, "test", None, Governance(service)
+    )
 
     async def empty_workspace(*_args):
         return {
@@ -166,7 +216,7 @@ async def test_commerce_routes_return_unmapped_workspace_and_safe_conflicts() ->
 
     service.workspace = empty_workspace
     empty = await endpoint(router, "/v1/products/{product_id}/commerce", "GET")(
-        service.product_id, object()
+        service.product_id, SimpleNamespace(tenant_id=service.connection.tenant_id)
     )
     assert empty["mapping"] is None and empty["inventory"] == []
 
@@ -189,7 +239,11 @@ async def test_commerce_routes_return_unmapped_workspace_and_safe_conflicts() ->
         ),
         (
             "/v1/commerce/connections/{connection_id}/sync",
-            (service.connection.id, SyncRequest(sync_type=SyncType.ALL), object()),
+            (
+                service.connection.id,
+                SyncRequest(sync_type=SyncType.ALL, idempotency_key="sync-conflict"),
+                SimpleNamespace(tenant_id=service.connection.tenant_id),
+            ),
         ),
     ):
         with pytest.raises(HTTPException) as error:
@@ -202,6 +256,67 @@ async def test_commerce_routes_return_unmapped_workspace_and_safe_conflicts() ->
             service.product_id, AnalyzeRequest(idempotency_key="not-ready"), object()
         )
     assert analysis_error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_governed_action_and_approval_routes(monkeypatch) -> None:
+    runtime, service, provider = Runtime(), Service(), FakeCommerceProvider()
+    governance = Governance(service)
+
+    class Decision:
+        def __init__(self, _factory):
+            pass
+
+        async def __call__(self, *_args, **_kwargs):
+            return SimpleNamespace(decision=HumanDecision.APPROVE)
+
+    monkeypatch.setattr(commerce_routes, "DecideApproval", Decision)
+    router = create_commerce_router(
+        None, None, runtime, service, provider, "test", None, governance, object()
+    )
+    ctx = SimpleNamespace(tenant_id=service.connection.tenant_id)
+    proposal_id, approval_id = uuid4(), uuid4()
+
+    requested = await endpoint(router, "/v1/commerce/actions/{proposal_id}/request", "POST")(
+        proposal_id, ctx
+    )
+    status_value = await endpoint(router, "/v1/commerce/actions/{proposal_id}", "GET")(
+        proposal_id, ctx
+    )
+    decision = await endpoint(router, "/v1/approvals/{approval_id}/decision", "POST")(
+        approval_id,
+        commerce_routes.ApprovalDecisionInput(decision=HumanDecision.APPROVE),
+        ctx,
+    )
+
+    assert requested == status_value
+    assert requested["risk_level"] == "R5"
+    assert requested["current_quantity"] == 2
+    assert decision == {
+        "approval_request_id": approval_id,
+        "decision": "APPROVE",
+        "proposal_id": service.product_id,
+    }
+
+    unavailable = create_commerce_router(
+        None, None, runtime, service, provider, "test", None, None, None
+    )
+    for path, method, args in (
+        ("/v1/commerce/actions/{proposal_id}/request", "POST", (proposal_id, ctx)),
+        ("/v1/commerce/actions/{proposal_id}", "GET", (proposal_id, ctx)),
+        (
+            "/v1/approvals/{approval_id}/decision",
+            "POST",
+            (
+                approval_id,
+                commerce_routes.ApprovalDecisionInput(decision=HumanDecision.DENY),
+                ctx,
+            ),
+        ),
+    ):
+        with pytest.raises(HTTPException) as error:
+            await endpoint(unavailable, path, method)(*args)
+        assert error.value.status_code == 503
 
 
 @pytest.mark.asyncio

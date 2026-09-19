@@ -70,18 +70,18 @@ class DatabaseAgentTypeResolver:
 
 def _fake_demo_result(invocation: object) -> ModelInvocationResult:
     """Zero-network structured outputs for every Agent supported by the local worker."""
-    from scripts.bootstrap_demo import (
-        _creative_output,
-        _intelligence_output,
-        _production_output,
-    )
-
     contract = invocation.output_contract_key  # type: ignore[attr-defined]
     if contract == "creative.creative_concept_set":
+        from scripts.bootstrap_demo import _creative_output
+
         output = _creative_output(invocation)
     elif contract == "production.production_plan":
+        from scripts.bootstrap_demo import _production_output
+
         output = _production_output(invocation)
     elif contract == "intelligence.intelligence_report":
+        from scripts.bootstrap_demo import _intelligence_output
+
         output = _intelligence_output(invocation)
     elif contract == "commerce.operations_report":
         capability_context = invocation.capability_context or {}  # type: ignore[attr-defined]
@@ -114,11 +114,51 @@ def _fake_demo_result(invocation: object) -> ModelInvocationResult:
             for item in deterministic
             if isinstance(item, dict) and str(item.get("observation_id")) in order_ids
         ]
+        action_proposals: list[dict[str, object]] = []
+        first_inventory = next((item for item in inventories if isinstance(item, dict)), None)
+        if first_inventory is not None and first_inventory.get("external_variant_id"):
+            action_proposals.append(
+                {
+                    "action_type": "INVENTORY_ADJUSTMENT",
+                    "external_variant_id": str(first_inventory["external_variant_id"]),
+                    "exact_quantity": 8,
+                    "reason": "Restore the reviewed local-demo inventory buffer.",
+                }
+            )
+            action_proposals.append(
+                {
+                    "action_type": "INVENTORY_ADJUSTMENT",
+                    "external_variant_id": str(first_inventory["external_variant_id"]),
+                    "exact_quantity": 6,
+                    "reason": "Alternative local-demo buffer for rejection-path validation.",
+                }
+            )
+        paid_order = next(
+            (
+                item
+                for item in orders
+                if isinstance(item, dict)
+                and item.get("payment_state") == "PAID"
+                and item.get("external_order_id")
+                and item.get("currency")
+            ),
+            None,
+        )
+        if paid_order is not None:
+            action_proposals.append(
+                {
+                    "action_type": "REFUND",
+                    "external_order_id": str(paid_order["external_order_id"]),
+                    "exact_amount": "10.00",
+                    "currency": str(paid_order["currency"]),
+                    "reason": "Issue the exact reviewed local-demo partial refund.",
+                }
+            )
         output = {
             "summary": "Fake Store commerce observations were analyzed without network access.",
             "inventory_exceptions": inventory_exceptions,
             "order_exceptions": order_exceptions,
-            "action_proposals": [],
+            "action_proposals": action_proposals,
             "limitations": [
                 "Synthetic Fake Store analysis; exact human approval is required for mutations."
             ],

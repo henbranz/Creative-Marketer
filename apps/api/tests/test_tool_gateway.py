@@ -534,6 +534,39 @@ async def test_approval_binds_same_operation_and_changed_payload_conflicts():
 
 
 @pytest.mark.asyncio
+async def test_request_only_mode_never_runs_executor_even_after_approval():
+    ctx, candidate = context(), tool(risk=RiskLevel.R5)
+    governed = permission(
+        ctx,
+        candidate,
+        decision=Decision.REQUIRES_APPROVAL,
+        obligations=(
+            Obligation.VALIDATE_TOOL_INPUT,
+            Obligation.CHECK_IDEMPOTENCY,
+            Obligation.REQUIRE_APPROVAL,
+            Obligation.AUDIT_EXECUTION,
+        ),
+    )
+    service, uows, executor = gateway(ctx, candidate, governed, FakePublishExecutor())
+    invocation = TrustedAgentInvocation(ctx, AGENT_ID)
+    request = ToolInvocationRequest("fake.read", {"value": "publish"}, "op_" + "9" * 32)
+    waiting = await service.request(invocation, request)
+    assert waiting.status is GatewayStatus.AWAITING_APPROVAL and executor.effects == 0
+    uows.state["decisions"][waiting.approval_request_id] = ApprovalDecision(
+        waiting.approval_request_id,
+        ctx.tenant_id,
+        HumanDecision.APPROVE,
+        ctx.user_id,
+        "user",
+        NOW,
+    )
+    deferred = await service.request(invocation, request)
+    assert deferred.status is GatewayStatus.IN_PROGRESS
+    assert deferred.reason_code == "EXECUTION_DEFERRED_TO_WORKER"
+    assert executor.effects == 0
+
+
+@pytest.mark.asyncio
 async def test_invalid_output_is_not_retried_and_post_effect_commit_recovers_unknown():
     ctx, candidate = context(), tool()
     invalid = FakeReadExecutor(output={"unexpected": True})

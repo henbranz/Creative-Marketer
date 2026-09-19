@@ -40,6 +40,48 @@ V1 selects the conservative deferred reversal policy (option B). The original pu
 
 Mutation intent is persisted before provider I/O by Tool Gateway. `OUTCOME_UNKNOWN` is terminal for blind retry: an operator/workflow must call `commerce.operation.status` and reconcile the provider operation first. The provider idempotency key prevents duplicate fake refunds and inventory operations.
 
+## Production Worker Composition
+
+Commerce has a dedicated Temporal task queue and worker. The worker registers only
+`CommerceSyncWorkflow`, `CommerceActionWorkflow`, and their Commerce activities; it has no model,
+media, assembly, or publishing authority. Development/test derives a stable local workload actor.
+Staging and production require deployment-issued `COMMERCE_WORKLOAD_ACTOR_ID` and
+`COMMERCE_WORKLOAD_ID`, and reject missing or `local-*` workload IDs. These values come only from
+the repository-root `.env`/deployment environment and are never sent to the browser.
+
+The executing workload and initiating user are deliberately different principals. A third,
+non-model-routed `commerce_execution_workload` Agent Registry principal supplies the narrow Tool
+Gateway policy; the AI Commerce Operations Agent remains proposal-only with zero allowed tools. The
+deployment workload identity is recorded on the action job, while the immutable ToolCall and
+ApprovalRequest preserve the initiating user, tenant, requested execution AgentDefinition, exact ToolDefinition/ToolVersion,
+operation, resource, normalized identifier-only input, proposal digest, and correlation ID. The
+opaque `tool-request://<uuid>` reference contains none of those values.
+
+Temporal carries only tenant, proposal/sync request, correlation, and opaque request identifiers.
+Before any action, the worker resolves the ToolCall from PostgreSQL, reloads the user, membership,
+tenant and active Commerce Agent, reconstructs only
+`{"commerce_action_proposal_id":"<uuid>"}`, and invokes Tool Gateway. Tool Gateway then re-resolves
+the exact active tool version, permission, approval binding, authorization snapshot, resource scope,
+and idempotency record. A revoked user or membership, inactive tenant/agent, tenant mismatch,
+changed proposal digest, changed policy/version, or malformed reference fails before provider I/O.
+
+The request API uses Tool Gateway's request-only mode: it may create the exact R5/R6 approval and
+durable ToolCall but cannot run an executor in the API process. Approval is a wake-up signal, not
+authority; the worker re-reads PostgreSQL and executes through Tool Gateway. Rejection produces no
+provider call. `APPROVED`, `SUBMITTING`, `OUTCOME_UNKNOWN`, `SUCCEEDED`, and `FAILED` are separate
+states derived from canonical approval, ToolCall, action job, and result records.
+
+An ambiguous mutation is submitted once. Temporal switches to bounded, read-only
+`commerce.operation.status` reconciliation and never invokes the mutation tool again. Fake-provider
+operation IDs are derived from immutable mutation material, so a restarted worker can validate and
+reconstruct the minimum unknown operation state before status reconciliation. Confirmed fake effects
+are projected into immutable Commerce observations and can be rehydrated for later fake syncs.
+
+Manual sync creates a durable, tenant-owned sync request with the initiating user and a caller
+idempotency key, then starts `CommerceSyncWorkflow` on the dedicated queue. The API returns `QUEUED`
+without paging the provider. The worker reloads current identity/tenant authority and the canonical
+connection target before finite cursor-based sync. The workspace exposes only the safe sync state.
+
 ## Local walkthrough
 
 Run migrations, then:
@@ -48,6 +90,8 @@ Run migrations, then:
 make commerce-tools-bootstrap
 make commerce-agent-bootstrap
 make commerce-demo-bootstrap
+make temporal-up
+make commerce-worker
 ```
 
 The commands use only the repository-root `.env`. The agent/demo helpers require the existing

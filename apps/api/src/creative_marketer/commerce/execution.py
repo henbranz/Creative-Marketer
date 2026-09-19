@@ -30,6 +30,17 @@ from .domain import ActionType, CommerceActionProposal
 from .provider import CommerceMutationProvider, MutationDisposition, ProviderMutationResult
 
 
+@dataclass(frozen=True, slots=True)
+class CommerceWorkloadIdentity:
+    actor_id: UUID
+    workload_id: str
+    environment: str
+
+    def __post_init__(self) -> None:
+        if not self.workload_id.strip() or len(self.workload_id) > 128:
+            raise ValueError("commerce workload identity is invalid")
+
+
 def _proposal_id(value: NormalizedToolInput) -> UUID:
     raw = value.value()
     if not isinstance(raw, Mapping) or set(raw) != {"commerce_action_proposal_id"}:
@@ -114,10 +125,32 @@ class CommerceToolExecutor:
                 proposal, store, external_operation_id = await self.authority.operation(
                     context.tenant_id, proposal_id
                 )
+                if hasattr(
+                    self.provider, "restore_unknown_operation"
+                ) and external_operation_id not in getattr(self.provider, "operations", {}):
+                    effect: dict[str, object]
+                    if proposal.action_type is ActionType.INVENTORY_ADJUSTMENT:
+                        effect = {
+                            "kind": "SET_AVAILABLE_TO",
+                            "store": store,
+                            "variant": cast(str, proposal.external_variant_id),
+                            "quantity": cast(int, proposal.exact_quantity),
+                        }
+                    else:
+                        effect = {
+                            "kind": "REFUND",
+                            "store": store,
+                            "order": cast(str, proposal.external_order_id),
+                            "amount": cast(Decimal, proposal.exact_amount),
+                            "currency": cast(str, proposal.currency),
+                        }
+                    self.provider.restore_unknown_operation(external_operation_id, effect)
                 result = await self.provider.get_operation_status(store, external_operation_id)
                 proposal_id_value = proposal_id
             else:
                 proposal, store = await self.authority.prepare(context.tenant_id, proposal_id)
+                if hasattr(self.provider, "seed_store"):
+                    self.provider.seed_store(store)
                 proposal_id_value = proposal.id
                 await self.authority.begin(context.tenant_id, proposal, context.operation_id)
             if (

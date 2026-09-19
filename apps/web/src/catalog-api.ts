@@ -257,6 +257,11 @@ export interface CommerceWorkspace {
     external_variant_id: string | null;
     status: string;
   } | null;
+  sync_status: {
+    request_id: string;
+    status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+    safe_failure_code: string | null;
+  } | null;
   inventory: {
     id: string;
     external_variant_id: string;
@@ -290,8 +295,22 @@ export interface CommerceWorkspace {
     reason: string;
     risk_level: "R5" | "R6";
     semantic_digest: string;
-    approval_state: "REQUIRES_EXACT_APPROVAL";
+    approval_state:
+      | "NEEDS_APPROVAL"
+      | "APPROVED"
+      | "QUEUED"
+      | "SUBMITTING"
+      | "OUTCOME_UNKNOWN"
+      | "SUCCEEDED"
+      | "FAILED";
     job_status: string | null;
+    approval_request_id: string | null;
+    store: string;
+    sku_or_variant: string | null;
+    current_quantity: number | null;
+    order_reference: string | null;
+    result_ref: string | null;
+    safe_failure_code: string | null;
     source: "AI Proposal";
     created_at: string;
   }[];
@@ -309,6 +328,16 @@ export interface CommerceWorkspace {
     rule_version: string;
   }[];
   is_fake: boolean;
+}
+export interface CommerceConnection {
+  id: string;
+  provider: "fake";
+  display_name: string;
+  safe_store_identifier: string;
+  status: string;
+  capabilities: string[];
+  is_fake: boolean;
+  created_at: string;
 }
 export interface IntelligenceCandidate {
   id: string;
@@ -733,6 +762,56 @@ export const catalogApi = {
     ),
   getCommerceWorkspace: (session: Session, productId: string) =>
     request<CommerceWorkspace>(session, `/v1/products/${productId}/commerce`),
+  listCommerceConnections: (session: Session) =>
+    request<CommerceConnection[]>(session, "/v1/commerce/connections"),
+  createFakeCommerceConnection: (session: Session) =>
+    request<CommerceConnection>(session, "/v1/commerce/connections/fake", {
+      method: "POST",
+      body: JSON.stringify({ display_name: "Fake Store" }),
+    }),
+  mapProductCommerce: (
+    session: Session,
+    value: {
+      product_id: string;
+      connection_id: string;
+      external_product_id: string;
+      external_variant_id: string | null;
+    },
+  ) =>
+    request<{ id: string }>(session, "/v1/commerce/mappings", {
+      method: "POST",
+      body: JSON.stringify(value),
+    }),
+  syncCommerce: (session: Session, connectionId: string) =>
+    request<{ sync_request_id: string; status: string }>(
+      session,
+      `/v1/commerce/connections/${connectionId}/sync`,
+      {
+        method: "POST",
+        body: JSON.stringify({ idempotency_key: crypto.randomUUID() }),
+      },
+    ),
+  requestCommerceAction: (session: Session, proposalId: string) =>
+    request<{
+      proposal_id: string;
+      state: string;
+      approval_request_id: string;
+    }>(session, `/v1/commerce/actions/${proposalId}/request`, {
+      method: "POST",
+    }),
+  decideCommerceApproval: (
+    session: Session,
+    approvalId: string,
+    decision: "APPROVE" | "DENY",
+  ) =>
+    request<{
+      approval_request_id: string;
+      decision: string;
+      proposal_id: string;
+    }>(session, `/v1/approvals/${approvalId}/decision`, {
+      method: "POST",
+      body: JSON.stringify({ decision }),
+    }),
   analyzeCommerce: (session: Session, productId: string) =>
     request<AgentRun>(session, `/v1/products/${productId}/commerce/analyze`, {
       method: "POST",

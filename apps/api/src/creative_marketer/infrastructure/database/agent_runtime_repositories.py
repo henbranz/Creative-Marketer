@@ -1294,8 +1294,9 @@ class SqlAlchemyAgentRunRepository:
             tuple(deterministic),
             canonical_digest(material),
         )
-        await self._session.execute(
-            insert(commerce_context_manifests).values(
+        manifest_insert = (
+            pg_insert(commerce_context_manifests)
+            .values(
                 id=manifest.id,
                 tenant_id=manifest.tenant_id,
                 product_id=manifest.product_id,
@@ -1307,6 +1308,34 @@ class SqlAlchemyAgentRunRepository:
                 schema_version=manifest.schema_version,
                 created_at=manifest.created_at,
             )
+            .on_conflict_do_nothing(index_elements=["tenant_id", "semantic_digest"])
+            .returning(
+                commerce_context_manifests.c.id,
+                commerce_context_manifests.c.created_at,
+            )
+        )
+        persisted_manifest = (await self._session.execute(manifest_insert)).mappings().one_or_none()
+        if persisted_manifest is None:
+            persisted_manifest = (
+                (
+                    await self._session.execute(
+                        select(
+                            commerce_context_manifests.c.id,
+                            commerce_context_manifests.c.created_at,
+                        ).where(
+                            commerce_context_manifests.c.tenant_id == manifest.tenant_id,
+                            commerce_context_manifests.c.semantic_digest
+                            == manifest.semantic_digest,
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        manifest = replace(
+            manifest,
+            id=persisted_manifest["id"],
+            created_at=persisted_manifest["created_at"],
         )
         v = version_row._mapping
         resolved = ResolvedResearcher(
