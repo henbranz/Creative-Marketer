@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -26,6 +27,9 @@ from creative_marketer.production.application import (
 from creative_marketer_api.config import REPOSITORY_ROOT, Settings
 
 STATE_PATH = REPOSITORY_ROOT / ".creative-marketer" / "live-validation.json"
+SAFE_HTTP_DETAIL_MAX_LENGTH = 128
+SAFE_HTTP_BODY_MAX_BYTES = 4096
+SAFE_HTTP_DETAIL = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
 
 
 @dataclass(frozen=True)
@@ -49,7 +53,22 @@ class LocalApi:
             with urlopen(request, timeout=15) as response:
                 return json.loads(response.read())
         except HTTPError as error:
-            raise RuntimeError(f"LOCAL_API_HTTP_{error.code}") from None
+            failure = f"LOCAL_API_HTTP_{error.code}"
+            try:
+                payload = error.read(SAFE_HTTP_BODY_MAX_BYTES + 1)
+                if len(payload) <= SAFE_HTTP_BODY_MAX_BYTES:
+                    value = json.loads(payload.decode("utf-8"))
+                    detail = value.get("detail") if isinstance(value, dict) else None
+                    if (
+                        isinstance(detail, str)
+                        and len(detail) <= SAFE_HTTP_DETAIL_MAX_LENGTH
+                        and SAFE_HTTP_DETAIL.fullmatch(detail)
+                        and (not self.credential or self.credential not in detail)
+                    ):
+                        failure = f"{failure}: {detail}"
+            except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+                pass
+            raise RuntimeError(failure) from None
         except URLError:
             raise RuntimeError("LOCAL_API_UNREACHABLE") from None
 
@@ -191,6 +210,45 @@ def created_id(response: Any, label: str) -> str:
     return valid_id(response.get("id"), f"{label}_id")
 
 
+def prepare_product_snapshot(api: LocalApi, product: str) -> dict[str, Any]:
+    """Ensure the session Product has a snapshot at its current Brief revision."""
+
+    product_id = valid_id(product, "product_id")
+    tenant_id = valid_id(api.tenant_id, "tenant_id")
+    workspace = api.request(f"/v1/products/{product_id}")
+    if not isinstance(workspace, dict):
+        raise RuntimeError("LIVE_PRODUCT_WORKSPACE_INVALID")
+    workspace_product = workspace.get("product")
+    brief = workspace.get("brief")
+    latest = workspace.get("latest_snapshot")
+    if not isinstance(workspace_product, dict) or not isinstance(brief, dict):
+        raise RuntimeError("LIVE_PRODUCT_WORKSPACE_INVALID")
+    if (
+        valid_id(workspace_product.get("id"), "workspace_product_id") != product_id
+        or valid_id(workspace_product.get("tenant_id"), "workspace_tenant_id") != tenant_id
+    ):
+        raise RuntimeError("LIVE_PRODUCT_WORKSPACE_BINDING_MISMATCH")
+    revision = brief.get("revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise RuntimeError("LIVE_PRODUCT_BRIEF_REVISION_INVALID")
+    if latest is not None and not isinstance(latest, dict):
+        raise RuntimeError("LIVE_PRODUCT_SNAPSHOT_INVALID")
+    snapshot = (
+        api.request(f"/v1/products/{product_id}/snapshots", method="POST")
+        if latest is None or latest.get("source_revision") != revision
+        else latest
+    )
+    if not isinstance(snapshot, dict):
+        raise RuntimeError("LIVE_PRODUCT_SNAPSHOT_INVALID")
+    valid_id(snapshot.get("id"), "snapshot_id")
+    if (
+        valid_id(snapshot.get("product_id"), "snapshot_product_id") != product_id
+        or snapshot.get("source_revision") != revision
+    ):
+        raise RuntimeError("LIVE_PRODUCT_SNAPSHOT_BINDING_MISMATCH")
+    return snapshot
+
+
 def report_run(label: str, run: dict[str, Any]) -> None:
     print(f"{label}: PASS")
     print(f"  model: {run['resolved_model']}")
@@ -266,7 +324,7 @@ def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
     product = str(settings.live_e2e_product_id)
     saved = store or StateStore()
     state = cast(LiveState, session(api, product, saved))
-    api.request(f"/v1/products/{product}")
+    prepare_product_snapshot(api, product)
     stages: tuple[tuple[str, str, ModelRoute, str, str, dict[str, Any]], ...] = (
         (
             "researcher_run_id",
