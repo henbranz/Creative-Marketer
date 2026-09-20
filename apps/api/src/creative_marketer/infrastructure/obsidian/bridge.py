@@ -104,9 +104,16 @@ def _safe_json(value: object) -> str:
     )
 
 
-def _wikilink(node_type: str, canonical_id: str, title: str) -> str:
-    path = relative_note_path(node_type, canonical_id).with_suffix("").as_posix()
-    return f"[[{path}|{markdown_escape(title)}]]"
+def _wikilink(
+    node_type: str,
+    canonical_id: str,
+    title: str,
+    *,
+    relative_path: str | None = None,
+) -> str:
+    path = Path(relative_path) if relative_path else relative_note_path(node_type, canonical_id)
+    rendered_path = path.with_suffix("").as_posix()
+    return f"[[{rendered_path}|{markdown_escape(title)}]]"
 
 
 def render_note(
@@ -114,7 +121,9 @@ def render_note(
     *,
     titles: dict[str, str],
     incoming: list[dict[str, str]],
+    paths: Mapping[str, str] | None = None,
 ) -> str:
+    resolved_paths = paths or {}
     frontmatter = [
         "---",
         f"cm_type: {_frontmatter_string(node['node_type'])}",
@@ -161,7 +170,10 @@ def render_note(
             key = f"{relationship['target_node_type']}:{relationship['target_canonical_id']}"
             title = titles.get(key, relationship["target_canonical_id"])
             link = _wikilink(
-                relationship["target_node_type"], relationship["target_canonical_id"], title
+                relationship["target_node_type"],
+                relationship["target_canonical_id"],
+                title,
+                relative_path=resolved_paths.get(key),
             )
             body.append(
                 f"- {markdown_escape(relationship['relationship_type'].replace('_', ' '))} → {link}"
@@ -173,7 +185,10 @@ def render_note(
             key = f"{relationship['source_node_type']}:{relationship['source_canonical_id']}"
             title = titles.get(key, relationship["source_canonical_id"])
             link = _wikilink(
-                relationship["source_node_type"], relationship["source_canonical_id"], title
+                relationship["source_node_type"],
+                relationship["source_canonical_id"],
+                title,
+                relative_path=resolved_paths.get(key),
             )
             body.append(
                 f"- {markdown_escape(relationship['relationship_type'].replace('_', ' '))} ← {link}"
@@ -267,6 +282,19 @@ class ObsidianBridge:
 
     def _write_graph(self, nodes: list[dict[str, Any]], state: dict[str, Any]) -> None:
         titles = {f"{node['node_type']}:{node['canonical_id']}": node["title"] for node in nodes}
+        paths = {
+            key: entry["path"]
+            for key, entry in state["nodes"].items()
+            if isinstance(entry, Mapping) and isinstance(entry.get("path"), str)
+        }
+        paths.update(
+            {
+                f"{node['node_type']}:{node['canonical_id']}": relative_note_path(
+                    node["node_type"], node["canonical_id"], node.get("status")
+                ).as_posix()
+                for node in nodes
+            }
+        )
         incoming: dict[str, list[dict[str, str]]] = {}
         for node in nodes:
             for relationship in node.get("relationships", []):
@@ -286,7 +314,12 @@ class ObsidianBridge:
             target = self._safe_path(relative)
             target.parent.mkdir(parents=True, exist_ok=True)
             existing = target.read_text(encoding="utf-8") if target.exists() else None
-            rendered = render_note(node, titles=titles, incoming=incoming.get(key, []))
+            rendered = render_note(
+                node,
+                titles=titles,
+                incoming=incoming.get(key, []),
+                paths=paths,
+            )
             self._write_text(target, preserve_user_notes(existing, rendered))
             state["nodes"][key] = {
                 "path": relative.as_posix(),

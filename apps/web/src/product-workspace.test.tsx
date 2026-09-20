@@ -221,6 +221,7 @@ const intelligenceReport: IntelligenceReport = {
       rationale: "Isolate one variable.",
       expected_learning: "Whether to run a larger observed test.",
       data_trust_level: "SYNTHETIC",
+      decision: null,
       semantic_digest: `sha256:${"d".repeat(64)}`,
       created_at: product.created_at,
     },
@@ -828,6 +829,9 @@ function mocks() {
   vi.spyOn(catalogApi, "analyzePerformance").mockResolvedValue(agentRun);
   vi.spyOn(catalogApi, "decideInsight").mockResolvedValue(undefined);
   vi.spyOn(catalogApi, "decideExperiment").mockResolvedValue(undefined);
+  vi.spyOn(catalogApi, "startNextCycleFromExperiment").mockResolvedValue({
+    current_stage: "CREATED",
+  } as never);
   vi.spyOn(catalogApi, "generateExperimentConcepts").mockResolvedValue(
     agentRun,
   );
@@ -1840,10 +1844,17 @@ describe("Product Workspace", () => {
     );
   });
 
-  it("shows governed synthetic insights and requires approval before concept generation", async () => {
-    vi.mocked(catalogApi.listIntelligenceReports).mockResolvedValue([
-      intelligenceReport,
-    ]);
+  it("shows governed synthetic insights and requires approval before an explicit next cycle", async () => {
+    const approvedReport = {
+      ...intelligenceReport,
+      proposals: intelligenceReport.proposals.map((proposal) => ({
+        ...proposal,
+        decision: "APPROVED_FOR_CREATIVE" as const,
+      })),
+    };
+    vi.mocked(catalogApi.listIntelligenceReports)
+      .mockResolvedValueOnce([intelligenceReport])
+      .mockResolvedValue([approvedReport]);
     await renderConnected();
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
@@ -1859,7 +1870,9 @@ describe("Product Workspace", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Primary variable")).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: "Generate next concepts" }),
+      screen.queryByRole("button", {
+        name: "Start next cycle from experiment",
+      }),
     ).not.toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", { name: "Approve for creative" }),
@@ -1872,10 +1885,12 @@ describe("Product Workspace", () => {
       ),
     );
     fireEvent.click(
-      screen.getByRole("button", { name: "Generate next concepts" }),
+      await screen.findByRole("button", {
+        name: "Start next cycle from experiment",
+      }),
     );
     await waitFor(() =>
-      expect(catalogApi.generateExperimentConcepts).toHaveBeenCalledWith(
+      expect(catalogApi.startNextCycleFromExperiment).toHaveBeenCalledWith(
         expect.anything(),
         intelligenceReport.proposals[0]!.id,
       ),
@@ -1883,6 +1898,31 @@ describe("Product Workspace", () => {
     expect(
       screen.queryByText(/winner|guaranteed|roas|budget/i),
     ).not.toBeInTheDocument();
+  });
+
+  it("keeps a rejected experiment terminal and does not offer a next cycle", async () => {
+    const rejectedReport = {
+      ...intelligenceReport,
+      proposals: intelligenceReport.proposals.map((proposal) => ({
+        ...proposal,
+        decision: "REJECTED" as const,
+      })),
+    };
+    vi.mocked(catalogApi.listIntelligenceReports)
+      .mockResolvedValueOnce([intelligenceReport])
+      .mockResolvedValue([rejectedReport]);
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Insights" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Reject" }));
+    await screen.findByText("REJECTED");
+    expect(
+      screen.queryByRole("button", {
+        name: "Start next cycle from experiment",
+      }),
+    ).not.toBeInTheDocument();
+    expect(catalogApi.startNextCycleFromExperiment).not.toHaveBeenCalled();
   });
 
   it("separates observed commerce facts, rules, and approval-bound AI proposals", async () => {

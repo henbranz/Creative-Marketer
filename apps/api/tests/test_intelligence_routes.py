@@ -80,6 +80,9 @@ class Service:
             id=uuid4(), proposal_id=proposal_id, decision=decision, created_at=datetime.now(UTC)
         )
 
+    async def current_experiment_decision(self, *_args):
+        return None
+
     async def approved_proposal(self, *_args):
         if self.fail:
             raise IntelligenceNotFound("missing")

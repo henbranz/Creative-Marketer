@@ -59,7 +59,11 @@ from creative_marketer.infrastructure.database.research_schema import (
     evidence_snapshots,
     social_evidence_snapshots,
 )
-from creative_marketer.orchestration.application import CanonicalCycleState, CyclePreflight
+from creative_marketer.orchestration.application import (
+    CanonicalCycleState,
+    CyclePreflight,
+    ExperimentHandoff,
+)
 from creative_marketer.orchestration.domain import (
     CreativeCycle,
     CreativeCycleStep,
@@ -267,6 +271,74 @@ class SqlAlchemyOrchestrationRepository:
             query = query.with_for_update()
         row = (await self.session.execute(query)).mappings().one_or_none()
         return _cycle(cast(Mapping[str, Any], row)) if row else None
+
+    async def parent_for_experiment(self, proposal_id: UUID) -> CreativeCycle | None:
+        row = (
+            (
+                await self.session.execute(
+                    select(creative_cycles)
+                    .where(
+                        creative_cycles.c.artifact_bindings["experiment_proposal_id"].astext
+                        == str(proposal_id)
+                    )
+                    .order_by(creative_cycles.c.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _cycle(cast(Mapping[str, Any], row)) if row else None
+
+    async def child_for_experiment(self, proposal_id: UUID) -> CreativeCycle | None:
+        row = (
+            (
+                await self.session.execute(
+                    select(creative_cycles)
+                    .where(creative_cycles.c.source_experiment_proposal_id == proposal_id)
+                    .order_by(creative_cycles.c.created_at)
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return _cycle(cast(Mapping[str, Any], row)) if row else None
+
+    async def experiment_handoff(self, proposal_id: UUID) -> ExperimentHandoff | None:
+        proposal = (
+            (
+                await self.session.execute(
+                    select(experiment_proposals).where(experiment_proposals.c.id == proposal_id)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if proposal is None:
+            return None
+        decision = (
+            (
+                await self.session.execute(
+                    select(experiment_decisions)
+                    .where(experiment_decisions.c.proposal_id == proposal_id)
+                    .order_by(
+                        experiment_decisions.c.created_at.desc(),
+                        experiment_decisions.c.id.desc(),
+                    )
+                    .limit(1)
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        return ExperimentHandoff(
+            proposal_id,
+            proposal["product_id"],
+            proposal["semantic_digest"],
+            decision["decision"] if decision else None,
+            decision["proposal_digest"] if decision else None,
+        )
 
     async def get(self, cycle_id: UUID, *, for_update: bool = False) -> CreativeCycle | None:
         query = select(creative_cycles).where(creative_cycles.c.id == cycle_id)

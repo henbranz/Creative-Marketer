@@ -4663,6 +4663,17 @@
             "title": "Data Trust Level",
             "type": "string"
           },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
           "expected_learning": {
             "title": "Expected Learning",
             "type": "string"
@@ -9896,6 +9907,97 @@
         },
         "summary": "Reject",
         "tags": ["assembly"]
+      }
+    },
+    "/v1/intelligence/experiments/{proposal_id}/creative-cycle": {
+      "post": {
+        "operationId": "start_from_experiment_v1_intelligence_experiments__proposal_id__creative_cycle_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CycleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start From Experiment",
+        "tags": ["orchestration"]
       }
     },
     "/v1/intelligence/experiments/{proposal_id}/decision": {

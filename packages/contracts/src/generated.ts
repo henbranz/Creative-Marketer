@@ -568,6 +568,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/intelligence/experiments/{proposal_id}/creative-cycle": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start From Experiment */
+    post: operations["start_from_experiment_v1_intelligence_experiments__proposal_id__creative_cycle_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/intelligence/experiments/{proposal_id}/decision": {
     parameters: {
       query?: never;
@@ -3546,6 +3563,8 @@ export interface components {
       creative_direction: string;
       /** Data Trust Level */
       data_trust_level: string;
+      /** Decision */
+      decision?: string | null;
       /** Expected Learning */
       expected_learning: string;
       /** Hypothesis */
@@ -5655,6 +5674,41 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["FinalCreativeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  start_from_experiment_v1_intelligence_experiments__proposal_id__creative_cycle_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        proposal_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
         };
       };
       /** @description Validation Error */

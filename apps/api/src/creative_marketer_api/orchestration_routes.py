@@ -266,6 +266,17 @@ def create_orchestration_router(
         except (OrchestrationError, AgentRuntimeError, ValueError) as error:
             raise problem(error) from error
 
+    @router.post(
+        "/intelligence/experiments/{proposal_id}/creative-cycle",
+        response_model=CycleResponse,
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def start_from_experiment(proposal_id: UUID, ctx: Context) -> CycleResponse:
+        try:
+            return _cycle(await service.start_next_from_experiment(ctx, proposal_id))
+        except (OrchestrationError, AgentRuntimeError, ValueError) as error:
+            raise problem(error) from error
+
     @router.get(
         "/products/{product_id}/creative-cycles/active",
         response_model=CycleResponse,

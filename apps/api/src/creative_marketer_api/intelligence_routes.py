@@ -82,6 +82,7 @@ class ProposalResponse(Contract):
     rationale: str
     expected_learning: str
     data_trust_level: str
+    decision: str | None = None
     semantic_digest: str
     created_at: datetime
 
@@ -104,8 +105,12 @@ class ReportResponse(Contract):
 
 
 def _report(
-    value: Any, candidates: tuple[Any, ...] = (), proposals: tuple[Any, ...] = ()
+    value: Any,
+    candidates: tuple[Any, ...] = (),
+    proposals: tuple[Any, ...] = (),
+    decisions: dict[UUID, str] | None = None,
 ) -> ReportResponse:
+    decisions = decisions or {}
     return ReportResponse(
         id=value.id,
         product_id=value.product_id,
@@ -152,6 +157,7 @@ def _report(
                 rationale=item.rationale,
                 expected_learning=item.expected_learning,
                 data_trust_level=item.data_trust_level.value,
+                decision=decisions.get(item.id),
                 semantic_digest=item.semantic_digest,
                 created_at=item.created_at,
             )
@@ -218,14 +224,26 @@ def create_intelligence_router(
         values: list[ReportResponse] = []
         for item in await service.list_reports(ctx, product_id):
             report, candidates, proposals = await service.get_report(ctx, item.id)
-            values.append(_report(report, candidates, proposals))
+            decisions = {
+                proposal.id: decision.decision.value
+                for proposal in proposals
+                if (decision := await service.current_experiment_decision(ctx, proposal.id))
+                is not None
+            }
+            values.append(_report(report, candidates, proposals, decisions))
         return values
 
     @router.get("/intelligence/reports/{report_id}", response_model=ReportResponse)
     async def get_report(report_id: UUID, ctx: Context) -> ReportResponse:
         try:
             report, candidates, proposals = await service.get_report(ctx, report_id)
-            return _report(report, candidates, proposals)
+            decisions = {
+                proposal.id: decision.decision.value
+                for proposal in proposals
+                if (decision := await service.current_experiment_decision(ctx, proposal.id))
+                is not None
+            }
+            return _report(report, candidates, proposals, decisions)
         except IntelligenceError as error:
             raise HTTPException(status_code=404, detail=error.code.lower()) from error
 

@@ -30,6 +30,13 @@ When Intelligence correctly produces no proposal—for example, because one unma
 cannot support a useful hypothesis—the cycle completes at the Intelligence boundary instead of
 creating an impossible decision checkpoint.
 
+An experiment decision is immutable and replay-safe. Repeating the same decision returns the
+existing fact; a conflicting later decision fails closed. Approval completes the current cycle but
+does not create concepts, media, or another cycle. The user must choose **Start next cycle from
+experiment**. That boundary accepts only the exact approved proposal digest bound by a completed
+parent cycle, creates at most one child cycle per proposal, and returns the existing child on replay.
+Rejected proposals cannot seed a cycle.
+
 The mutable cycle row stores only current state and exact immutable bindings. Append-only
 transitions and step attempts preserve history. Bindings include the Product snapshot and every
 created or approved artifact through the resulting ExperimentProposal. A Product edit never swaps
@@ -92,7 +99,8 @@ to reverse an already executed side effect.
 
 Cycle events are reference-only. Audit records meaningful user control actions, not polls. The
 Supervisor receives no prompt, provider response, credential, signed URL, caption, customer PII,
-or Commerce action authority.
+or Commerce action authority. It also cannot decide an experiment or invoke the
+experiment-to-cycle handoff.
 
 ## Fake acceptance and live activation
 

@@ -82,11 +82,23 @@ class CanonicalCycleState:
     experiment_decided: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class ExperimentHandoff:
+    proposal_id: UUID
+    product_id: UUID
+    proposal_digest: str
+    decision: str | None
+    decision_proposal_digest: str | None
+
+
 class OrchestrationRepository(Protocol):
     async def preflight(self, product_id: UUID) -> CyclePreflight: ...
     async def active_for_product(
         self, product_id: UUID, *, for_update: bool = False
     ) -> CreativeCycle | None: ...
+    async def parent_for_experiment(self, proposal_id: UUID) -> CreativeCycle | None: ...
+    async def child_for_experiment(self, proposal_id: UUID) -> CreativeCycle | None: ...
+    async def experiment_handoff(self, proposal_id: UUID) -> ExperimentHandoff | None: ...
     async def get(self, cycle_id: UUID, *, for_update: bool = False) -> CreativeCycle | None: ...
     async def add(self, cycle: CreativeCycle) -> None: ...
     async def update(self, cycle: CreativeCycle, *, expected_version: int) -> bool: ...
@@ -342,6 +354,40 @@ class CreativeCycleService:
         source_experiment_proposal_id: UUID | None = None,
     ) -> CreativeCycle:
         require_cycle_mutation(context)
+        if (parent_cycle_id is None) != (source_experiment_proposal_id is None):
+            raise CycleNotReady(
+                "parent cycle and source ExperimentProposal must be supplied together"
+            )
+        if source_experiment_proposal_id is not None:
+            assert parent_cycle_id is not None
+            async with self.uow_factory(context.tenant_id) as uow:
+                existing = await uow.cycles.child_for_experiment(source_experiment_proposal_id)
+                if existing is not None:
+                    if (
+                        existing.product_id != product_id
+                        or existing.parent_cycle_id != parent_cycle_id
+                    ):
+                        raise CycleConflict(
+                            "ExperimentProposal is already bound to a different child cycle"
+                        )
+                    return existing
+                parent = await uow.cycles.get(parent_cycle_id, for_update=True)
+                handoff = await uow.cycles.experiment_handoff(source_experiment_proposal_id)
+                if parent is None or handoff is None:
+                    raise CycleNotReady("approved experiment lineage is unavailable")
+                if (
+                    parent.product_id != product_id
+                    or handoff.product_id != product_id
+                    or parent.status is not CycleStatus.COMPLETED
+                    or parent.current_stage is not CycleStage.COMPLETED
+                    or parent.artifacts.experiment_proposal_id != source_experiment_proposal_id
+                    or handoff.decision != "APPROVED_FOR_CREATIVE"
+                    or handoff.decision_proposal_digest != handoff.proposal_digest
+                ):
+                    raise CycleNotReady(
+                        "exact approved ExperimentProposal from a completed "
+                        "parent cycle is required"
+                    )
         preflight = await self.preflight(context, product_id)
         if preflight.state is not ReadinessState.READY:
             raise CycleNotReady("Creative Cycle prerequisites are incomplete")
@@ -386,6 +432,10 @@ class CreativeCycleService:
                         {
                             "product_id": str(product_id),
                             "state_machine_version": cycle.state_machine_version,
+                            "parent_cycle_id": str(parent_cycle_id) if parent_cycle_id else None,
+                            "source_experiment_proposal_id": str(source_experiment_proposal_id)
+                            if source_experiment_proposal_id
+                            else None,
                         }
                     ),
                 )
@@ -399,6 +449,28 @@ class CreativeCycleService:
                 context.tenant_id, cycle.id, context.correlation_id
             )
         return cycle
+
+    async def start_next_from_experiment(
+        self, context: ExecutionContext, proposal_id: UUID
+    ) -> CreativeCycle:
+        """Start, or replay, the one explicit child cycle for an approved experiment."""
+
+        require_cycle_mutation(context)
+        async with self.uow_factory(context.tenant_id) as uow:
+            existing = await uow.cycles.child_for_experiment(proposal_id)
+            if existing is not None:
+                return existing
+            parent = await uow.cycles.parent_for_experiment(proposal_id)
+            if parent is None:
+                raise CycleNotReady(
+                    "a completed Creative Cycle bound to this ExperimentProposal is required"
+                )
+        return await self.start(
+            context,
+            parent.product_id,
+            parent_cycle_id=parent.id,
+            source_experiment_proposal_id=proposal_id,
+        )
 
     async def get(
         self, context: ExecutionContext, cycle_id: UUID

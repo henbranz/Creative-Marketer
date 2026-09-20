@@ -375,6 +375,13 @@ function CommandCenterPanel({
               <p>
                 Mode: Assisted · State machine: {cycle.state_machine_version}
               </p>
+              {cycle.parent_cycle_id && cycle.source_experiment_proposal_id && (
+                <p className="cycle-lineage">
+                  Started from experiment {cycle.source_experiment_proposal_id}
+                  <br />
+                  <small>Parent cycle: {cycle.parent_cycle_id}</small>
+                </p>
+              )}
             </div>
             <div className="cycle-actions">
               <Button
@@ -4078,7 +4085,6 @@ function InsightsPanel({ workspace }: { workspace: Workspace }) {
   const session = useMemo(() => readSession(), []);
   const [reports, setReports] = useState<IntelligenceReport[]>([]);
   const [runState, setRunState] = useState("");
-  const [approved, setApproved] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
 
@@ -4103,8 +4109,7 @@ function InsightsPanel({ workspace }: { workspace: Workspace }) {
     setError("");
     try {
       await catalogApi.decideExperiment(session, proposalId, decision);
-      if (decision === "APPROVED_FOR_CREATIVE")
-        setApproved((current) => new Set(current).add(proposalId));
+      await refresh();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Decision failed.");
     } finally {
@@ -4259,29 +4264,37 @@ function InsightsPanel({ workspace }: { workspace: Workspace }) {
                 </dl>
                 {workspace.product.can_edit && (
                   <div className="card-actions">
-                    <button
-                      disabled={busy === proposal.id}
-                      onClick={() =>
-                        void decide(proposal.id, "APPROVED_FOR_CREATIVE")
-                      }
-                    >
-                      Approve for creative
-                    </button>
-                    <button
-                      disabled={busy === proposal.id}
-                      onClick={() => void decide(proposal.id, "REJECTED")}
-                    >
-                      Reject
-                    </button>
-                    {approved.has(proposal.id) && (
+                    {proposal.decision === null ? (
+                      <>
+                        <button
+                          disabled={busy === proposal.id}
+                          onClick={() =>
+                            void decide(proposal.id, "APPROVED_FOR_CREATIVE")
+                          }
+                        >
+                          Approve for creative
+                        </button>
+                        <button
+                          disabled={busy === proposal.id}
+                          onClick={() => void decide(proposal.id, "REJECTED")}
+                        >
+                          Reject
+                        </button>
+                      </>
+                    ) : (
+                      <StatusBadge status={proposal.decision} />
+                    )}
+                    {proposal.decision === "APPROVED_FOR_CREATIVE" && (
                       <Button
                         disabled={busy === proposal.id}
                         onClick={() => {
                           setBusy(proposal.id);
                           void catalogApi
-                            .generateExperimentConcepts(session, proposal.id)
-                            .then((run) =>
-                              setRunState(`Creative Strategist ${run.status}`),
+                            .startNextCycleFromExperiment(session, proposal.id)
+                            .then((cycle) =>
+                              setRunState(
+                                `Next Creative Cycle ${cycle.current_stage}`,
+                              ),
                             )
                             .catch((caught: unknown) =>
                               setError(
@@ -4293,7 +4306,7 @@ function InsightsPanel({ workspace }: { workspace: Workspace }) {
                             .finally(() => setBusy(null));
                         }}
                       >
-                        Generate next concepts
+                        Start next cycle from experiment
                       </Button>
                     )}
                   </div>

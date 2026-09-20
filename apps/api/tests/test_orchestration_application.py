@@ -19,6 +19,7 @@ from creative_marketer.orchestration.application import (
     CreativeCycleService,
     CyclePreflight,
     CycleReadinessEngine,
+    ExperimentHandoff,
     require_cycle_mutation,
 )
 from creative_marketer.orchestration.domain import (
@@ -120,6 +121,8 @@ class MemoryRepository:
         self.step_values: list[CreativeCycleStep] = []
         self.manifests: list[SupervisorContextManifest] = []
         self.reports: list[SupervisorReport] = []
+        self.parent_cycle: CreativeCycle | None = None
+        self.handoff: ExperimentHandoff | None = None
 
     async def preflight(self, product_id):
         return CyclePreflight(True, 96, uuid4(), "sha256:" + "b" * 64, 1, True)
@@ -133,8 +136,25 @@ class MemoryRepository:
             return self.cycle
         return None
 
+    async def parent_for_experiment(self, proposal_id):
+        if self.parent_cycle and self.parent_cycle.artifacts.experiment_proposal_id == proposal_id:
+            return self.parent_cycle
+        return None
+
+    async def child_for_experiment(self, proposal_id):
+        if self.cycle and self.cycle.source_experiment_proposal_id == proposal_id:
+            return self.cycle
+        return None
+
+    async def experiment_handoff(self, proposal_id):
+        return self.handoff if self.handoff and self.handoff.proposal_id == proposal_id else None
+
     async def get(self, cycle_id, *, for_update=False):
-        return self.cycle if self.cycle and self.cycle.id == cycle_id else None
+        if self.cycle and self.cycle.id == cycle_id:
+            return self.cycle
+        if self.parent_cycle and self.parent_cycle.id == cycle_id:
+            return self.parent_cycle
+        return None
 
     async def add(self, cycle):
         self.cycle = cycle
@@ -504,15 +524,133 @@ async def test_start_launches_ids_only_cycle_workflow_after_commit() -> None:
             self.calls.append((tenant_id, cycle_id, correlation_id, uow.commits))
 
     workflows = Workflows()
+    runtime = Runtime()
     service = CreativeCycleService(
         lambda _tenant: uow,
         SimpleNamespace(get_workspace=workspace),
-        Runtime(),
+        runtime,
         cycle_workflows=workflows,
     )
     cycle = await service.start(ctx, uuid4())
 
     assert workflows.calls == [(ctx.tenant_id, cycle.id, ctx.correlation_id, 1)]
+
+
+@pytest.mark.asyncio
+async def test_approved_experiment_requires_explicit_replay_safe_child_cycle_start() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    uow = MemoryUow(repository)
+    proposal_id = uuid4()
+    proposal_digest = "sha256:" + "d" * 64
+    parent = sample_cycle(ctx, CycleStage.COMPLETED)
+    parent = replace(
+        parent,
+        status=CycleStatus.COMPLETED,
+        artifacts=replace(parent.artifacts, experiment_proposal_id=proposal_id),
+    )
+    repository.parent_cycle = parent
+    repository.handoff = ExperimentHandoff(
+        proposal_id,
+        parent.product_id,
+        proposal_digest,
+        "APPROVED_FOR_CREATIVE",
+        proposal_digest,
+    )
+    snapshot = SimpleNamespace(id=uuid4(), digest="sha256:" + "e" * 64, source_revision=1)
+
+    async def workspace(*_args):
+        return SimpleNamespace(latest_snapshot=snapshot, brief=SimpleNamespace(revision=1))
+
+    runtime = Runtime()
+    service = CreativeCycleService(
+        lambda _tenant: uow,
+        SimpleNamespace(get_workspace=workspace),
+        runtime,
+    )
+
+    child = await service.start_next_from_experiment(ctx, proposal_id)
+    replay = await service.start_next_from_experiment(ctx, proposal_id)
+
+    assert replay.id == child.id
+    assert child.parent_cycle_id == parent.id
+    assert child.source_experiment_proposal_id == proposal_id
+    assert len(repository.transition_values) == 1
+    assert runtime.calls == []
+
+
+@pytest.mark.asyncio
+async def test_rejected_or_digest_mismatched_experiment_cannot_start_child_cycle() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    uow = MemoryUow(repository)
+    proposal_id = uuid4()
+    parent = sample_cycle(ctx, CycleStage.COMPLETED)
+    parent = replace(
+        parent,
+        status=CycleStatus.COMPLETED,
+        artifacts=replace(parent.artifacts, experiment_proposal_id=proposal_id),
+    )
+    repository.parent_cycle = parent
+    repository.handoff = ExperimentHandoff(
+        proposal_id,
+        parent.product_id,
+        "sha256:" + "a" * 64,
+        "REJECTED",
+        "sha256:" + "a" * 64,
+    )
+    snapshot = SimpleNamespace(id=uuid4(), digest="sha256:" + "e" * 64, source_revision=1)
+
+    async def workspace(*_args):
+        return SimpleNamespace(latest_snapshot=snapshot, brief=SimpleNamespace(revision=1))
+
+    service = CreativeCycleService(
+        lambda _tenant: uow,
+        SimpleNamespace(get_workspace=workspace),
+        Runtime(),
+    )
+    with pytest.raises(CycleNotReady):
+        await service.start_next_from_experiment(ctx, proposal_id)
+
+    repository.handoff = replace(
+        repository.handoff,
+        decision="APPROVED_FOR_CREATIVE",
+        decision_proposal_digest="sha256:" + "b" * 64,
+    )
+    with pytest.raises(CycleNotReady):
+        await service.start_next_from_experiment(ctx, proposal_id)
+
+
+@pytest.mark.asyncio
+async def test_cross_tenant_experiment_handoff_fails_closed() -> None:
+    source_context = context()
+    other_context = context()
+    proposal_id = uuid4()
+    source_repository = MemoryRepository(source_context)
+    source_parent = sample_cycle(source_context, CycleStage.COMPLETED)
+    source_repository.parent_cycle = replace(
+        source_parent,
+        status=CycleStatus.COMPLETED,
+        artifacts=replace(source_parent.artifacts, experiment_proposal_id=proposal_id),
+    )
+    source_repository.handoff = ExperimentHandoff(
+        proposal_id,
+        source_parent.product_id,
+        "sha256:" + "a" * 64,
+        "APPROVED_FOR_CREATIVE",
+        "sha256:" + "a" * 64,
+    )
+    other_repository = MemoryRepository(other_context)
+    service = CreativeCycleService(
+        lambda tenant_id: MemoryUow(
+            source_repository if tenant_id == source_context.tenant_id else other_repository
+        ),
+        SimpleNamespace(),
+        Runtime(),
+    )
+
+    with pytest.raises(CycleNotReady):
+        await service.start_next_from_experiment(other_context, proposal_id)
 
 
 @pytest.mark.asyncio

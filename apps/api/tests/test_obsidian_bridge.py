@@ -210,6 +210,35 @@ def test_full_sync_is_idempotent_restart_safe_and_writes_mocs(tmp_path: Path) ->
     )
 
 
+def test_cycle_relationship_links_resolve_status_aware_paths(tmp_path: Path) -> None:
+    parent = projected_node("creative_cycle", title="Completed parent cycle")
+    parent["status"] = "COMPLETED"
+    child = projected_node("creative_cycle", title="Active child cycle")
+    child["status"] = "CREATED"
+    child["relationships"] = [
+        {
+            "relationship_type": "continues_cycle",
+            "target_node_type": "creative_cycle",
+            "target_canonical_id": parent["canonical_id"],
+        }
+    ]
+    instance = bridge(tmp_path)
+    instance._request = lambda _path: {
+        "nodes": [parent, child],
+        "next_cursor": "cycle-cursor",
+    }
+
+    assert instance.sync(full=True) == {"written": 2, "archived": 0}
+
+    parent_path = relative_note_path("creative_cycle", parent["canonical_id"], "COMPLETED")
+    child_path = relative_note_path("creative_cycle", child["canonical_id"], "CREATED")
+    parent_link = parent_path.with_suffix("").as_posix()
+    child_link = child_path.with_suffix("").as_posix()
+    assert f"[[{parent_link}|Completed parent cycle]]" in (tmp_path / child_path).read_text()
+    assert f"[[{child_link}|Active child cycle]]" in (tmp_path / parent_path).read_text()
+    assert "[[Cycles/Active/creative-cycle--" not in (tmp_path / child_path).read_text()
+
+
 def test_incremental_deletion_archives_managed_note(tmp_path: Path) -> None:
     value = projected_node()
     instance = bridge(tmp_path)

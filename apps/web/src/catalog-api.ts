@@ -424,6 +424,7 @@ export interface ExperimentProposal {
   rationale: string;
   expected_learning: string;
   data_trust_level: "SYNTHETIC" | "OBSERVED";
+  decision: "APPROVED_FOR_CREATIVE" | "REJECTED" | null;
   semantic_digest: string;
   created_at: string;
 }
@@ -529,6 +530,12 @@ export const catalogApi = {
       session,
       `/v1/products/${productId}/creative-cycles`,
       { method: "POST", body: JSON.stringify({}) },
+    ),
+  startNextCycleFromExperiment: (session: Session, proposalId: string) =>
+    request<CreativeCycle>(
+      session,
+      `/v1/intelligence/experiments/${proposalId}/creative-cycle`,
+      { method: "POST" },
     ),
   reconcileCreativeCycle: (session: Session, cycleId: string) =>
     request<CreativeCycle>(

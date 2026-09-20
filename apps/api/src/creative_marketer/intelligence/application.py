@@ -402,6 +402,16 @@ class IntelligenceService:
             proposal = await uow.intelligence.proposal(proposal_id, for_update=True)
             if proposal is None:
                 raise IntelligenceNotFound("ExperimentProposal not found")
+            current = await uow.intelligence.current_experiment_decision(proposal_id)
+            if current is not None:
+                if (
+                    current.decision is decision
+                    and current.proposal_digest == proposal.semantic_digest
+                ):
+                    return current
+                raise ExperimentHandoffDenied(
+                    "ExperimentProposal already has an immutable human decision"
+                )
             value = ExperimentDecision(
                 context.tenant_id,
                 proposal.product_id,
@@ -449,6 +459,12 @@ class IntelligenceService:
                 )
             await uow.commit()
             return value
+
+    async def current_experiment_decision(
+        self, context: ExecutionContext, proposal_id: UUID
+    ) -> ExperimentDecision | None:
+        async with self.uow_factory(context.tenant_id) as uow:
+            return await uow.intelligence.current_experiment_decision(proposal_id)
 
     async def approved_proposal(
         self, context: ExecutionContext, proposal_id: UUID

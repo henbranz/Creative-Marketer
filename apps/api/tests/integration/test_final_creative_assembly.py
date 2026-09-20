@@ -504,11 +504,7 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
     rejected_insight = await intelligence.decide_insight(
         context, candidates[0].id, InsightDecisionKind.REJECT
     )
-    rejected_experiment = await intelligence.decide_experiment(
-        context, proposals[0].id, ExperimentDecisionKind.REJECTED
-    )
     assert rejected_insight.decision is InsightDecisionKind.REJECT
-    assert rejected_experiment.decision is ExperimentDecisionKind.REJECTED
     with pytest.raises(ExperimentHandoffDenied):
         await intelligence.approved_proposal(context, proposals[0].id)
     with pytest.raises(AgentRunNotReady):
@@ -677,6 +673,20 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
                 json={"decision": ExperimentDecisionKind.APPROVED_FOR_CREATIVE.value},
             )
         ).status_code == 201
+        assert (
+            await http.post(
+                f"/v1/intelligence/experiments/{proposals[0].id}/decision",
+                headers=auth,
+                json={"decision": ExperimentDecisionKind.APPROVED_FOR_CREATIVE.value},
+            )
+        ).status_code == 201
+        assert (
+            await http.post(
+                f"/v1/intelligence/experiments/{proposals[0].id}/decision",
+                headers=auth,
+                json={"decision": ExperimentDecisionKind.REJECTED.value},
+            )
+        ).status_code == 409
         assert (await intelligence.approved_proposal(context, proposals[0].id)).id == proposals[
             0
         ].id

@@ -96,6 +96,10 @@ class Service:
         self.reject()
         return self.cycle
 
+    async def start_next_from_experiment(self, *_args, **_kwargs):
+        self.reject()
+        return self.cycle
+
     async def active(self, *_args):
         return None if self.fail else self.cycle
 
@@ -127,6 +131,8 @@ async def test_orchestration_handlers_render_full_cycle_and_safe_errors() -> Non
     assert (await endpoint(router, "readiness")(product_id, ctx)).state == "READY"
     started = await endpoint(router, "start")(product_id, StartCycleRequest(), ctx)
     assert started.provider_mode == "DEMO_FAKE"
+    next_cycle = await endpoint(router, "start_from_experiment")(uuid4(), ctx)
+    assert next_cycle.id == service.cycle.id
     active = await endpoint(router, "active")(product_id, ctx)
     assert active.timeline[0].reason_code == "CYCLE_STARTED"
     assert active.supervisor_report.summary == "Cycle summary."
@@ -140,6 +146,7 @@ async def test_orchestration_handlers_render_full_cycle_and_safe_errors() -> Non
     assert (await endpoint(router, "active")(product_id, ctx)).status_code == 204
     for name, args in (
         ("start", (product_id, StartCycleRequest(), ctx)),
+        ("start_from_experiment", (uuid4(), ctx)),
         ("get", (uuid4(), ctx)),
         ("reconcile", (uuid4(), ctx)),
         ("cancel", (uuid4(), ctx)),
