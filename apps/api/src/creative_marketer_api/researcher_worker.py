@@ -16,6 +16,7 @@ from creative_marketer.agent_runtime.application import (
     initial_creative_strategist_route,
     initial_intelligence_route,
     initial_researcher_route,
+    initial_supervisor_route,
 )
 from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
 from creative_marketer.catalog.asset_application import UnavailableObjectStore
@@ -56,6 +57,11 @@ from creative_marketer.production.application import initial_producer_route
 from creative_marketer.workflow_orchestration.agent_bridge import RouteAgentWorkflow
 from creative_marketer.workflow_orchestration.researcher_bridge import StartResearcherWorkflow
 from creative_marketer_api.config import Settings
+from creative_marketer_api.fake_demo_outputs import (
+    creative_output,
+    intelligence_output,
+    production_output,
+)
 
 
 class DatabaseAgentTypeResolver:
@@ -71,18 +77,36 @@ class DatabaseAgentTypeResolver:
 def _fake_demo_result(invocation: object) -> ModelInvocationResult:
     """Zero-network structured outputs for every Agent supported by the local worker."""
     contract = invocation.output_contract_key  # type: ignore[attr-defined]
-    if contract == "creative.creative_concept_set":
-        from scripts.bootstrap_demo import _creative_output
-
-        output = _creative_output(invocation)
+    if contract == "research.research_snapshot":
+        evidence = invocation.untrusted_evidence[0]  # type: ignore[attr-defined]
+        output = {
+            "findings": [
+                {
+                    "key": "audience_language",
+                    "category": "audience",
+                    "statement": "Commuters value durable reusable products.",
+                    "confidence": "HIGH",
+                    "basis": "OBSERVED",
+                    "citations": [
+                        {
+                            "evidence_snapshot_id": str(evidence.evidence_snapshot_id),
+                            "block_index": evidence.block_index,
+                            "block_digest": evidence.block_digest,
+                        }
+                    ],
+                    "scope": "LOCAL DEMO evidence",
+                    "implication": "Show durability in a daily routine.",
+                }
+            ],
+            "research_gaps": ["LOCAL DEMO has intentionally bounded evidence."],
+            "recommended_next_sources": [],
+        }
+    elif contract == "creative.creative_concept_set":
+        output = creative_output(invocation)
     elif contract == "production.production_plan":
-        from scripts.bootstrap_demo import _production_output
-
-        output = _production_output(invocation)
+        output = production_output(invocation)
     elif contract == "intelligence.intelligence_report":
-        from scripts.bootstrap_demo import _intelligence_output
-
-        output = _intelligence_output(invocation)
+        output = intelligence_output(invocation)
     elif contract == "commerce.operations_report":
         capability_context = invocation.capability_context or {}  # type: ignore[attr-defined]
         inventories = capability_context.get("inventory", ())
@@ -162,6 +186,37 @@ def _fake_demo_result(invocation: object) -> ModelInvocationResult:
             "limitations": [
                 "Synthetic Fake Store analysis; exact human approval is required for mutations."
             ],
+        }
+    elif contract == "orchestration.supervisor_report":
+        capability_context = invocation.capability_context or {}  # type: ignore[attr-defined]
+        cycle = capability_context.get("cycle", {})
+        readiness = capability_context.get("readiness", {})
+        requirements = readiness.get("requirements", []) if isinstance(readiness, dict) else []
+        allowed = readiness.get("allowed_actions", []) if isinstance(readiness, dict) else []
+        blockers = [
+            str(item["message"])
+            for item in requirements
+            if isinstance(item, dict) and item.get("state") == "BLOCKED"
+        ]
+        attention = [
+            str(item["message"])
+            for item in requirements
+            if isinstance(item, dict) and item.get("state") == "WAITING"
+        ]
+        stage = str(cycle.get("stage", "UNKNOWN")) if isinstance(cycle, dict) else "UNKNOWN"
+        output = {
+            "summary": f"Creative Cycle is at {stage.replace('_', ' ').title()}.",
+            "current_stage_explanation": (
+                str(requirements[0]["message"])
+                if requirements and isinstance(requirements[0], dict)
+                else "The deterministic orchestrator owns the next transition."
+            ),
+            "blockers": blockers,
+            "attention_items": attention,
+            "suggested_next_actions": list(allowed) if isinstance(allowed, list) else [],
+            "completion_summary": (
+                "This learning iteration is complete." if stage == "COMPLETED" else None
+            ),
         }
     else:
         raise RuntimeError("fake worker does not support this structured output contract")
@@ -248,6 +303,7 @@ async def run() -> None:
         initial_producer_route(),
         initial_intelligence_route(),
         initial_commerce_operations_route(),
+        initial_supervisor_route(),
     )
     session_factory = create_session_factory(str(settings.database_url))
     runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)

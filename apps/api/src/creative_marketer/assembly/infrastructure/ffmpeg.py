@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+from itertools import pairwise
 from pathlib import Path
 
 from creative_marketer.assembly.domain import (
@@ -27,12 +28,28 @@ class FFmpegAssemblyRenderer:
         ffmpeg: str = "ffmpeg",
         ffprobe: str = "ffprobe",
         font_family: str = "Noto Sans",
+        encoding_preset: str = "medium",
+        scaling_flags: str = "lanczos",
+        minimum_timeout_seconds: float = 30.0,
+        maximum_timeout_seconds: float = 600.0,
+        fake_placeholder_mode: bool = False,
         maximum_sources: int = 24,
         maximum_output_bytes: int = 500 * 1024 * 1024,
     ) -> None:
+        if encoding_preset not in {"medium", "veryfast", "ultrafast"}:
+            raise ValueError("unsupported FFmpeg encoding preset")
+        if scaling_flags not in {"lanczos", "fast_bilinear"}:
+            raise ValueError("unsupported FFmpeg scaling flags")
+        if not 1 <= minimum_timeout_seconds <= maximum_timeout_seconds <= 3600:
+            raise ValueError("unsupported FFmpeg timeout bounds")
         self.ffmpeg = ffmpeg
         self.ffprobe = ffprobe
         self.font_family = font_family
+        self.encoding_preset = encoding_preset
+        self.scaling_flags = scaling_flags
+        self.minimum_timeout_seconds = minimum_timeout_seconds
+        self.maximum_timeout_seconds = maximum_timeout_seconds
+        self.fake_placeholder_mode = fake_placeholder_mode
         self.maximum_sources = maximum_sources
         self.maximum_output_bytes = maximum_output_bytes
 
@@ -79,6 +96,8 @@ class FFmpegAssemblyRenderer:
             raise AssemblyRenderFailed("ASSEMBLY_WORKSPACE_INVALID")
         version = await self.version()
         any_audio = any(source.has_audio for source in sources)
+        if self.fake_placeholder_mode and not any_audio:
+            return await self._render_fake_placeholders(plan, sources, root, version)
         clips: list[Path] = []
         for index, (item, source) in enumerate(zip(plan.items, sources, strict=True)):
             source_path = Path(source.path).resolve()
@@ -108,7 +127,7 @@ class FFmpegAssemblyRenderer:
                 "-c:v",
                 "libx264",
                 "-preset",
-                "medium",
+                self.encoding_preset,
                 "-crf",
                 "18",
                 "-pix_fmt",
@@ -181,7 +200,7 @@ class FFmpegAssemblyRenderer:
                 "-c:v",
                 "libx264",
                 "-preset",
-                "medium",
+                self.encoding_preset,
                 "-crf",
                 "18",
                 "-pix_fmt",
@@ -197,15 +216,166 @@ class FFmpegAssemblyRenderer:
         await self._run(tuple(args), timeout=self._timeout(plan.timeline_duration_ms))
         return await self._inspect(final, plan, version, any_audio)
 
-    @staticmethod
-    def _fit_filter(mode: FitMode, width: int, height: int) -> str:
+    async def _render_fake_placeholders(
+        self,
+        plan: AssemblyPlan,
+        sources: tuple[MaterializedSource, ...],
+        root: Path,
+        version: str,
+    ) -> RenderResult:
+        """Render synthetic fake-provider media without encoding duplicate static frames."""
+        ass = root / "overlays.ass"
+        self._write_ass(plan, ass)
+        boundaries = {0, plan.timeline_duration_ms}
+        for item in plan.items:
+            boundaries.update(
+                (item.timeline_start_ms, item.timeline_start_ms + item.timeline_duration_ms)
+            )
+        for value in plan.overlays:
+            boundaries.update((value.start_ms, value.end_ms))
+        for cue in plan.captions:
+            boundaries.update((cue.start_ms, cue.end_ms))
+        ordered = sorted(boundaries)
+        clips: list[Path] = []
+        for ordinal, (start_ms, end_ms) in enumerate(pairwise(ordered)):
+            if end_ms <= start_ms:
+                continue
+            item_index = next(
+                index
+                for index, item in enumerate(plan.items)
+                if item.timeline_start_ms
+                <= start_ms
+                < item.timeline_start_ms + item.timeline_duration_ms
+            )
+            item, source = plan.items[item_index], sources[item_index]
+            source_path = Path(source.path).resolve()
+            if root not in source_path.parents or not source_path.is_file():
+                raise AssemblyRenderFailed("ASSEMBLY_SOURCE_PATH_INVALID")
+            frame = root / f"placeholder-frame-{ordinal:03d}.mp4"
+            clip = root / f"placeholder-clip-{ordinal:03d}.mp4"
+            clips.append(clip)
+            args = [self.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+            if source.media_kind == "IMAGE":
+                # Fake providers intentionally emit non-production placeholder
+                # bytes. Do not repeatedly decode those bytes: a malformed
+                # synthetic image can make image2 loop forever without yielding
+                # a frame. Instead, derive a stable visual placeholder from the
+                # immutable source identity. Live media never uses this path.
+                color = hashlib.sha256(source.asset_id.encode("utf-8")).hexdigest()[:6]
+                args += [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    (
+                        f"color=c=0x{color}:"
+                        f"s={plan.render_profile.width}x{plan.render_profile.height}:"
+                        f"r={plan.render_profile.fps}"
+                    ),
+                ]
+            else:
+                source_ms = item.source_in_ms + start_ms - item.timeline_start_ms
+                # Demo video fixtures are intentionally tiny. Loop them before
+                # seeking so later overlay/caption boundaries can still sample
+                # a deterministic frame from the synthetic source.
+                args += ["-stream_loop", "-1", "-ss", f"{source_ms / 1000:.3f}"]
+                args += ["-i", str(source_path)]
+            fit = self._fit_filter(
+                item.fit_mode, plan.render_profile.width, plan.render_profile.height
+            )
+            args += [
+                "-vf",
+                (
+                    f"{fit},setpts=PTS+{start_ms / 1000:.3f}/TB,"
+                    f"ass={self._filter_path(ass)},setpts=PTS-STARTPTS,"
+                    f"format={plan.render_profile.pixel_format}"
+                ),
+                "-t",
+                "0.100",
+                "-frames:v",
+                "1",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "18",
+                "-pix_fmt",
+                "yuv420p",
+                "-r",
+                str(plan.render_profile.fps),
+                "-an",
+                str(frame),
+            ]
+            await self._run(tuple(args), timeout=self._timeout(end_ms - start_ms))
+            frame_count = max(
+                1,
+                round((end_ms - start_ms) * plan.render_profile.fps / 1000),
+            )
+            await self._run(
+                (
+                    self.ffmpeg,
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-stream_loop",
+                    str(frame_count - 1),
+                    "-i",
+                    str(frame),
+                    "-frames:v",
+                    str(frame_count),
+                    "-c:v",
+                    "copy",
+                    "-an",
+                    "-movflags",
+                    "+faststart",
+                    str(clip),
+                ),
+                timeout=self._timeout(end_ms - start_ms),
+            )
+        concat = root / "placeholder-concat.txt"
+        concat.write_text(
+            "".join(f"file '{clip.name}'\n" for clip in clips),
+            encoding="utf-8",
+        )
+        final = root / "final.mp4"
+        await self._run(
+            (
+                self.ffmpeg,
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-protocol_whitelist",
+                "file,pipe",
+                "-f",
+                "concat",
+                "-safe",
+                "1",
+                "-i",
+                str(concat),
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(final),
+            ),
+            timeout=self._timeout(plan.timeline_duration_ms),
+        )
+        return await self._inspect(final, plan, version, False)
+
+    def _fit_filter(self, mode: FitMode, width: int, height: int) -> str:
         if mode is FitMode.CROP_FILL:
             return (
-                f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"scale={width}:{height}:force_original_aspect_ratio=increase:"
+                f"flags={self.scaling_flags},"
                 f"crop={width}:{height}"
             )
         return (
-            f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,"
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+            f"flags={self.scaling_flags},"
             f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
         )
 
@@ -266,9 +436,11 @@ class FFmpegAssemblyRenderer:
         seconds, cs = divmod(rem, 100)
         return f"{hours}:{minutes:02d}:{seconds:02d}.{cs:02d}"
 
-    @staticmethod
-    def _timeout(duration_ms: int) -> float:
-        return max(30.0, min(600.0, duration_ms / 1000 * 12.0))
+    def _timeout(self, duration_ms: int) -> float:
+        return max(
+            self.minimum_timeout_seconds,
+            min(self.maximum_timeout_seconds, duration_ms / 1000 * 12.0),
+        )
 
     async def _inspect(
         self, path: Path, plan: AssemblyPlan, version: str, expected_audio: bool

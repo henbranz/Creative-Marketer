@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+import creative_marketer.publishing.approval_binding as approval_module
 from creative_marketer.identity.application.authentication import (
     Actor,
     ActorKind,
@@ -20,6 +21,7 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
 )
 from creative_marketer.infrastructure.obsidian.bridge import relative_note_path
 from creative_marketer.knowledge.domain import KnowledgeNodeType
+from creative_marketer.publishing.approval_binding import BindPublicationApproval
 from creative_marketer.publishing.domain import (
     FAKE_PLATFORM_CAPABILITIES,
     PlatformCapabilities,
@@ -526,3 +528,69 @@ async def test_governed_executor_handles_replay_waiting_and_authority_mismatch()
     authority.operation_id = "op_" + "f" * 32
     with pytest.raises(ValueError, match="not authoritative"):
         await executor.submit(tenant_id, draft_id)
+
+
+@pytest.mark.asyncio
+async def test_publication_click_binds_and_approves_exact_gateway_action(monkeypatch) -> None:
+    tenant_id, user_id, draft_id, agent_id = uuid4(), uuid4(), uuid4(), uuid4()
+    context = ExecutionContext(
+        tenant_id,
+        Actor(ActorKind.USER, user_id),
+        user_id,
+        MembershipRole.OWNER,
+        MembershipStatus.ACTIVE,
+        "test",
+        AuthenticationAssurance(datetime.now(UTC), "test", "mfa"),
+    )
+    execution = ExecutablePublication(
+        context, agent_id, PublicationStatus.APPROVED, "op_" + "a" * 32
+    )
+
+    class Authority:
+        async def prepare(self, tenant, draft_value):
+            assert tenant == tenant_id and draft_value == draft_id
+            return execution
+
+    class Gateway:
+        result = GatewayResult(
+            GatewayStatus.AWAITING_APPROVAL,
+            execution.operation_id,
+            approval_request_id=uuid4(),
+        )
+
+        async def request(self, invocation, request):
+            assert invocation.requested_agent_definition_id == agent_id
+            assert request.raw_input == {"publication_draft_id": str(draft_id)}
+            assert request.operation_id == execution.operation_id
+            return self.result
+
+    gateway = Gateway()
+
+    async def gateway_factory():
+        return gateway
+
+    decisions = []
+
+    class Decider:
+        def __init__(self, _uow):
+            pass
+
+        async def __call__(self, decision_context, approval_id, decision, *, reason_code):
+            decisions.append((decision_context, approval_id, decision, reason_code))
+
+    monkeypatch.setattr(approval_module, "DecideApproval", Decider)
+    binder = BindPublicationApproval(Authority(), gateway_factory, SimpleNamespace())
+    await binder(context, draft_id)
+    assert decisions[0][1] == gateway.result.approval_request_id
+    assert decisions[0][3] == "publication_draft_approved"
+
+    gateway.result = GatewayResult(GatewayStatus.IN_PROGRESS, execution.operation_id)
+    await binder(context, draft_id)
+    gateway.result = GatewayResult(GatewayStatus.AWAITING_APPROVAL, execution.operation_id)
+    with pytest.raises(RuntimeError, match="binding is missing"):
+        await binder(context, draft_id)
+    gateway.result = GatewayResult(
+        GatewayStatus.DENIED, execution.operation_id, reason_code="permission_denied"
+    )
+    with pytest.raises(RuntimeError, match="permission_denied"):
+        await binder(context, draft_id)

@@ -896,7 +896,7 @@ describe("Product Workspace", () => {
     );
     expect(
       screen.getByRole("button", { name: /Command Center/ }),
-    ).toBeDisabled();
+    ).toBeEnabled();
     expect(screen.getByRole("button", { name: "Products" })).toBeEnabled();
   });
 

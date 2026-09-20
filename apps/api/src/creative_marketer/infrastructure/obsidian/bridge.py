@@ -53,6 +53,8 @@ TYPE_DIRECTORIES = {
     "commerce_operations_report": "Commerce/Operations",
     "commerce_action_proposal": "Commerce/Actions",
     "commerce_action_result": "Commerce/Actions",
+    "creative_cycle": "Cycles/Active",
+    "supervisor_report": "Cycles",
 }
 
 
@@ -63,8 +65,11 @@ def stable_filename(node_type: str, canonical_id: str) -> str:
     return f"{node_type.replace('_', '-')}--{digest}.md"
 
 
-def relative_note_path(node_type: str, canonical_id: str) -> Path:
-    return Path(TYPE_DIRECTORIES[node_type]) / stable_filename(node_type, canonical_id)
+def relative_note_path(node_type: str, canonical_id: str, status: str | None = None) -> Path:
+    directory = TYPE_DIRECTORIES[node_type]
+    if node_type == "creative_cycle" and status in {"COMPLETED", "CANCELLED", "FAILED"}:
+        directory = "Cycles/Completed"
+    return Path(directory) / stable_filename(node_type, canonical_id)
 
 
 def obsidian_open_uri(vault_name: str, node_type: str, canonical_id: str) -> str:
@@ -275,7 +280,9 @@ class ObsidianBridge:
                 )
         for node in nodes:
             key = f"{node['node_type']}:{node['canonical_id']}"
-            relative = relative_note_path(node["node_type"], node["canonical_id"])
+            relative = relative_note_path(
+                node["node_type"], node["canonical_id"], node.get("status")
+            )
             target = self._safe_path(relative)
             target.parent.mkdir(parents=True, exist_ok=True)
             existing = target.read_text(encoding="utf-8") if target.exists() else None
@@ -342,6 +349,7 @@ class ObsidianBridge:
                 "commerce_action_proposal",
                 "commerce_action_result",
             },
+            "Cycles.md": {"creative_cycle", "supervisor_report"},
         }
         all_entries = list(state["nodes"].values())
         for filename, types in groups.items():

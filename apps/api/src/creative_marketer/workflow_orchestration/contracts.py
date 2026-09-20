@@ -125,6 +125,30 @@ def generation_workflow_id(value: GenerationWorkflowInput) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class CreativeCycleWorkflowInput:
+    tenant_id: str
+    cycle_id: str
+    correlation_id: str
+
+    def __post_init__(self) -> None:
+        _uuid(self.tenant_id, "tenant_id")
+        _uuid(self.cycle_id, "cycle_id")
+        _uuid(self.correlation_id, "correlation_id")
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeCycleActivityResult:
+    cycle_id: str
+    status: str
+    stage: str
+    terminal: bool
+
+
+def creative_cycle_workflow_id(value: CreativeCycleWorkflowInput) -> str:
+    return f"tenant/{value.tenant_id}/creative-cycle/{value.cycle_id}"
+
+
+@dataclass(frozen=True, slots=True)
 class ResearcherWorkflowInput:
     tenant_id: str
     agent_run_id: str

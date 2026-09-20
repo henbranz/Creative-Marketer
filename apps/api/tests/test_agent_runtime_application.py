@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+import creative_marketer.agent_runtime.application as runtime_module
 from creative_marketer.agent_governance.domain import (
     AgentVersionConfiguration,
     BudgetPeriod,
@@ -28,11 +29,14 @@ from creative_marketer.agent_runtime.application import (
     ResearcherCapability,
     ResearcherPreparation,
     ResolvedResearcher,
+    SupervisorCapability,
+    SupervisorPreparation,
     WorkloadIdentity,
     build_context,
     build_creative_model_context,
     initial_creative_strategist_route,
     initial_intelligence_route,
+    initial_supervisor_route,
     select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
@@ -80,6 +84,13 @@ from creative_marketer.intelligence.domain import (
     CanonicalRef,
     DataTrustLevel,
     IntelligenceContextManifest,
+)
+from creative_marketer.orchestration.application import CyclePreflight, CycleReadinessEngine
+from creative_marketer.orchestration.domain import (
+    CreativeCycle,
+    SupervisorAction,
+    SupervisorContextManifest,
+    SupervisorReport,
 )
 from creative_marketer.research.domain import (
     EvidenceBlock,
@@ -273,6 +284,53 @@ def test_capability_registry_and_creative_validation_fail_closed() -> None:
         capability.validate_result({}, value, incomplete)
 
 
+def test_supervisor_capability_rejects_actions_outside_readiness_allowlist() -> None:
+    cycle = CreativeCycle(uuid4(), uuid4(), uuid4(), uuid4(), "sha256:" + "a" * 64)
+    readiness = CycleReadinessEngine().start(CyclePreflight(True, 60, None, None, 0, True))
+    manifest = SupervisorContextManifest(
+        cycle.tenant_id,
+        cycle.product_id,
+        cycle.id,
+        cycle.cycle_version,
+        cycle.current_stage,
+        readiness,
+        cycle.product_snapshot_id,
+        cycle.product_snapshot_digest,
+        cycle.artifacts,
+        (),
+    )
+    context = ModelContext(
+        "instructions",
+        {},
+        (),
+        manifest.semantic_digest,
+        capability_context={"manifest_object": manifest},
+    )
+    agent_run = replace(
+        run(),
+        tenant_id=cycle.tenant_id,
+        product_id=cycle.product_id,
+        agent_type="supervisor",
+        output_contract_key="orchestration.supervisor_report",
+        output_contract_version=1,
+    )
+    capability = SupervisorCapability()
+    output = {
+        "summary": "The cycle needs input.",
+        "current_stage_explanation": "The Product Brief is incomplete.",
+        "blockers": ["Complete the Brief."],
+        "attention_items": [],
+        "suggested_next_actions": [SupervisorAction.COMPLETE_BRIEF.value],
+        "completion_summary": None,
+    }
+    accepted = capability.validate_result(output, agent_run, context)
+    assert isinstance(accepted.value, SupervisorReport)
+    assert accepted.value.agent_run_id == agent_run.id
+    unsafe = dict(output, suggested_next_actions=[SupervisorAction.APPROVE_PUBLICATION.value])
+    with pytest.raises(ValueError, match="outside deterministic readiness"):
+        capability.validate_result(unsafe, agent_run, context)
+
+
 class MemoryRepository:
     def __init__(self, prepared):
         self.prepared = prepared
@@ -285,6 +343,7 @@ class MemoryRepository:
         self.budget_available = True
         self.creative_prepared = None
         self.intelligence_prepared = None
+        self.supervisor_prepared = None
 
     async def get_by_idempotency(self, key):
         return next((run for run in self.runs.values() if run.idempotency_key == key), None)
@@ -307,6 +366,15 @@ class MemoryRepository:
         return (
             self.intelligence_prepared
             if self.intelligence_prepared.product_snapshot.product_id == product_id
+            else None
+        )
+
+    async def prepare_supervisor(self, context_manifest_id):
+        if self.supervisor_prepared is None:
+            return None
+        return (
+            self.supervisor_prepared
+            if self.supervisor_prepared.manifest.id == context_manifest_id
             else None
         )
 
@@ -653,7 +721,14 @@ def service(prepared, provider):
     uow = MemoryUow(repository, audit, outbox)
     value = AgentRunService(
         lambda _tenant_id: uow,
-        ModelRouter((route(), initial_creative_strategist_route(), initial_intelligence_route())),
+        ModelRouter(
+            (
+                route(),
+                initial_creative_strategist_route(),
+                initial_intelligence_route(),
+                initial_supervisor_route(),
+            )
+        ),
         ModelProviderRegistry({"openai": provider}),
         IdentityProvider(),
     )
@@ -708,6 +783,202 @@ def intelligence_preparation(base: ResearcherPreparation) -> IntelligencePrepara
             "deterministic_limitations": ["Synthetic demo data."],
         },
     )
+
+
+def supervisor_preparation(base: ResearcherPreparation) -> SupervisorPreparation:
+    cfg = AgentVersionConfiguration(
+        display_name="Creative Manager Supervisor",
+        mission="Explain deterministic Creative Cycle state and the next safe human action.",
+        responsibilities=("Explain blockers",),
+        system_instructions="Explain bounded cycle state. Never change it.",
+        prompt_revision="creative_supervisor_v1_sol_policy",
+        model_policy=ModelPolicy(
+            "supervisor_balanced", ("text", "reasoning", "structured_output"), 1
+        ),
+        run_budget_policy=RunBudgetPolicy(1, 0, 12000, Decimal("0.112"), "USD"),
+        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 20, Decimal("2.24"), "USD"),
+        read_scopes=("orchestration.cycle",),
+        write_scopes=("orchestration.supervisor_report",),
+        memory_scopes=(),
+        allowed_tool_keys=(),
+        denied_tool_keys=(),
+        approval_policy_key="orchestration.explanatory_only",
+        output_contract_key="orchestration.supervisor_report",
+        output_contract_version=1,
+    )
+    cycle = CreativeCycle(
+        base.product_snapshot.tenant_id,
+        base.product_snapshot.product_id,
+        uuid4(),
+        base.product_snapshot.id,
+        base.product_snapshot.digest,
+    )
+    readiness = CycleReadinessEngine().start(CyclePreflight(True, 100, uuid4(), "x", 1, True))
+    manifest = SupervisorContextManifest(
+        cycle.tenant_id,
+        cycle.product_id,
+        cycle.id,
+        cycle.cycle_version,
+        cycle.current_stage,
+        readiness,
+        cycle.product_snapshot_id,
+        cycle.product_snapshot_digest,
+        cycle.artifacts,
+        (),
+    )
+    return SupervisorPreparation(
+        ResolvedResearcher(uuid4(), uuid4(), uuid4(), 1, cfg.configuration_digest, cfg),
+        base.product_snapshot,
+        manifest,
+        {"allowed_actions": []},
+    )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_request_uses_common_runtime_with_zero_tools_and_replay() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    runtime, repository, _, _ = service(
+        prepared,
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+        ),
+    )
+    repository.supervisor_prepared = supervisor_preparation(prepared)
+    manifest = repository.supervisor_prepared.manifest
+    with pytest.raises(AgentRunDenied):
+        await runtime.request_supervisor(
+            context(tenant_id, role=MembershipRole.MEMBER),
+            context_manifest_id=manifest.id,
+            idempotency_key="denied",
+        )
+    first = await runtime.request_supervisor(
+        context(tenant_id),
+        context_manifest_id=manifest.id,
+        idempotency_key="cycle:supervisor:v1",
+    )
+    replay = await runtime.request_supervisor(
+        context(tenant_id),
+        context_manifest_id=manifest.id,
+        idempotency_key="cycle:supervisor:v1",
+    )
+    assert replay.id == first.id
+    assert first.agent_type == "supervisor"
+    assert first.output_contract_key == "orchestration.supervisor_report"
+    assert first.input_context_refs[0]["id"] == str(manifest.id)
+    assert repository.reservations[0]["reserve_cost"] == Decimal("0.112")
+
+
+@pytest.mark.asyncio
+async def test_supervisor_request_fails_closed_for_stale_config_budget_and_insert_races(
+    monkeypatch,
+) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def values():
+        runtime, repository, _, _ = service(
+            prepared,
+            FakeModelProvider(
+                ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+            ),
+        )
+        repository.supervisor_prepared = supervisor_preparation(prepared)
+        return runtime, repository, repository.supervisor_prepared.manifest
+
+    runtime, repository, manifest = values()
+    with pytest.raises(ValueError, match="idempotency key"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key=" "
+        )
+    repository.supervisor_prepared = None
+    with pytest.raises(AgentRunNotReady, match="missing"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="missing"
+        )
+
+    runtime, repository, manifest = values()
+    bad_cfg = replace(repository.supervisor_prepared.supervisor.configuration, read_scopes=())
+    repository.supervisor_prepared = replace(
+        repository.supervisor_prepared,
+        supervisor=replace(
+            repository.supervisor_prepared.supervisor,
+            configuration=bad_cfg,
+            configuration_digest=bad_cfg.configuration_digest,
+        ),
+    )
+    with pytest.raises(AgentRunNotReady, match="invariants"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="bad-config"
+        )
+
+    runtime, repository, manifest = values()
+    cfg = repository.supervisor_prepared.supervisor.configuration
+    low_budget = replace(
+        cfg,
+        run_budget_policy=replace(cfg.run_budget_policy, max_cost=Decimal("0.000001")),
+    )
+    repository.supervisor_prepared = replace(
+        repository.supervisor_prepared,
+        supervisor=replace(
+            repository.supervisor_prepared.supervisor,
+            configuration=low_budget,
+            configuration_digest=low_budget.configuration_digest,
+        ),
+    )
+    with pytest.raises(BudgetExceeded, match="budget envelope"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="low-budget"
+        )
+
+    runtime, repository, manifest = values()
+    monkeypatch.setattr(
+        runtime_module,
+        "conservative_supervisor_input_token_bound",
+        lambda _context: 1_000_000,
+    )
+    with pytest.raises(BudgetExceeded, match="context exceeds"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="large-context"
+        )
+    monkeypatch.undo()
+
+    runtime, repository, manifest = values()
+    first = await runtime.request_supervisor(
+        context(tenant_id), context_manifest_id=manifest.id, idempotency_key="active-first"
+    )
+    assert (
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="active-second"
+        )
+    ).id == first.id
+    with pytest.raises(AgentRunNotReady, match="another request"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=uuid4(), idempotency_key="active-first"
+        )
+
+    runtime, repository, manifest = values()
+
+    async def lose_insert(_run):
+        return False
+
+    monkeypatch.setattr(repository, "add", lose_insert)
+    with pytest.raises(AgentRunConflict, match="won the race"):
+        await runtime.request_supervisor(
+            context(tenant_id), context_manifest_id=manifest.id, idempotency_key="lost-race"
+        )
+
+    runtime, repository, manifest = values()
+
+    async def winning_insert(run_value):
+        repository.runs[run_value.id] = run_value
+        return False
+
+    monkeypatch.setattr(repository, "add", winning_insert)
+    recovered = await runtime.request_supervisor(
+        context(tenant_id), context_manifest_id=manifest.id, idempotency_key="winning-race"
+    )
+    assert recovered.agent_type == "supervisor"
 
 
 @pytest.mark.asyncio

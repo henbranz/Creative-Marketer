@@ -238,3 +238,10 @@ response is terminal `OUTCOME_UNKNOWN` pending operator reconciliation.
 UTC schedule, honors cancellation before submit, invokes Tool Gateway-backed submit exactly once,
 and reconciles `SUBMITTED` or `OUTCOME_UNKNOWN` within a fixed deadline. PostgreSQL remains truth;
 workflow replay cannot authorize or create a duplicate post.
+
+## Creative Cycle workflow
+
+`CreativeCycleWorkflow` contains only tenant, cycle, and correlation IDs. Wake signals and a
+bounded fallback timer invoke one deterministic reconciliation. Each invocation reloads PostgreSQL
+and makes at most one transition or starts one cycle-scoped idempotent application action. Human
+checkpoint facts, not signals or Supervisor prose, authorize continuation. See ADR-041.

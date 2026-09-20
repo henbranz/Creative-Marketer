@@ -5,12 +5,14 @@ from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from creative_marketer.infrastructure.temporal.configuration import (
     COMMERCE_TASK_QUEUE,
+    PRODUCTION_TASK_QUEUE,
     WORKFLOW_TASK_QUEUE,
 )
 from creative_marketer.infrastructure.temporal.workflows import (
     AgentExecutionWorkflow,
     CommerceActionWorkflow,
     CommerceSyncWorkflow,
+    CreativeCycleWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaProductionWorkflow,
     PerformanceCollectionWorkflow,
@@ -21,6 +23,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
     CommerceActionWorkflowInput,
     CommerceSyncWorkflowInput,
+    CreativeCycleWorkflowInput,
     FinalCreativeAssemblyWorkflowInput,
     MeasurementWorkflowInput,
     MediaProductionWorkflowInput,
@@ -29,12 +32,41 @@ from creative_marketer.workflow_orchestration.contracts import (
     agent_execution_workflow_id,
     commerce_action_workflow_id,
     commerce_sync_workflow_id,
+    creative_cycle_workflow_id,
     final_creative_assembly_workflow_id,
     measurement_workflow_id,
     media_production_workflow_id,
     publication_workflow_id,
     researcher_workflow_id,
 )
+
+
+class TemporalCreativeCycleWorkflowStarter:
+    def __init__(self, client: Client, task_queue: str = WORKFLOW_TASK_QUEUE) -> None:
+        self._client, self._task_queue = client, task_queue
+
+    async def start_cycle(self, request: CreativeCycleWorkflowInput) -> None:
+        workflow_id = creative_cycle_workflow_id(request)
+        try:
+            await self._client.start_workflow(
+                CreativeCycleWorkflow.run,
+                request,
+                id=workflow_id,
+                task_queue=self._task_queue,
+            )
+        except WorkflowAlreadyStartedError:
+            handle = self._client.get_workflow_handle(workflow_id)
+            description = await handle.describe()
+            if description.status not in {
+                WorkflowExecutionStatus.RUNNING,
+                WorkflowExecutionStatus.COMPLETED,
+                WorkflowExecutionStatus.FAILED,
+            }:
+                raise
+
+    async def wake_cycle(self, request: CreativeCycleWorkflowInput) -> None:
+        handle = self._client.get_workflow_handle(creative_cycle_workflow_id(request))
+        await handle.signal("cycle_state_may_have_changed")
 
 
 class TemporalCommerceWorkflowStarter:
@@ -122,7 +154,7 @@ class TemporalAgentExecutionWorkflowStarter:
 
 
 class TemporalMediaProductionWorkflowStarter:
-    def __init__(self, client: Client, task_queue: str = WORKFLOW_TASK_QUEUE) -> None:
+    def __init__(self, client: Client, task_queue: str = PRODUCTION_TASK_QUEUE) -> None:
         self._client, self._task_queue = client, task_queue
 
     async def start_media_production(self, request: MediaProductionWorkflowInput) -> None:

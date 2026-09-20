@@ -83,6 +83,7 @@ from creative_marketer.production.domain import (
 from creative_marketer.production.service import ProductionService
 from creative_marketer.research.application import ResearchService
 from creative_marketer.research.domain import ResearchCategory
+from scripts.bootstrap_media_execution import media_execution_configuration
 from scripts.bootstrap_producer import producer_configuration
 from tests.integration.test_asset_library import asset, product_setup
 from tests.integration.test_catalog import owner_context, seed_catalog_identity
@@ -527,6 +528,21 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         context, producer.id, producer_configuration()
     )
     await ActivateAgentVersion(agent_registry_factory)(context, producer.id, producer_version.id)
+    media_principal = await CreateTenantAgentDefinition(agent_registry_factory)(
+        context,
+        agent_key="media_execution_workload",
+        agent_type="media_execution_workload",
+    )
+    media_principal_version = await CreateAgentVersion(agent_registry_factory)(
+        context,
+        media_principal.id,
+        media_execution_configuration(),
+    )
+    await ActivateAgentVersion(agent_registry_factory)(
+        context,
+        media_principal.id,
+        media_principal_version.id,
+    )
     async with uows(context.tenant_id) as uow:
         prepared_producer = await uow.runs.prepare_producer(concept.id)
         assert prepared_producer is not None

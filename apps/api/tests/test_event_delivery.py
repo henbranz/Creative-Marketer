@@ -191,6 +191,11 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         "commerce.action.proposed.v1",
         "commerce.report.created.v1",
         "commerce.sync.completed.v1",
+        "orchestration.cycle.created.v1",
+        "orchestration.cycle.stage_changed.v1",
+        "orchestration.cycle.blocked.v1",
+        "orchestration.cycle.completed.v1",
+        "orchestration.supervisor_report.created.v1",
     }
     (tmp_path / "bad.json").write_text(
         '{"$schema":"https://json-schema.org/draft/2020-12/schema",'

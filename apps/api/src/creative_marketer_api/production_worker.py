@@ -45,7 +45,7 @@ from creative_marketer.infrastructure.database.tool_governance_uow import (
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.temporal.activities import TemporalActivities
 from creative_marketer.infrastructure.temporal.client import TemporalMediaProductionWorkflowStarter
-from creative_marketer.infrastructure.temporal.configuration import WORKFLOW_TASK_QUEUE
+from creative_marketer.infrastructure.temporal.configuration import PRODUCTION_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.worker import connect_client
 from creative_marketer.infrastructure.temporal.workflows import MediaProductionWorkflow
 from creative_marketer.observability.ports import NullTelemetry
@@ -244,7 +244,7 @@ async def run() -> None:
     )
     async with Worker(
         client,
-        task_queue=WORKFLOW_TASK_QUEUE,
+        task_queue=PRODUCTION_TASK_QUEUE,
         workflows=[MediaProductionWorkflow],
         activities=[activities.execute_production_job],
     ):

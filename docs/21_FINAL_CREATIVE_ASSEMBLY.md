@@ -49,6 +49,15 @@ jobs, or decide a final.
 
 The assembly worker image pins its FFmpeg package layer and Noto font package independently from
 the API/web images. Start Temporal, then `make assembly-worker`. A missing renderer fails startup.
+Development/test workers use FFmpeg's bounded `ultrafast` encoding preset and `fast_bilinear`
+scaling plus a ten-minute per-step timeout floor so the full fake walkthrough can finish on
+constrained local Docker hosts;
+staging/production retain the versioned `medium`/`lanczos` quality profile. Both paths preserve the
+same 1080×1920, H.264, yuv420p, 24 fps output contract and validation.
+When both media providers are explicitly `fake`, the development/test worker treats their
+documented static placeholder bytes as synthetic stills: it renders each overlay boundary once and
+packet-loops that frame at 24 fps. This optimization is never enabled for a live provider, never
+changes the immutable timeline or visible text, and still passes the same final-output inspection.
 Safe browser failure codes include `ASSEMBLY_NOT_READY`, `ASSEMBLY_SOURCE_RIGHTS_CHANGED`,
 `ASSEMBLY_SOURCE_DIGEST_MISMATCH`, `ASSEMBLY_RENDER_FAILED`, `ASSEMBLY_RENDER_TIMEOUT`, and
 `ASSEMBLY_OUTPUT_INVALID`.

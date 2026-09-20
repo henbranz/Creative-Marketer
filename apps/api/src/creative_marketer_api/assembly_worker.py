@@ -104,7 +104,16 @@ async def run() -> None:
     settings = Settings()
     if settings.object_storage_backend != "s3":
         raise RuntimeError("Assembly worker requires private S3-compatible object storage")
-    renderer = FFmpegAssemblyRenderer()
+    renderer = FFmpegAssemblyRenderer(
+        encoding_preset="ultrafast" if settings.app_env in {"development", "test"} else "medium",
+        scaling_flags="fast_bilinear" if settings.app_env in {"development", "test"} else "lanczos",
+        minimum_timeout_seconds=600.0 if settings.app_env in {"development", "test"} else 30.0,
+        fake_placeholder_mode=(
+            settings.app_env in {"development", "test"}
+            and settings.media_image_provider == "fake"
+            and settings.media_video_provider == "fake"
+        ),
+    )
     await renderer.version()
     sessions = create_session_factory(str(settings.database_url))
     object_store = S3ObjectStore(

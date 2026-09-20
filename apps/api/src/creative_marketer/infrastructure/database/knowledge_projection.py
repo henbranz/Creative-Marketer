@@ -70,6 +70,10 @@ from creative_marketer.infrastructure.database.measurement_schema import (
     attribution_results,
     performance_snapshots,
 )
+from creative_marketer.infrastructure.database.orchestration_schema import (
+    creative_cycles,
+    supervisor_reports,
+)
 from creative_marketer.infrastructure.database.production_schema import (
     asset_lineage,
     generation_jobs,
@@ -245,6 +249,12 @@ class SqlAlchemyCanonicalKnowledgeReader:
                 ),
                 "experiment_decisions": select(experiment_decisions).where(
                     experiment_decisions.c.tenant_id == tenant
+                ),
+                "creative_cycles": select(creative_cycles).where(
+                    creative_cycles.c.tenant_id == tenant
+                ),
+                "supervisor_reports": select(supervisor_reports).where(
+                    supervisor_reports.c.tenant_id == tenant
                 ),
                 "commerce_connections": select(commerce_connections).where(
                     commerce_connections.c.tenant_id == tenant
@@ -1461,6 +1471,104 @@ class SqlAlchemyCanonicalKnowledgeReader:
                     },
                     tuple(relationships),
                     row["semantic_digest"],
+                )
+            )
+        reports_by_cycle: dict[object, list[Mapping[str, Any]]] = {}
+        for report in rows.get("supervisor_reports", []):
+            reports_by_cycle.setdefault(report["cycle_id"], []).append(report)
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.SUPERVISOR_REPORT,
+                    str(report["id"]),
+                    f"Supervisor Report {str(report['id'])[:8]}",
+                    "CREATED",
+                    report["created_at"],
+                    report["created_at"],
+                    {
+                        "summary": report["summary"],
+                        "current_stage_explanation": report["current_stage_explanation"],
+                        "blockers": report["blockers"],
+                        "attention_items": report["attention_items"],
+                        "suggested_next_actions": report["suggested_next_actions"],
+                        "completion_summary": report["completion_summary"],
+                    },
+                    (
+                        _rel(
+                            KnowledgeNodeType.CREATIVE_CYCLE,
+                            report["cycle_id"],
+                            "explains_cycle",
+                        ),
+                    ),
+                    report["semantic_digest"],
+                )
+            )
+        artifact_types = {
+            "research_snapshot_id": KnowledgeNodeType.RESEARCH_SNAPSHOT,
+            "creative_concept_set_id": KnowledgeNodeType.CREATIVE_CONCEPT_SET,
+            "approved_concept_id": KnowledgeNodeType.CREATIVE_CONCEPT,
+            "production_plan_id": KnowledgeNodeType.PRODUCTION_PLAN,
+            "final_creative_id": KnowledgeNodeType.FINAL_CREATIVE,
+            "publication_draft_id": KnowledgeNodeType.PUBLICATION_DRAFT,
+            "publication_id": KnowledgeNodeType.PUBLICATION,
+            "performance_snapshot_id": KnowledgeNodeType.PERFORMANCE_SNAPSHOT,
+            "intelligence_report_id": KnowledgeNodeType.INTELLIGENCE_REPORT,
+            "experiment_proposal_id": KnowledgeNodeType.EXPERIMENT_PROPOSAL,
+        }
+        for row in rows.get("creative_cycles", []):
+            bindings = row["artifact_bindings"] or {}
+            relationships = [
+                _rel(KnowledgeNodeType.PRODUCT, row["product_id"], "coordinates_product"),
+                _rel(
+                    KnowledgeNodeType.PRODUCT_KNOWLEDGE_SNAPSHOT,
+                    row["product_snapshot_id"],
+                    "binds_product_snapshot",
+                ),
+            ]
+            relationships.extend(
+                _rel(node_type, bindings[key], "binds_artifact")
+                for key, node_type in artifact_types.items()
+                if bindings.get(key)
+            )
+            if row["parent_cycle_id"]:
+                relationships.append(
+                    _rel(
+                        KnowledgeNodeType.CREATIVE_CYCLE,
+                        row["parent_cycle_id"],
+                        "continues_cycle",
+                    )
+                )
+            if row["source_experiment_proposal_id"]:
+                relationships.append(
+                    _rel(
+                        KnowledgeNodeType.EXPERIMENT_PROPOSAL,
+                        row["source_experiment_proposal_id"],
+                        "started_from_experiment",
+                    )
+                )
+            relationships.extend(
+                _rel(KnowledgeNodeType.SUPERVISOR_REPORT, report["id"], "has_report")
+                for report in reports_by_cycle.get(row["id"], [])
+            )
+            nodes.append(
+                KnowledgeNode(
+                    KnowledgeNodeType.CREATIVE_CYCLE,
+                    str(row["id"]),
+                    f"Creative Cycle {str(row['id'])[:8]}",
+                    row["status"],
+                    row["created_at"],
+                    row["updated_at"],
+                    {
+                        "current_stage": row["current_stage"],
+                        "mode": row["mode"],
+                        "provider_mode": "DEMO_FAKE",
+                        "state_machine_version": row["state_machine_version"],
+                        "cycle_version": row["cycle_version"],
+                        "product_snapshot_digest": row["product_snapshot_digest"],
+                        "artifact_bindings": bindings,
+                        "blocker_code": row["blocker_code"],
+                        "failure_code": row["failure_code"],
+                    },
+                    tuple(relationships),
                 )
             )
         for row in rows.get("commerce_connections", []):

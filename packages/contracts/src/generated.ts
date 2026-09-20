@@ -381,6 +381,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/creative-cycles/{cycle_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get */
+    get: operations["get_v1_creative_cycles__cycle_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative-cycles/{cycle_id}/cancel": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Cancel */
+    post: operations["cancel_v1_creative_cycles__cycle_id__cancel_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative-cycles/{cycle_id}/reconcile": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Reconcile */
+    post: operations["reconcile_v1_creative_cycles__cycle_id__reconcile_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative-cycles/{cycle_id}/supervisor-report": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Supervisor Report */
+    post: operations["supervisor_report_v1_creative_cycles__cycle_id__supervisor_report_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/creative/concept-sets/{set_id}": {
     parameters: {
       query?: never;
@@ -871,6 +939,57 @@ export interface paths {
     put?: never;
     /** Analyze */
     post: operations["analyze_v1_products__product_id__commerce_analyze_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/creative-cycles": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start */
+    post: operations["start_v1_products__product_id__creative_cycles_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/creative-cycles/active": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Active */
+    get: operations["active_v1_products__product_id__creative_cycles_active_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/products/{product_id}/creative-cycles/readiness": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Readiness */
+    get: operations["readiness_v1_products__product_id__creative_cycles_readiness_get"];
+    put?: never;
+    post?: never;
     delete?: never;
     options?: never;
     head?: never;
@@ -2501,6 +2620,75 @@ export interface components {
        */
       user_id: string;
     };
+    /** CycleResponse */
+    CycleResponse: {
+      /** Artifact Bindings */
+      artifact_bindings: {
+        [key: string]: string | null;
+      };
+      /** Blocker Code */
+      blocker_code: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Current Stage */
+      current_stage: string;
+      /** Cycle Version */
+      cycle_version: number;
+      /** Failure Code */
+      failure_code: string | null;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Mode */
+      mode: string;
+      /** Parent Cycle Id */
+      parent_cycle_id: string | null;
+      /** Product Changed After Start */
+      product_changed_after_start: boolean;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Product Snapshot Digest */
+      product_snapshot_digest: string;
+      /**
+       * Product Snapshot Id
+       * Format: uuid
+       */
+      product_snapshot_id: string;
+      /** Provider Mode */
+      provider_mode: string;
+      readiness?: components["schemas"]["ReadinessResponse"] | null;
+      /** Source Experiment Proposal Id */
+      source_experiment_proposal_id: string | null;
+      /** State Machine Version */
+      state_machine_version: string;
+      /** Status */
+      status: string;
+      /**
+       * Steps
+       * @default []
+       */
+      steps: components["schemas"]["StepResponse"][];
+      supervisor_report?:
+        components["schemas"]["SupervisorReportResponse"] | null;
+      /**
+       * Timeline
+       * @default []
+       */
+      timeline: components["schemas"]["TransitionResponse"][];
+      /**
+       * Updated At
+       * Format: date-time
+       */
+      updated_at: string;
+    };
     /** DecisionRequest */
     DecisionRequest: {
       /** Decision */
@@ -3529,6 +3717,15 @@ export interface components {
       /** Status */
       status: string;
     };
+    /** ReadinessResponse */
+    ReadinessResponse: {
+      /** Allowed Actions */
+      allowed_actions: string[];
+      /** Requirements */
+      requirements: components["schemas"]["RequirementResponse"][];
+      /** State */
+      state: string;
+    };
     /** RecommendedSourceResponse */
     RecommendedSourceResponse: {
       /** Category */
@@ -3596,6 +3793,19 @@ export interface components {
       semantic_digest: string;
       /** Summary */
       summary: string;
+    };
+    /** RequirementResponse */
+    RequirementResponse: {
+      /** Key */
+      key: string;
+      /** Message */
+      message: string;
+      /** Required */
+      required: boolean;
+      /** Resource Ref */
+      resource_ref: string | null;
+      /** State */
+      state: string;
     };
     /**
      * ResearchCategory
@@ -3980,6 +4190,74 @@ export interface components {
       | "GENERATE_IMAGE"
       | "GENERATE_VIDEO"
       | "MANUAL_CAPTURE";
+    /** StartCycleRequest */
+    StartCycleRequest: {
+      /** Parent Cycle Id */
+      parent_cycle_id?: string | null;
+      /** Source Experiment Proposal Id */
+      source_experiment_proposal_id?: string | null;
+    };
+    /** StepResponse */
+    StepResponse: {
+      /** Agent Run Id */
+      agent_run_id: string | null;
+      /** Artifact Ref */
+      artifact_ref: string | null;
+      /** Attempt */
+      attempt: number;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Failure Code */
+      failure_code: string | null;
+      /** Status */
+      status: string;
+      /** Step Key */
+      step_key: string;
+      /** Workflow Ref */
+      workflow_ref: string | null;
+    };
+    /** SupervisorReportResponse */
+    SupervisorReportResponse: {
+      /** Attention Items */
+      attention_items: string[];
+      /** Blockers */
+      blockers: string[];
+      /** Completion Summary */
+      completion_summary: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /** Current Stage Explanation */
+      current_stage_explanation: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Semantic Digest */
+      semantic_digest: string;
+      /** Suggested Next Actions */
+      suggested_next_actions: string[];
+      /** Summary */
+      summary: string;
+    };
+    /** SupervisorRunResponse */
+    SupervisorRunResponse: {
+      /** Agent Type */
+      agent_type: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /** Status */
+      status: string;
+    };
     /** SyncRequest */
     SyncRequest: {
       /** Idempotency Key */
@@ -3991,6 +4269,22 @@ export interface components {
      * @enum {string}
      */
     SyncType: "CATALOG" | "INVENTORY" | "ORDERS" | "ALL";
+    /** TransitionResponse */
+    TransitionResponse: {
+      /** From Stage */
+      from_stage: string | null;
+      /**
+       * Occurred At
+       * Format: date-time
+       */
+      occurred_at: string;
+      /** Reason Code */
+      reason_code: string;
+      /** Status */
+      status: string;
+      /** To Stage */
+      to_stage: string;
+    };
     /** UploadGrantResponse */
     UploadGrantResponse: {
       asset: components["schemas"]["AssetResponse"];
@@ -4968,6 +5262,146 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_v1_creative_cycles__cycle_id__get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        cycle_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  cancel_v1_creative_cycles__cycle_id__cancel_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        cycle_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  reconcile_v1_creative_cycles__cycle_id__reconcile_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        cycle_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  supervisor_report_v1_creative_cycles__cycle_id__supervisor_report_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        cycle_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SupervisorRunResponse"];
         };
       };
       /** @description Validation Error */
@@ -6130,6 +6564,122 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  start_v1_products__product_id__creative_cycles_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["StartCycleRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  active_v1_products__product_id__creative_cycles_active_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CycleResponse"];
+        };
+      };
+      /** @description No active cycle */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  readiness_v1_products__product_id__creative_cycles_readiness_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ReadinessResponse"];
         };
       };
       /** @description Validation Error */

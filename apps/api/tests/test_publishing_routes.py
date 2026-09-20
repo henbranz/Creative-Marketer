@@ -16,6 +16,11 @@ from creative_marketer_api.publishing_routes import (
 from tests.test_publishing_application import stack
 
 
+class ApprovalBinder:
+    async def __call__(self, context, draft_id):
+        del context, draft_id
+
+
 def endpoint(router, path: str, method: str):
     return next(
         route.endpoint for route in router.routes if route.path == path and method in route.methods
@@ -25,7 +30,7 @@ def endpoint(router, path: str, method: str):
 @pytest.mark.asyncio
 async def test_publishing_routes_expose_fake_lifecycle() -> None:
     context, service, repository, provider, _ = stack()
-    router = create_publishing_router(None, None, service, "test", None)
+    router = create_publishing_router(None, None, service, "test", None, ApprovalBinder())
     account = next(iter(repository.accounts.values()))
     accounts = await endpoint(router, "/v1/social/accounts", "GET")(context)
     assert accounts[0].provider == "fake"
@@ -79,7 +84,7 @@ async def test_publishing_routes_expose_fake_lifecycle() -> None:
 @pytest.mark.asyncio
 async def test_real_provider_activation_and_execution_are_unavailable() -> None:
     context, service, _, _, _ = stack()
-    router = create_publishing_router(None, None, service, "production", None)
+    router = create_publishing_router(None, None, service, "production", None, ApprovalBinder())
     with pytest.raises(HTTPException) as account_error:
         await endpoint(router, "/v1/social/accounts", "POST")(
             SocialAccountWrite(
@@ -101,7 +106,7 @@ async def test_real_provider_activation_and_execution_are_unavailable() -> None:
 async def test_route_errors_use_stable_safe_codes() -> None:
     context, service, _, _, _ = stack()
     context = replace(context, membership_role=MembershipRole.MEMBER)
-    router = create_publishing_router(None, None, service, "test", None)
+    router = create_publishing_router(None, None, service, "test", None, ApprovalBinder())
     with pytest.raises(HTTPException) as caught:
         await endpoint(router, "/v1/social/accounts", "POST")(
             SocialAccountWrite(
@@ -119,7 +124,7 @@ async def test_route_errors_use_stable_safe_codes() -> None:
 @pytest.mark.asyncio
 async def test_scheduled_cancel_reject_and_reconcile_routes() -> None:
     context, service, repository, _, _ = stack()
-    router = create_publishing_router(None, None, service, "development", None)
+    router = create_publishing_router(None, None, service, "development", None, ApprovalBinder())
     account = next(iter(repository.accounts.values()))
     scheduled = await endpoint(router, "/v1/products/{product_id}/publication-drafts", "POST")(
         repository.authority.product_id,
@@ -145,7 +150,7 @@ async def test_scheduled_cancel_reject_and_reconcile_routes() -> None:
     assert cancelled.status == "CANCELLED"
 
     context2, service2, repository2, _, _ = stack(behavior=FakeBehavior.OUTCOME_UNKNOWN)
-    router2 = create_publishing_router(None, None, service2, "test", None)
+    router2 = create_publishing_router(None, None, service2, "test", None, ApprovalBinder())
     account2 = next(iter(repository2.accounts.values()))
     draft = await endpoint(router2, "/v1/products/{product_id}/publication-drafts", "POST")(
         repository2.authority.product_id,
@@ -165,7 +170,7 @@ async def test_scheduled_cancel_reject_and_reconcile_routes() -> None:
     assert reconciled.status == "PUBLISHED"
 
     context3, service3, repository3, _, _ = stack()
-    router3 = create_publishing_router(None, None, service3, "test", None)
+    router3 = create_publishing_router(None, None, service3, "test", None, ApprovalBinder())
     account3 = next(iter(repository3.accounts.values()))
     rejected_draft = await endpoint(
         router3, "/v1/products/{product_id}/publication-drafts", "POST"
@@ -198,7 +203,7 @@ def test_schedule_request_validation_is_exact() -> None:
 @pytest.mark.asyncio
 async def test_route_failures_map_to_safe_not_found_and_conflict_codes() -> None:
     context, service, repository, _, _ = stack()
-    router = create_publishing_router(None, None, service, "test", None)
+    router = create_publishing_router(None, None, service, "test", None, ApprovalBinder())
     account = next(iter(repository.accounts.values()))
     with pytest.raises(HTTPException) as create_error:
         await endpoint(router, "/v1/products/{product_id}/publication-drafts", "POST")(

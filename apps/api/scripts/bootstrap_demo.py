@@ -109,6 +109,7 @@ from creative_marketer.production.application import initial_producer_route
 from creative_marketer.production.domain import ProductionPlanningRequest
 from creative_marketer.production.infrastructure.fakes import DEMO_MP4
 from creative_marketer.production.tool_contracts import media_tool_contracts
+from creative_marketer.publishing.tool_contracts import social_tool_contracts
 from creative_marketer.research.application import FetchedPage, ResearchService
 from creative_marketer.research.domain import ResearchCategory
 from creative_marketer.tool_governance.application import ResolveActiveTool
@@ -118,9 +119,17 @@ from scripts.bootstrap_intelligence import (
     INTELLIGENCE_PLATFORM_TEMPLATE_ID,
     intelligence_configuration,
 )
+from scripts.bootstrap_media_execution import media_execution_configuration
 from scripts.bootstrap_media_tools import run as bootstrap_media_tools
 from scripts.bootstrap_producer import producer_configuration
 from scripts.bootstrap_researcher import researcher_configuration
+from scripts.bootstrap_social_demo import run as bootstrap_social_demo
+from scripts.bootstrap_social_execution import social_execution_configuration
+from scripts.bootstrap_social_tools import run as bootstrap_social_tools
+from scripts.bootstrap_supervisor import (
+    SUPERVISOR_PLATFORM_TEMPLATE_ID,
+    supervisor_configuration,
+)
 
 TENANT_ID = uuid5(NAMESPACE_URL, "creative-marketer:local-demo:tenant")
 USER_ID = uuid5(NAMESPACE_URL, "creative-marketer:local-demo:user")
@@ -674,13 +683,32 @@ async def run() -> None:
     await _agent(
         registry, "creative_strategist", "creative_strategist", creative_strategist_configuration()
     )
-    producer_id = await _agent(registry, "producer", "producer", producer_configuration())
+    await _agent(registry, "producer", "producer", producer_configuration())
+    media_execution_id = await _agent(
+        registry,
+        "media_execution_workload",
+        "media_execution_workload",
+        media_execution_configuration(),
+    )
     await _agent(
         registry,
         "intelligence",
         "intelligence",
         intelligence_configuration(),
         INTELLIGENCE_PLATFORM_TEMPLATE_ID,
+    )
+    await _agent(
+        registry,
+        "supervisor",
+        "creative_supervisor",
+        supervisor_configuration(),
+        SUPERVISOR_PLATFORM_TEMPLATE_ID,
+    )
+    publishing_execution_id = await _agent(
+        registry,
+        "publishing_execution_workload",
+        "publishing_execution_workload",
+        social_execution_configuration(),
     )
     runtime = AgentRunService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
@@ -802,6 +830,8 @@ async def run() -> None:
         uuid5(NAMESPACE_URL, "creative-marketer:local-demo:platform")
     )
     await bootstrap_media_tools()
+    await bootstrap_social_tools()
+    await bootstrap_social_demo()
     tool_factory = SqlAlchemyToolRegistryUnitOfWorkFactory(sessions)
     permission_factory = SqlAlchemyPermissionUnitOfWorkFactory(sessions)
     policy = ToolPermissionVersionConfiguration(
@@ -811,14 +841,33 @@ async def run() -> None:
         tool = await ResolveActiveTool(tool_factory)(key)
         async with permission_factory(context.tenant_context()) as uow:
             existing_permission = await uow.permissions.get_for_subject(
-                producer_id, tool.definition_id
+                media_execution_id, tool.definition_id
             )
         if existing_permission is None:
             permission = await CreateToolPermission(permission_factory)(
-                context, producer_id, tool.definition_id
+                context, media_execution_id, tool.definition_id
             )
             version = await CreateToolPermissionVersion(permission_factory)(
                 context, permission.id, policy
+            )
+            await ActivateToolPermissionVersion(permission_factory)(
+                context, permission.id, version.id
+            )
+    social_policy = ToolPermissionVersionConfiguration(
+        PermissionEffect.GRANT, ("social.publishing",), ("development",)
+    )
+    for key in (contract.tool_key for contract in social_tool_contracts()):
+        tool = await ResolveActiveTool(tool_factory)(key)
+        async with permission_factory(context.tenant_context()) as uow:
+            existing_permission = await uow.permissions.get_for_subject(
+                publishing_execution_id, tool.definition_id
+            )
+        if existing_permission is None:
+            permission = await CreateToolPermission(permission_factory)(
+                context, publishing_execution_id, tool.definition_id
+            )
+            version = await CreateToolPermissionVersion(permission_factory)(
+                context, permission.id, social_policy
             )
             await ActivateToolPermissionVersion(permission_factory)(
                 context, permission.id, version.id

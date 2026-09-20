@@ -67,7 +67,13 @@ async def test_assembly_worker_composes_renderer_executor_temporal_and_bridge(mo
     monkeypatch.setattr(worker_module, "AssetService", lambda *_: object())
     monkeypatch.setattr(worker_module, "AssemblyJobExecutor", lambda *_: object())
     renderer = SimpleNamespace(version=AsyncMock(return_value="ffmpeg-7.1"))
-    monkeypatch.setattr(worker_module, "FFmpegAssemblyRenderer", lambda: renderer)
+    renderer_options = {}
+
+    def create_renderer(**options):
+        renderer_options.update(options)
+        return renderer
+
+    monkeypatch.setattr(worker_module, "FFmpegAssemblyRenderer", create_renderer)
     client = object()
     monkeypatch.setattr(worker_module, "connect_client", AsyncMock(return_value=client))
     bridge = AsyncMock()
@@ -86,6 +92,12 @@ async def test_assembly_worker_composes_renderer_executor_temporal_and_bridge(mo
 
     monkeypatch.setattr(worker_module, "Worker", WorkerContext)
     await run()
+    assert renderer_options == {
+        "encoding_preset": "ultrafast",
+        "scaling_flags": "fast_bilinear",
+        "minimum_timeout_seconds": 600.0,
+        "fake_placeholder_mode": False,
+    }
     renderer.version.assert_awaited_once()
     bridge.assert_awaited_once()
 

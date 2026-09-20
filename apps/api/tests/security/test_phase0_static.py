@@ -472,6 +472,21 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "commerce.sync.completed.v1": (
             "sha256:a4f1f967b1444f126bcc9b463487f086b5a09a3f5d9b52f0521159fa4ecdb9d2"
         ),
+        "orchestration.cycle.blocked.v1": (
+            "sha256:866cccc6bcf940c8838eba6f84829d84f582d102ee1c287c9a7d484ff80b1d05"
+        ),
+        "orchestration.cycle.completed.v1": (
+            "sha256:9832ded9bfb90346ef1210dd571b805b21f5b73881e0503b01cce453f2b27b9a"
+        ),
+        "orchestration.cycle.created.v1": (
+            "sha256:34bc8bbef34648119ba2dc33d3ac38d2d3df2b250115c29296fdcd815b83ede8"
+        ),
+        "orchestration.cycle.stage_changed.v1": (
+            "sha256:63b3473b957040a5c2a585c88a7fc3c5b197abc1f4ccb6160f943b63857dec4c"
+        ),
+        "orchestration.supervisor_report.created.v1": (
+            "sha256:69bfdd9ec4e0b7a52bb226b4c3caec14a4eb4fc669ffb2e6a04d845e5718b1a8"
+        ),
     }
     schema_root = PRODUCT_SOURCE / "events" / "schemas"
     actual = {
@@ -487,6 +502,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260919_0028"]
+    assert script.get_heads() == ["20260919_0029"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

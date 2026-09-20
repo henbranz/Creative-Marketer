@@ -22,10 +22,12 @@ from creative_marketer.agent_runtime.application import (
     ProducerPreparation,
     ResearcherPreparation,
     ResolvedResearcher,
+    SupervisorPreparation,
     build_commerce_model_context,
     build_creative_model_context,
     build_intelligence_model_context,
     build_producer_model_context,
+    build_supervisor_model_context,
 )
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
@@ -138,6 +140,10 @@ from creative_marketer.infrastructure.database.measurement_schema import (
     performance_observations,
     performance_snapshots,
 )
+from creative_marketer.infrastructure.database.orchestration_schema import (
+    supervisor_context_manifests,
+    supervisor_reports,
+)
 from creative_marketer.infrastructure.database.production_schema import (
     generation_segments,
     production_plans,
@@ -167,6 +173,16 @@ from creative_marketer.intelligence.domain import (
     IntelligenceResult,
     PerformanceComparison,
     build_comparisons,
+)
+from creative_marketer.orchestration.domain import (
+    CycleArtifacts,
+    CycleReadiness,
+    CycleStage,
+    ReadinessRequirement,
+    ReadinessState,
+    SupervisorAction,
+    SupervisorContextManifest,
+    SupervisorReport,
 )
 from creative_marketer.production.application import production_context_from_payload
 from creative_marketer.production.domain import ProductionPlan, ProductionPlanningRequest
@@ -294,6 +310,50 @@ def _run_values(value: AgentRun) -> dict[str, object]:
         "result_ref": value.result_ref,
         "failure_code": value.failure_code,
     }
+
+
+def _supervisor_manifest(row: Mapping[str, object]) -> SupervisorContextManifest:
+    payload = cast(Mapping[str, object], row["manifest"])
+    readiness_payload = cast(Mapping[str, object], payload["readiness"])
+    requirements = tuple(
+        ReadinessRequirement(
+            str(item["key"]),
+            ReadinessState(str(item["state"])),
+            str(item["message"]),
+            bool(item["required"]),
+            str(item["resource_ref"]) if item.get("resource_ref") else None,
+        )
+        for item in cast(list[Mapping[str, object]], readiness_payload["requirements"])
+    )
+    artifacts_payload = cast(Mapping[str, object], payload["artifacts"])
+    artifacts = CycleArtifacts(
+        **{key: UUID(str(value)) if value else None for key, value in artifacts_payload.items()}
+    )
+    readiness = CycleReadiness(
+        ReadinessState(str(readiness_payload["state"])),
+        requirements,
+        tuple(
+            SupervisorAction(str(item))
+            for item in cast(list[object], readiness_payload["allowed_actions"])
+        ),
+    )
+    return SupervisorContextManifest(
+        cast(UUID, row["tenant_id"]),
+        cast(UUID, row["product_id"]),
+        cast(UUID, row["cycle_id"]),
+        int(cast(int, row["cycle_version"])),
+        CycleStage(str(row["current_stage"])),
+        readiness,
+        UUID(str(payload["product_snapshot_id"])),
+        str(payload["product_snapshot_digest"]),
+        artifacts,
+        tuple(str(item) for item in cast(list[object], payload["pending_approvals"])),
+        str(payload["provider_mode"]),
+        int(cast(int, row["schema_version"])),
+        cast(UUID, row["id"]),
+        str(row["semantic_digest"]),
+        cast(datetime, row["created_at"]),
+    )
 
 
 def _attempt(row: object) -> ModelAttempt:
@@ -1389,6 +1449,127 @@ class SqlAlchemyAgentRunRepository:
             resolved, product, manifest, mapping["connection_id"], inventories, orders, payload
         )
 
+    async def prepare_supervisor(self, context_manifest_id: UUID) -> SupervisorPreparation | None:
+        manifest_row = (
+            (
+                await self._session.execute(
+                    select(supervisor_context_manifests).where(
+                        supervisor_context_manifests.c.id == context_manifest_id
+                    )
+                )
+            )
+            .mappings()
+            .one_or_none()
+        )
+        if manifest_row is None:
+            return None
+        manifest = _supervisor_manifest(cast(Mapping[str, object], manifest_row))
+        requested_rows = (
+            await self._session.execute(
+                select(agent_definitions)
+                .where(
+                    agent_definitions.c.scope_kind == "tenant",
+                    agent_definitions.c.tenant_id.is_not(None),
+                    agent_definitions.c.agent_type == "supervisor",
+                    agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                )
+                .order_by(agent_definitions.c.created_at)
+                .limit(2)
+            )
+        ).all()
+        if len(requested_rows) != 1:
+            return None
+        requested = requested_rows[0]._mapping
+        resolved_id = requested["id"]
+        activation = (
+            await self._session.execute(
+                select(agent_activations).where(agent_activations.c.definition_id == resolved_id)
+            )
+        ).first()
+        if activation is None and requested["platform_template_id"] is not None:
+            resolved_id = requested["platform_template_id"]
+            activation = (
+                await self._session.execute(
+                    select(agent_activations)
+                    .join(
+                        agent_definitions,
+                        agent_definitions.c.id == agent_activations.c.definition_id,
+                    )
+                    .where(
+                        agent_activations.c.definition_id == resolved_id,
+                        agent_definitions.c.status == AgentDefinitionStatus.ACTIVE.value,
+                    )
+                )
+            ).first()
+        if activation is None:
+            return None
+        version_row = (
+            await self._session.execute(
+                select(agent_versions).where(
+                    agent_versions.c.id == activation._mapping["active_version_id"]
+                )
+            )
+        ).first()
+        snapshot_row = (
+            await self._session.execute(
+                select(product_knowledge_snapshots).where(
+                    product_knowledge_snapshots.c.id == manifest.product_snapshot_id
+                )
+            )
+        ).first()
+        if version_row is None or snapshot_row is None:
+            return None
+        s = snapshot_row._mapping
+        product = ProductKnowledgeSnapshot(
+            id=s["id"],
+            tenant_id=s["tenant_id"],
+            product_id=s["product_id"],
+            schema_version=s["schema_version"],
+            source_revision=s["source_revision"],
+            content=s["content"],
+            digest=s["digest"],
+            created_by=s["created_by"],
+            created_at=s["created_at"],
+        )
+        if product.product_id != manifest.product_id:
+            return None
+        v = version_row._mapping
+        resolved = ResolvedResearcher(
+            requested["id"],
+            resolved_id,
+            v["id"],
+            v["version_number"],
+            v["configuration_digest"],
+            _configuration(v),
+        )
+        payload = {
+            "cycle": {
+                "id": str(manifest.cycle_id),
+                "version": manifest.cycle_version,
+                "stage": manifest.current_stage.value,
+                "product_snapshot_id": str(manifest.product_snapshot_id),
+                "product_snapshot_digest": manifest.product_snapshot_digest,
+                "artifacts": manifest.artifacts.as_dict(),
+            },
+            "readiness": {
+                "state": manifest.readiness.state.value,
+                "requirements": [
+                    {
+                        "key": item.key,
+                        "state": item.state.value,
+                        "message": item.message,
+                        "required": item.required,
+                        "resource_ref": item.resource_ref,
+                    }
+                    for item in manifest.readiness.requirements
+                ],
+                "allowed_actions": [item.value for item in manifest.readiness.allowed_actions],
+            },
+            "pending_approvals": list(manifest.pending_approvals),
+            "provider_mode": manifest.provider_mode,
+        }
+        return SupervisorPreparation(resolved, product, manifest, payload)
+
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None:
         concept_row = (
             await self._session.execute(select(concepts).where(concepts.c.id == concept_id))
@@ -1907,6 +2088,89 @@ class SqlAlchemyAgentRunRepository:
         s = snapshot_row._mapping
         if s["digest"] != run.product_snapshot_digest:
             raise ValueError("bound Product snapshot digest mismatch")
+        if run.agent_type == "supervisor":
+            supervisor_manifest_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "supervisor_context_manifest"
+                ),
+                None,
+            )
+            if supervisor_manifest_ref is None:
+                raise ValueError("Supervisor run context reference is incomplete")
+            supervisor_manifest_row = (
+                (
+                    await self._session.execute(
+                        select(supervisor_context_manifests).where(
+                            supervisor_context_manifests.c.id
+                            == UUID(str(supervisor_manifest_ref["id"]))
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            supervisor_manifest = _supervisor_manifest(
+                cast(Mapping[str, object], supervisor_manifest_row)
+            )
+            if (
+                supervisor_manifest.semantic_digest != supervisor_manifest_ref["digest"]
+                or supervisor_manifest.semantic_digest != run.input_context_digest
+            ):
+                raise ValueError("bound Supervisor manifest digest mismatch")
+            product = ProductKnowledgeSnapshot(
+                id=s["id"],
+                tenant_id=s["tenant_id"],
+                product_id=s["product_id"],
+                schema_version=s["schema_version"],
+                source_revision=s["source_revision"],
+                content=s["content"],
+                digest=s["digest"],
+                created_by=s["created_by"],
+                created_at=s["created_at"],
+            )
+            supervisor_preparation = SupervisorPreparation(
+                ResolvedResearcher(
+                    run.requested_agent_definition_id,
+                    run.resolved_agent_definition_id,
+                    run.agent_version_id,
+                    run.agent_version_number,
+                    run.agent_configuration_digest,
+                    _configuration(v),
+                ),
+                product,
+                supervisor_manifest,
+                {
+                    "cycle": {
+                        "id": str(supervisor_manifest.cycle_id),
+                        "version": supervisor_manifest.cycle_version,
+                        "stage": supervisor_manifest.current_stage.value,
+                        "product_snapshot_id": str(supervisor_manifest.product_snapshot_id),
+                        "product_snapshot_digest": supervisor_manifest.product_snapshot_digest,
+                        "artifacts": supervisor_manifest.artifacts.as_dict(),
+                    },
+                    "readiness": {
+                        "state": supervisor_manifest.readiness.state.value,
+                        "requirements": [
+                            {
+                                "key": item.key,
+                                "state": item.state.value,
+                                "message": item.message,
+                                "required": item.required,
+                                "resource_ref": item.resource_ref,
+                            }
+                            for item in supervisor_manifest.readiness.requirements
+                        ],
+                        "allowed_actions": [
+                            item.value for item in supervisor_manifest.readiness.allowed_actions
+                        ],
+                    },
+                    "pending_approvals": list(supervisor_manifest.pending_approvals),
+                    "provider_mode": supervisor_manifest.provider_mode,
+                },
+            )
+            return build_supervisor_model_context(supervisor_preparation)
         if run.agent_type == "commerce_operations":
             manifest_ref = next(
                 (
@@ -2744,11 +3008,14 @@ class SqlAlchemyAgentRunRepository:
                 ProductionPlan,
                 IntelligenceResult,
                 CommerceAgentResult,
+                SupervisorReport,
             ),
         ):
             raise ValueError("unsupported capability result type")
         now = datetime.now(UTC)
-        if isinstance(snapshot, CommerceAgentResult):
+        if isinstance(snapshot, SupervisorReport):
+            result_ref = f"supervisor-report://{snapshot.id}"
+        elif isinstance(snapshot, CommerceAgentResult):
             result_ref = f"commerce-report://{snapshot.report.id}"
         elif isinstance(snapshot, IntelligenceResult):
             result_ref = f"intelligence-report://{snapshot.report.id}"
@@ -2784,7 +3051,28 @@ class SqlAlchemyAgentRunRepository:
         ).scalar_one_or_none()
         if attempt_row is None:
             raise AgentRunRecoveryConflict("stale model attempt cannot persist success")
-        if isinstance(snapshot, CommerceAgentResult):
+        if isinstance(snapshot, SupervisorReport):
+            await self._session.execute(
+                insert(supervisor_reports).values(
+                    id=snapshot.id,
+                    tenant_id=snapshot.tenant_id,
+                    product_id=snapshot.product_id,
+                    cycle_id=snapshot.cycle_id,
+                    context_manifest_id=snapshot.context_manifest_id,
+                    context_manifest_digest=snapshot.context_manifest_digest,
+                    agent_run_id=snapshot.agent_run_id,
+                    summary=snapshot.summary,
+                    current_stage_explanation=snapshot.current_stage_explanation,
+                    blockers=list(snapshot.blockers),
+                    attention_items=list(snapshot.attention_items),
+                    suggested_next_actions=[item.value for item in snapshot.suggested_next_actions],
+                    completion_summary=snapshot.completion_summary,
+                    semantic_digest=snapshot.semantic_digest,
+                    schema_version=snapshot.schema_version,
+                    created_at=snapshot.created_at,
+                )
+            )
+        elif isinstance(snapshot, CommerceAgentResult):
             commerce_report = snapshot.report
             await self._session.execute(
                 insert(commerce_reports).values(

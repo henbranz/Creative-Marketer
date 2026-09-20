@@ -47,6 +47,7 @@ from creative_marketer.production.domain import (
 from creative_marketer.production.execution import ExecutableGeneration
 from creative_marketer.production.media import MaterializedReference
 
+from .agent_governance_schema import agent_definitions
 from .agent_runtime_schema import agent_runs, research_snapshots
 from .audit import PostgresAuditWriter
 from .catalog_schema import assets, product_knowledge_snapshots, products
@@ -444,6 +445,21 @@ class SqlAlchemyGenerationAuthority:
                 .where(agent_runs.c.id == run_id)
             )
         ).first()
+        principals = (
+            (
+                await session.execute(
+                    select(agent_definitions.c.id).where(
+                        agent_definitions.c.tenant_id == row.tenant_id,
+                        agent_definitions.c.agent_type == "media_execution_workload",
+                        agent_definitions.c.status == "active",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+            if row is not None
+            else ()
+        )
         if (
             row is None
             or row.initiated_by_actor_kind != "user"
@@ -452,6 +468,8 @@ class SqlAlchemyGenerationAuthority:
             or row.status != "active"
         ):
             raise ProductionPermissionDenied("initiating user authority is no longer active")
+        if len(principals) != 1:
+            raise ProductionPermissionDenied("media execution principal is unavailable")
         context = ExecutionContext(
             tenant_id=row.tenant_id,
             actor=Actor(ActorKind.WORKLOAD, self._workload.actor_id),
@@ -461,7 +479,7 @@ class SqlAlchemyGenerationAuthority:
             environment=self._workload.environment,
             authentication=AuthenticationAssurance(datetime.now(UTC), "workload", "deployment"),
         )
-        return context, row.requested_agent_definition_id
+        return context, principals[0]
 
     async def _references(
         self, session: AsyncSession, job: GenerationJob

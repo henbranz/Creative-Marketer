@@ -173,6 +173,64 @@ export interface FinalCreative {
   decision_state: string | null;
   created_at: string;
 }
+export interface CycleReadinessRequirement {
+  key: string;
+  state: "READY" | "BLOCKED" | "WAITING" | "COMPLETED";
+  message: string;
+  required: boolean;
+  resource_ref: string | null;
+}
+export interface CycleReadiness {
+  state: "READY" | "BLOCKED" | "WAITING" | "COMPLETED";
+  requirements: CycleReadinessRequirement[];
+  allowed_actions: string[];
+}
+export interface CreativeCycle {
+  id: string;
+  product_id: string;
+  status: string;
+  current_stage: string;
+  mode: "ASSISTED";
+  product_snapshot_id: string;
+  product_snapshot_digest: string;
+  product_changed_after_start: boolean;
+  artifact_bindings: Record<string, string | null>;
+  parent_cycle_id: string | null;
+  source_experiment_proposal_id: string | null;
+  blocker_code: string | null;
+  failure_code: string | null;
+  state_machine_version: "creative-cycle-v1";
+  cycle_version: number;
+  provider_mode: "DEMO_FAKE";
+  created_at: string;
+  updated_at: string;
+  readiness: CycleReadiness | null;
+  steps: {
+    step_key: string;
+    attempt: number;
+    status: string;
+    agent_run_id: string | null;
+    failure_code: string | null;
+    created_at: string;
+  }[];
+  timeline: {
+    from_stage: string | null;
+    to_stage: string;
+    status: string;
+    reason_code: string;
+    occurred_at: string;
+  }[];
+  supervisor_report: {
+    id: string;
+    summary: string;
+    current_stage_explanation: string;
+    blockers: string[];
+    attention_items: string[];
+    suggested_next_actions: string[];
+    completion_summary: string | null;
+    created_at: string;
+  } | null;
+}
 export interface SocialAccount {
   id: string;
   platform: "facebook" | "instagram" | "tiktok";
@@ -445,6 +503,51 @@ export const catalogApi = {
     request<Snapshot>(session, `/v1/products/${productId}/snapshots`, {
       method: "POST",
     }),
+  getCycleReadiness: (session: Session, productId: string) =>
+    request<CycleReadiness>(
+      session,
+      `/v1/products/${productId}/creative-cycles/readiness`,
+    ),
+  getActiveCycle: async (session: Session, productId: string) => {
+    const response = await fetch(
+      `${getPublicConfig().apiBaseUrl}/v1/products/${productId}/creative-cycles/active`,
+      {
+        headers: {
+          Authorization: `Bearer ${session.credential}`,
+          "Content-Type": "application/json",
+          "X-Tenant-ID": session.tenantId,
+        },
+      },
+    );
+    if (response.status === 204) return null;
+    if (!response.ok)
+      throw new ApiError(response.status, await readApiError(response));
+    return (await response.json()) as CreativeCycle;
+  },
+  startCreativeCycle: (session: Session, productId: string) =>
+    request<CreativeCycle>(
+      session,
+      `/v1/products/${productId}/creative-cycles`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  reconcileCreativeCycle: (session: Session, cycleId: string) =>
+    request<CreativeCycle>(
+      session,
+      `/v1/creative-cycles/${cycleId}/reconcile`,
+      {
+        method: "POST",
+      },
+    ),
+  cancelCreativeCycle: (session: Session, cycleId: string) =>
+    request<CreativeCycle>(session, `/v1/creative-cycles/${cycleId}/cancel`, {
+      method: "POST",
+    }),
+  createSupervisorReport: (session: Session, cycleId: string) =>
+    request<Pick<AgentRun, "id" | "status" | "agent_type">>(
+      session,
+      `/v1/creative-cycles/${cycleId}/supervisor-report`,
+      { method: "POST" },
+    ),
   listAssets: (session: Session, productId: string) =>
     request<Asset[]>(session, `/v1/products/${productId}/assets`),
   createAsset: (session: Session, value: AssetCreate) =>

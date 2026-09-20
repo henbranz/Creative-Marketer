@@ -20,6 +20,8 @@ import {
   type BriefWrite,
   type CreativeConcept,
   type CreativeConceptSet,
+  type CreativeCycle,
+  type CycleReadiness,
   type CommerceWorkspace,
   type FinalCreative,
   type IntelligenceReport,
@@ -202,6 +204,278 @@ function EmptyPanel({ tab }: { tab: string }) {
         `${tab} will appear here when its product capability is introduced.`}
       <span className="coming">Coming in a future product slice</span>
     </EmptyState>
+  );
+}
+
+const cycleMilestones = [
+  ["Product", ["CREATED", "CHECKING_READINESS", "BLOCKED"]],
+  ["Research", ["RESEARCHING"]],
+  ["Concepts", ["CREATIVE_STRATEGY", "AWAITING_CONCEPT_APPROVAL"]],
+  [
+    "Production",
+    ["PRODUCTION_PLANNING", "AWAITING_PRODUCTION_APPROVAL", "GENERATING_MEDIA"],
+  ],
+  [
+    "Final Creative",
+    ["ASSEMBLING_FINAL_CREATIVE", "AWAITING_FINAL_CREATIVE_APPROVAL"],
+  ],
+  [
+    "Publish",
+    [
+      "AWAITING_PUBLICATION_INPUT",
+      "AWAITING_PUBLICATION_APPROVAL",
+      "PUBLISHING",
+    ],
+  ],
+  ["Performance", ["MEASURING"]],
+  ["Insights", ["INTELLIGENCE", "AWAITING_EXPERIMENT_DECISION", "COMPLETED"]],
+] as const;
+
+function CommandCenterPanel({
+  workspace,
+  onOpenTab,
+}: {
+  workspace: Workspace;
+  onOpenTab: (tab: string) => void;
+}) {
+  const session = useMemo(() => readSession(), []);
+  const [cycle, setCycle] = useState<CreativeCycle | null>(null);
+  const [readiness, setReadiness] = useState<CycleReadiness | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const safeCycleError = (caught: unknown) => {
+    const code = caught instanceof Error ? caught.message : "";
+    if (code === "model_route_unavailable") {
+      return "The local Agent worker is not configured for demo execution. Start the fake Agent worker, then check progress again.";
+    }
+    if (code === "agent_run_not_ready") {
+      return "This step is waiting for required product or research context. Review the readiness details below.";
+    }
+    return code || "The cycle could not be updated.";
+  };
+  const refresh = useCallback(async () => {
+    const [nextReadiness, active] = await Promise.all([
+      catalogApi.getCycleReadiness(session, workspace.product.id),
+      catalogApi.getActiveCycle(session, workspace.product.id),
+    ]);
+    setReadiness(nextReadiness);
+    setCycle(active);
+  }, [session, workspace.product.id]);
+  useEffect(() => {
+    queueMicrotask(
+      () =>
+        void refresh().catch(() =>
+          setError("Cycle status could not be loaded."),
+        ),
+    );
+  }, [refresh]);
+  useEffect(() => {
+    if (!cycle || ["COMPLETED", "CANCELLED", "FAILED"].includes(cycle.status)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refresh().catch(() => undefined);
+    }, 3_000);
+    return () => window.clearInterval(timer);
+  }, [cycle, refresh]);
+  const execute = async (operation: () => Promise<unknown>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await operation();
+      await refresh();
+    } catch (caught) {
+      setError(safeCycleError(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const stageIndex = cycleMilestones.findIndex(([, stages]) =>
+    (stages as readonly string[]).includes(cycle?.current_stage ?? ""),
+  );
+  const actionTab: Record<string, string> = {
+    COMPLETE_BRIEF: "Brief",
+    ADD_RESEARCH_SOURCE: "Research",
+    APPROVE_CONCEPT: "Creatives",
+    APPROVE_PRODUCTION_PLAN: "Production",
+    PREPARE_FINAL_ASSEMBLY: "Production",
+    REVIEW_FINAL_CREATIVE: "Production",
+    PREPARE_PUBLICATION: "Published",
+    APPROVE_PUBLICATION: "Published",
+    WAIT_FOR_MEASUREMENT: "Performance",
+    REVIEW_INSIGHTS: "Insights",
+    REVIEW_EXPERIMENT: "Insights",
+  };
+  return (
+    <section
+      className="command-center"
+      aria-label="Creative Cycle Command Center"
+    >
+      <header className="command-hero">
+        <div>
+          <p className="eyebrow">Creative Manager · Supervisor</p>
+          <h2>One safe path from product truth to the next experiment.</h2>
+          <p>
+            Creative intelligence for modern growth. Human decisions remain
+            yours.
+          </p>
+        </div>
+        <StatusBadge status="DEMO / FAKE" />
+      </header>
+      <p className="demo-disclosure">
+        Demo providers — no external posting or paid generation
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {!cycle ? (
+        <div className="cycle-start-card">
+          <h3>Start a Creative Cycle</h3>
+          <p>
+            The server checks Product, evidence, and Agent readiness before
+            anything starts.
+          </p>
+          <div className="readiness-list">
+            {readiness?.requirements.map((item) => (
+              <div key={item.key}>
+                <StatusBadge status={item.state} />
+                <span>{item.message}</span>
+              </div>
+            ))}
+          </div>
+          <Button
+            variant="primary"
+            disabled={busy || readiness?.state !== "READY"}
+            onClick={() =>
+              void execute(() =>
+                catalogApi.startCreativeCycle(session, workspace.product.id),
+              )
+            }
+          >
+            {busy ? "Starting…" : "Start Creative Cycle"}
+          </Button>
+          {readiness?.allowed_actions.map((action) => (
+            <button
+              className="secondary"
+              key={action}
+              onClick={() => onOpenTab(actionTab[action] ?? "Overview")}
+            >
+              {action.replaceAll("_", " ").toLowerCase()}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <>
+          <div className="cycle-overview-card">
+            <div>
+              <p className="eyebrow">Active cycle</p>
+              <h3>{cycle.current_stage.replaceAll("_", " ")}</h3>
+              <p>
+                Mode: Assisted · State machine: {cycle.state_machine_version}
+              </p>
+            </div>
+            <div className="cycle-actions">
+              <Button
+                disabled={busy}
+                onClick={() =>
+                  void execute(() =>
+                    catalogApi.reconcileCreativeCycle(session, cycle.id),
+                  )
+                }
+              >
+                Check progress
+              </Button>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  void execute(() =>
+                    catalogApi.createSupervisorReport(session, cycle.id),
+                  )
+                }
+              >
+                Explain this stage
+              </button>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  void execute(() =>
+                    catalogApi.cancelCreativeCycle(session, cycle.id),
+                  )
+                }
+              >
+                Cancel cycle
+              </button>
+            </div>
+          </div>
+          {cycle.product_changed_after_start && (
+            <p className="cycle-warning">
+              Product changed after this cycle started. This cycle remains bound
+              to its original snapshot.
+            </p>
+          )}
+          <div className="cycle-timeline" aria-label="Cycle timeline">
+            {cycleMilestones.map(([label], index) => (
+              <div
+                className={
+                  index < stageIndex
+                    ? "complete"
+                    : index === stageIndex
+                      ? "current"
+                      : "future"
+                }
+                key={label}
+              >
+                <span>{index < stageIndex ? "✓" : index + 1}</span>
+                <b>{label}</b>
+              </div>
+            ))}
+          </div>
+          <div className="command-grid">
+            <section>
+              <p className="eyebrow">Human attention</p>
+              {(cycle.readiness?.requirements ?? []).map((item) => (
+                <p key={item.key}>{item.message}</p>
+              ))}
+              {(cycle.readiness?.allowed_actions ?? []).map((action) => (
+                <Button
+                  key={action}
+                  onClick={() => onOpenTab(actionTab[action] ?? "Overview")}
+                >
+                  {action.replaceAll("_", " ")}
+                </Button>
+              ))}
+            </section>
+            <section>
+              <p className="eyebrow">Recent activity</p>
+              {cycle.timeline.slice(-5).map((item) => (
+                <p key={`${item.occurred_at}-${item.to_stage}`}>
+                  <b>{item.to_stage.replaceAll("_", " ")}</b>
+                  <br />
+                  <small>{new Date(item.occurred_at).toLocaleString()}</small>
+                </p>
+              ))}
+            </section>
+            <section>
+              <p className="eyebrow">Supervisor summary</p>
+              {cycle.supervisor_report ? (
+                <>
+                  <p>{cycle.supervisor_report.summary}</p>
+                  <p>{cycle.supervisor_report.current_stage_explanation}</p>
+                </>
+              ) : (
+                <p>
+                  Choose “Explain this stage” for a bounded, explanatory report.
+                </p>
+              )}
+            </section>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -5202,10 +5476,25 @@ export function ProductWorkspaceApp() {
           {navigation.map((item) => (
             <button
               key={item}
-              className={item === "Products" ? "active" : ""}
-              disabled={item !== "Products" && item !== "Approvals"}
+              className={
+                (item === "Command Center" && tab === "Command Center") ||
+                (item === "Products" &&
+                  tab !== "Command Center" &&
+                  tab !== "Commerce")
+                  ? "active"
+                  : ""
+              }
+              disabled={
+                !["Command Center", "Products", "Approvals"].includes(item)
+              }
               onClick={() => {
-                if (item === "Approvals" && workspace) {
+                if (item === "Command Center" && workspace) {
+                  setTab("Command Center");
+                  setNavigationOpen(false);
+                } else if (item === "Products" && workspace) {
+                  setTab("Overview");
+                  setNavigationOpen(false);
+                } else if (item === "Approvals" && workspace) {
                   sessionStorage.setItem("cm-commerce-view", "Actions");
                   setTab("Commerce");
                   setNavigationOpen(false);
@@ -5214,7 +5503,9 @@ export function ProductWorkspaceApp() {
             >
               <i aria-hidden="true">{navigationIcons[item]}</i>
               <b>{item}</b>
-              {item !== "Products" && item !== "Approvals" && <span>Soon</span>}
+              {!["Command Center", "Products", "Approvals"].includes(item) && (
+                <span>Soon</span>
+              )}
             </button>
           ))}
         </nav>
@@ -5366,77 +5657,86 @@ export function ProductWorkspaceApp() {
             <section className="product-content">
               {workspace ? (
                 <>
-                  <nav className="tabs" aria-label="Product workspace">
-                    {tabs.map((name) => (
-                      <button
-                        key={name}
-                        className={tab === name ? "active" : ""}
-                        onClick={() => {
-                          if (
-                            tab === "Brief" &&
-                            briefDirty &&
-                            name !== "Brief" &&
-                            !window.confirm(
-                              "You have unsaved Brief changes. Leave the Brief? Your local draft will remain available.",
-                            )
-                          )
-                            return;
-                          if (name !== "Brief") setBriefDirty(false);
-                          setTab(name);
-                        }}
-                      >
-                        {name}
-                      </button>
-                    ))}
-                  </nav>
-                  {tab === "Overview" ? (
-                    <Overview
+                  {tab === "Command Center" ? (
+                    <CommandCenterPanel
                       workspace={workspace}
-                      onSnapshot={async () => {
-                        const snapshot = await catalogApi.createSnapshot(
-                          session,
-                          workspace.product.id,
-                        );
-                        setWorkspace({
-                          ...workspace,
-                          latest_snapshot: snapshot,
-                        });
-                      }}
+                      onOpenTab={setTab}
                     />
-                  ) : tab === "Brief" ? (
-                    <BriefEditor
-                      workspace={workspace}
-                      onSaved={setWorkspace}
-                      onDirtyChange={setBriefDirty}
-                    />
-                  ) : tab === "Assets" ? (
-                    <AssetsPanel workspace={workspace} />
-                  ) : tab === "Research" ? (
-                    <ResearchPanel workspace={workspace} />
-                  ) : tab === "Creatives" ? (
-                    <CreativesPanel workspace={workspace} />
-                  ) : tab === "Production" ? (
-                    <ProductionPanel
-                      workspace={workspace}
-                      onOpenAssets={() => setTab("Assets")}
-                      onPreparePublication={(finalCreativeId) => {
-                        sessionStorage.setItem(
-                          "cm-publication-final",
-                          finalCreativeId,
-                        );
-                        setTab("Published");
-                      }}
-                    />
-                  ) : tab === "Published" ? (
-                    <PublishedPanel workspace={workspace} />
-                  ) : tab === "Performance" ? (
-                    <PerformancePanel workspace={workspace} />
-                  ) : tab === "Insights" ? (
-                    <InsightsPanel workspace={workspace} />
-                  ) : tab === "Commerce" ? (
-                    <CommercePanel workspace={workspace} />
                   ) : (
-                    <EmptyPanel tab={tab} />
+                    <>
+                      <nav className="tabs" aria-label="Product workspace">
+                        {tabs.map((name) => (
+                          <button
+                            key={name}
+                            className={tab === name ? "active" : ""}
+                            onClick={() => {
+                              if (
+                                tab === "Brief" &&
+                                briefDirty &&
+                                name !== "Brief" &&
+                                !window.confirm(
+                                  "You have unsaved Brief changes. Leave the Brief? Your local draft will remain available.",
+                                )
+                              )
+                                return;
+                              if (name !== "Brief") setBriefDirty(false);
+                              setTab(name);
+                            }}
+                          >
+                            {name}
+                          </button>
+                        ))}
+                      </nav>
+                      {tab === "Overview" ? (
+                        <Overview
+                          workspace={workspace}
+                          onSnapshot={async () => {
+                            const snapshot = await catalogApi.createSnapshot(
+                              session,
+                              workspace.product.id,
+                            );
+                            setWorkspace({
+                              ...workspace,
+                              latest_snapshot: snapshot,
+                            });
+                          }}
+                        />
+                      ) : tab === "Brief" ? (
+                        <BriefEditor
+                          workspace={workspace}
+                          onSaved={setWorkspace}
+                          onDirtyChange={setBriefDirty}
+                        />
+                      ) : tab === "Assets" ? (
+                        <AssetsPanel workspace={workspace} />
+                      ) : tab === "Research" ? (
+                        <ResearchPanel workspace={workspace} />
+                      ) : tab === "Creatives" ? (
+                        <CreativesPanel workspace={workspace} />
+                      ) : tab === "Production" ? (
+                        <ProductionPanel
+                          workspace={workspace}
+                          onOpenAssets={() => setTab("Assets")}
+                          onPreparePublication={(finalCreativeId) => {
+                            sessionStorage.setItem(
+                              "cm-publication-final",
+                              finalCreativeId,
+                            );
+                            setTab("Published");
+                          }}
+                        />
+                      ) : tab === "Published" ? (
+                        <PublishedPanel workspace={workspace} />
+                      ) : tab === "Performance" ? (
+                        <PerformancePanel workspace={workspace} />
+                      ) : tab === "Insights" ? (
+                        <InsightsPanel workspace={workspace} />
+                      ) : tab === "Commerce" ? (
+                        <CommercePanel workspace={workspace} />
+                      ) : (
+                        <EmptyPanel tab={tab} />
+                      )}
+                    </>
                   )}
                 </>
               ) : (

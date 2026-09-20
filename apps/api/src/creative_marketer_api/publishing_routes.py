@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -36,6 +36,10 @@ from creative_marketer.publishing.domain import (
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class PublicationApprovalBinder(Protocol):
+    async def __call__(self, context: ExecutionContext, draft_id: UUID) -> None: ...
 
 
 class SocialAccountWrite(Contract):
@@ -174,6 +178,7 @@ def create_publishing_router(
     service: PublishingService,
     environment: str,
     audit: IdentityAuditService,
+    approval_binder: PublicationApprovalBinder | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/v1", tags=["publishing"])
 
@@ -278,7 +283,12 @@ def create_publishing_router(
         draft_id: UUID, state: PublicationDecisionState, ctx: ExecutionContext
     ) -> PublicationDraftResponse:
         try:
-            return _draft(await service.decide(ctx, draft_id, state))
+            record = await service.decide(ctx, draft_id, state)
+            if state is PublicationDecisionState.APPROVED:
+                if approval_binder is None:
+                    raise RuntimeError("publication governance binding is unavailable")
+                await approval_binder(ctx, draft_id)
+            return _draft(record)
         except PublicationError as error:
             raise failure(error) from error
 

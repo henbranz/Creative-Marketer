@@ -66,6 +66,12 @@ from creative_marketer.intelligence.domain import (
     PerformanceComparison,
 )
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
+from creative_marketer.orchestration.domain import (
+    SupervisorAction,
+    SupervisorContextManifest,
+    SupervisorReport,
+    validate_supervisor_actions,
+)
 from creative_marketer.production.application import (
     PRODUCTION_CONTRACT_KEY,
     PRODUCTION_CONTRACT_VERSION,
@@ -125,6 +131,8 @@ MAX_PROVIDER_TRANSPORT_ATTEMPTS = 2
 MODEL_ATTEMPT_LEASE = timedelta(minutes=15)
 RESEARCH_CONTRACT_KEY = "research.research_snapshot"
 RESEARCH_CONTRACT_VERSION = 2
+SUPERVISOR_CONTRACT_KEY = "orchestration.supervisor_report"
+SUPERVISOR_CONTRACT_VERSION = 1
 _CATEGORY_PRIORITY = {
     ResearchCategory.COMPETITOR: 0,
     ResearchCategory.PRODUCT_PAGE: 1,
@@ -611,6 +619,90 @@ class CommerceOperationsCapability:
         )
 
 
+def load_supervisor_output_schema() -> Mapping[str, object]:
+    path = Path(__file__).parents[1] / "orchestration" / "schemas" / "supervisor_report.v1.json"
+    return cast(Mapping[str, object], json.loads(path.read_text()))
+
+
+@dataclass(frozen=True, slots=True)
+class SupervisorCapability:
+    agent_type: str = "supervisor"
+    output_contract_key: str = SUPERVISOR_CONTRACT_KEY
+    output_contract_version: int = SUPERVISOR_CONTRACT_VERSION
+
+    def supports_output_contract(self, key: str, version: int) -> bool:
+        return key == self.output_contract_key and version == self.output_contract_version
+
+    def output_schema(self, version: int) -> Mapping[str, object]:
+        if version != self.output_contract_version:
+            raise AgentCapabilityUnavailable("Supervisor output contract is unsupported")
+        return load_supervisor_output_schema()
+
+    def invocation(
+        self, run: AgentRun, route: ModelRoute, context: ModelContext
+    ) -> ModelInvocation:
+        sections = {
+            key: value
+            for key, value in dict(context.capability_context or {}).items()
+            if key != "manifest_object"
+        }
+        return ModelInvocation(
+            route,
+            context.system_instructions,
+            {},
+            (),
+            self.output_schema(run.output_contract_version),
+            run.output_contract_key,
+            run.output_contract_version,
+            route.max_output_tokens,
+            route.reasoning_effort,
+            capability_context=sections,
+            output_task=context.output_task,
+        )
+
+    def validate_result(
+        self, output: Mapping[str, object], run: AgentRun, context: ModelContext
+    ) -> CapabilityResult:
+        manifest = (context.capability_context or {}).get("manifest_object")
+        if not isinstance(manifest, SupervisorContextManifest):
+            raise AgentRunNotReady("Supervisor capability context is unavailable")
+        completion = output.get("completion_summary")
+        report = SupervisorReport(
+            run.tenant_id,
+            run.product_id,
+            manifest.cycle_id,
+            manifest.id,
+            manifest.semantic_digest,
+            str(output["summary"]),
+            str(output["current_stage_explanation"]),
+            tuple(str(item) for item in cast(list[object], output["blockers"])),
+            tuple(str(item) for item in cast(list[object], output["attention_items"])),
+            tuple(
+                SupervisorAction(str(item))
+                for item in cast(list[object], output["suggested_next_actions"])
+            ),
+            str(completion) if completion is not None else None,
+            run.id,
+        )
+        validate_supervisor_actions(report, manifest.readiness.allowed_actions)
+        return CapabilityResult(
+            report,
+            "orchestration.supervisor_report.created.v1",
+            "supervisor_report",
+            report.id,
+            report.created_at,
+            {
+                "supervisor_report_id": str(report.id),
+                "creative_cycle_id": str(report.cycle_id),
+                "agent_run_id": str(run.id),
+                "context_manifest_digest": report.context_manifest_digest,
+                "semantic_digest": report.semantic_digest,
+            },
+            "orchestration.supervisor_reports",
+            1,
+        )
+
+
 def default_capability_registry() -> AgentCapabilityRegistry:
     handlers = cast(
         tuple[AgentCapabilityHandler, ...],
@@ -620,6 +712,7 @@ def default_capability_registry() -> AgentCapabilityRegistry:
             ProducerCapability(),
             IntelligenceCapability(),
             CommerceOperationsCapability(),
+            SupervisorCapability(),
         ),
     )
     return AgentCapabilityRegistry(handlers)
@@ -681,6 +774,22 @@ def initial_commerce_operations_route() -> ModelRoute:
         model="gpt-5.6-sol",
         capabilities=frozenset({"text", "reasoning", "structured_output"}),
         reasoning_effort="high",
+        max_output_tokens=4000,
+        pricing=ModelPricing(
+            "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
+        ),
+    )
+
+
+def initial_supervisor_route() -> ModelRoute:
+    """Explanatory-only Supervisor route; deterministic orchestration owns state."""
+    return ModelRoute(
+        profile_key="supervisor_balanced",
+        route_version="openai-gpt-5.6-sol-supervisor-2026-09-19",
+        provider="openai",
+        model="gpt-5.6-sol",
+        capabilities=frozenset({"text", "reasoning", "structured_output"}),
+        reasoning_effort="medium",
         max_output_tokens=4000,
         pricing=ModelPricing(
             "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
@@ -776,6 +885,14 @@ class CommercePreparation:
 
 
 @dataclass(frozen=True, slots=True)
+class SupervisorPreparation:
+    supervisor: ResolvedResearcher
+    product_snapshot: ProductKnowledgeSnapshot
+    manifest: SupervisorContextManifest
+    context_payload: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
 class WorkloadIdentity:
     workload_id: str
     environment: str
@@ -815,6 +932,9 @@ class AgentRunRepository(Protocol):
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None: ...
     async def prepare_intelligence(self, product_id: UUID) -> IntelligencePreparation | None: ...
     async def prepare_commerce(self, product_id: UUID) -> CommercePreparation | None: ...
+    async def prepare_supervisor(
+        self, context_manifest_id: UUID
+    ) -> SupervisorPreparation | None: ...
     async def active_for_product(
         self, product_id: UUID, definition_id: UUID
     ) -> AgentRun | None: ...
@@ -1275,6 +1395,37 @@ def conservative_commerce_input_token_bound(context: ModelContext) -> int:
         "context_sections": _plain_json(sections),
         "output_task": context.output_task,
         "output_schema": load_commerce_output_schema(),
+    }
+    return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def build_supervisor_model_context(preparation: SupervisorPreparation) -> ModelContext:
+    sections = dict(preparation.context_payload)
+    sections["manifest_object"] = preparation.manifest
+    return ModelContext(
+        preparation.supervisor.configuration.system_instructions,
+        {},
+        (),
+        preparation.manifest.semantic_digest,
+        capability_context=sections,
+        output_task=(
+            "Return only orchestration.supervisor_report.v1. Explain the supplied deterministic "
+            "state and suggest only actions in allowed_actions. Never transition state."
+        ),
+    )
+
+
+def conservative_supervisor_input_token_bound(context: ModelContext) -> int:
+    sections = {
+        key: value
+        for key, value in dict(context.capability_context or {}).items()
+        if key != "manifest_object"
+    }
+    document = {
+        "system_instructions": context.system_instructions,
+        "context_sections": _plain_json(sections),
+        "output_task": context.output_task,
+        "output_schema": load_supervisor_output_schema(),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -2186,6 +2337,174 @@ class AgentRunService:
             await uow.commit()
             self.telemetry.count(
                 "agent_runs", attributes={"agent.type": "commerce_operations", "result": "pending"}
+            )
+            return run
+
+    async def request_supervisor(
+        self,
+        context: ExecutionContext,
+        *,
+        context_manifest_id: UUID,
+        idempotency_key: str,
+    ) -> AgentRun:
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("requesting Supervisor analysis requires owner or admin")
+        if not idempotency_key.strip() or len(idempotency_key) > 128:
+            raise ValueError("idempotency key is required and bounded")
+        now = datetime.now(UTC)
+        async with self.uow_factory(context.tenant_id) as uow:
+            replay = await uow.runs.get_by_idempotency(idempotency_key)
+            if replay is not None:
+                if replay.agent_type != "supervisor" or not any(
+                    item.get("kind") == "supervisor_context_manifest"
+                    and item.get("id") == str(context_manifest_id)
+                    for item in replay.input_context_refs
+                ):
+                    raise AgentRunNotReady("idempotency key is bound to another request")
+                return replay
+            preparation = await uow.runs.prepare_supervisor(context_manifest_id)
+            if preparation is None:
+                raise AgentRunNotReady(
+                    "Supervisor context manifest or active Supervisor definition is missing"
+                )
+            cfg = preparation.supervisor.configuration
+            if (
+                cfg.output_contract_key != SUPERVISOR_CONTRACT_KEY
+                or cfg.output_contract_version != SUPERVISOR_CONTRACT_VERSION
+                or cfg.model_policy.max_turns != 1
+                or not cfg.model_policy.structured_output_required
+                or cfg.model_policy.fallback_allowed
+                or set(cfg.model_policy.required_capabilities)
+                != {"text", "reasoning", "structured_output"}
+                or cfg.allowed_tool_keys
+                or cfg.denied_tool_keys
+                or cfg.run_budget_policy.max_tool_calls != 0
+                or cfg.run_budget_policy.max_model_calls != 1
+                or cfg.memory_scopes
+                or set(cfg.read_scopes) != {"orchestration.cycle"}
+                or set(cfg.write_scopes) != {"orchestration.supervisor_report"}
+            ):
+                raise AgentRunNotReady("active Supervisor configuration violates v1 invariants")
+            route = self.router.resolve(
+                cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
+            )
+            self.providers.resolve(route.provider)
+            input_allowance = cfg.run_budget_policy.max_total_tokens - route.max_output_tokens
+            worst_cost = max(
+                route.pricing.cost(input_allowance, route.max_output_tokens),
+                route.pricing.cost(cfg.run_budget_policy.max_total_tokens, 0),
+            )
+            if (
+                route.pricing.currency != cfg.run_budget_policy.currency
+                or cfg.period_budget_policy.currency != cfg.run_budget_policy.currency
+                or input_allowance <= 0
+                or worst_cost > cfg.run_budget_policy.max_cost
+            ):
+                raise BudgetExceeded("Supervisor model route cannot fit the budget envelope")
+            active = await uow.runs.active_for_product(
+                preparation.manifest.product_id,
+                preparation.supervisor.requested_definition_id,
+            )
+            if active is not None:
+                return active
+            model_context = build_supervisor_model_context(preparation)
+            if conservative_supervisor_input_token_bound(model_context) > input_allowance:
+                raise BudgetExceeded("bounded Supervisor context exceeds input token envelope")
+            refs: tuple[Mapping[str, object], ...] = (
+                {
+                    "kind": "supervisor_context_manifest",
+                    "id": str(preparation.manifest.id),
+                    "digest": preparation.manifest.semantic_digest,
+                },
+            )
+            run = AgentRun(
+                tenant_id=context.tenant_id,
+                requested_agent_definition_id=preparation.supervisor.requested_definition_id,
+                resolved_agent_definition_id=preparation.supervisor.resolved_definition_id,
+                agent_version_id=preparation.supervisor.version_id,
+                agent_version_number=preparation.supervisor.version_number,
+                agent_configuration_digest=preparation.supervisor.configuration_digest,
+                prompt_revision=cfg.prompt_revision,
+                product_id=preparation.manifest.product_id,
+                product_snapshot_id=preparation.product_snapshot.id,
+                product_snapshot_digest=preparation.product_snapshot.digest,
+                product_snapshot_schema_version=preparation.product_snapshot.schema_version,
+                research_context_digest=preparation.manifest.semantic_digest,
+                context_digest=preparation.manifest.semantic_digest,
+                selected_evidence=(),
+                model_profile_key=cfg.model_policy.profile_key,
+                output_contract_key=SUPERVISOR_CONTRACT_KEY,
+                output_contract_version=SUPERVISOR_CONTRACT_VERSION,
+                correlation_id=context.correlation_id,
+                initiated_by_actor_kind=context.actor.kind.value,
+                initiated_by_actor_id=context.actor.id,
+                period_start=_period_start(now, cfg.period_budget_policy.period),
+                reserved_cost=cfg.run_budget_policy.max_cost,
+                currency=cfg.run_budget_policy.currency,
+                idempotency_key=idempotency_key,
+                agent_type="supervisor",
+                input_context_kind="supervisor.v1",
+                input_context_schema_version=1,
+                input_context_digest=preparation.manifest.semantic_digest,
+                input_context_refs=refs,
+                max_total_tokens=cfg.run_budget_policy.max_total_tokens,
+                created_at=now,
+            )
+            await uow.runs.reserve_period_budget(
+                run_id=run.id,
+                definition_id=run.requested_agent_definition_id,
+                period_start=run.period_start,
+                max_runs=cfg.period_budget_policy.max_runs,
+                max_cost=cfg.period_budget_policy.max_cost,
+                reserve_cost=run.reserved_cost,
+                currency=run.currency,
+            )
+            if not await uow.runs.add(run):
+                replay = await uow.runs.get_by_idempotency(idempotency_key)
+                if replay is not None and replay.agent_type == "supervisor":
+                    return replay
+                raise AgentRunConflict("another Supervisor request won the race")
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="orchestration.supervisor.requested",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="agent_run",
+                    resource_id=str(run.id),
+                    agent_definition_id=run.requested_agent_definition_id,
+                    agent_version_id=run.agent_version_id,
+                    agent_run_id=run.id,
+                    metadata=safe_metadata(
+                        {
+                            "product_id": str(run.product_id),
+                            "context_manifest_id": str(preparation.manifest.id),
+                            "context_manifest_digest": preparation.manifest.semantic_digest,
+                        }
+                    ),
+                )
+            )
+            await _event(
+                uow,
+                context,
+                "agent.run.requested.v1",
+                "agent_run",
+                run.id,
+                {
+                    "agent_run_id": str(run.id),
+                    "product_id": str(run.product_id),
+                    "requested_agent_definition_id": str(run.requested_agent_definition_id),
+                    "agent_version_id": str(run.agent_version_id),
+                    "product_snapshot_digest": run.product_snapshot_digest,
+                    "research_context_digest": run.research_context_digest,
+                    "context_digest": run.context_digest,
+                },
+            )
+            await uow.commit()
+            self.telemetry.count(
+                "agent_runs", attributes={"agent.type": "supervisor", "result": "pending"}
             )
             return run
 

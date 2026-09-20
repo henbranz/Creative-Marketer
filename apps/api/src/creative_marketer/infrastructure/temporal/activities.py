@@ -20,6 +20,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     CommerceActionWorkflowInput,
     CommerceSyncActivityResult,
     CommerceSyncWorkflowInput,
+    CreativeCycleActivityResult,
+    CreativeCycleWorkflowInput,
     FinalCreativeAssemblyResult,
     FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
@@ -103,6 +105,12 @@ class CommerceActionExecutor(Protocol):
     ) -> CommerceActionActivityResult: ...
 
 
+class CreativeCycleReconciler(Protocol):
+    async def reconcile(
+        self, tenant_id: UUID, cycle_id: UUID, correlation_id: UUID
+    ) -> CreativeCycleActivityResult: ...
+
+
 @dataclass(slots=True)
 class ToolGatewayWorkflowService:
     """Application-facing adapter; the existing Tool Gateway remains Temporal-unaware."""
@@ -156,6 +164,27 @@ class TemporalActivities:
     measurement_jobs: MeasurementJobExecutor | None = None
     commerce_sync: CommerceSyncExecutor | None = None
     commerce_actions: CommerceActionExecutor | None = None
+    creative_cycles: CreativeCycleReconciler | None = None
+
+    @activity.defn(name="workflow.reconcile_creative_cycle")
+    async def reconcile_creative_cycle(
+        self, request: CreativeCycleWorkflowInput
+    ) -> CreativeCycleActivityResult:
+        if self.creative_cycles is None:
+            raise ApplicationError(
+                "Creative Cycle reconciler is not composed",
+                type="CREATIVE_CYCLE_RECONCILER_UNAVAILABLE",
+                non_retryable=True,
+            )
+        try:
+            return await self.creative_cycles.reconcile(
+                UUID(request.tenant_id), UUID(request.cycle_id), UUID(request.correlation_id)
+            )
+        except ApplicationError:
+            raise
+        except Exception as error:
+            code = str(getattr(error, "code", "CREATIVE_CYCLE_RECONCILE_FAILED"))
+            raise ApplicationError("Creative Cycle reconciliation failed", type=code) from error
 
     @activity.defn(name="workflow.invoke_tool")
     async def invoke_tool(self, request: ToolWorkflowInput) -> ToolActivityResult:

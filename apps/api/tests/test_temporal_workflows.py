@@ -10,10 +10,11 @@ from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
+from temporalio import activity
 from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
-from temporalio.worker import Replayer
+from temporalio.worker import Replayer, Worker
 
 from creative_marketer.approval_governance.domain import ApprovalDecision, HumanDecision
 from creative_marketer.infrastructure.temporal.activities import (
@@ -27,6 +28,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     ApprovalBlockingWorkflow,
     CommerceActionWorkflow,
     CommerceSyncWorkflow,
+    CreativeCycleWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
     PerformanceCollectionWorkflow,
@@ -43,6 +45,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     CommerceActionWorkflowInput,
     CommerceSyncActivityResult,
     CommerceSyncWorkflowInput,
+    CreativeCycleActivityResult,
+    CreativeCycleWorkflowInput,
     FinalCreativeAssemblyWorkflowInput,
     GenerationPollResult,
     GenerationStartResult,
@@ -59,6 +63,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     agent_execution_workflow_id,
     commerce_action_workflow_id,
     commerce_sync_workflow_id,
+    creative_cycle_workflow_id,
     generation_workflow_id,
     measurement_workflow_id,
     publication_workflow_id,
@@ -230,6 +235,51 @@ async def temporal_environment():
         test_server_existing_path=os.getenv("TEMPORAL_TEST_SERVER_PATH") or None
     ) as environment:
         yield environment
+
+
+@pytest.mark.asyncio
+async def test_creative_cycle_workflow_keeps_state_in_postgres_and_replays(
+    temporal_environment,
+) -> None:
+    calls: list[CreativeCycleWorkflowInput] = []
+
+    @activity.defn(name="workflow.reconcile_creative_cycle")
+    async def reconcile(
+        request: CreativeCycleWorkflowInput,
+    ) -> CreativeCycleActivityResult:
+        calls.append(request)
+        return CreativeCycleActivityResult(
+            cycle_id=request.cycle_id,
+            status="COMPLETED",
+            stage="COMPLETED",
+            terminal=True,
+        )
+
+    request = CreativeCycleWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    async with Worker(
+        temporal_environment.client,
+        task_queue=WORKFLOW_TASK_QUEUE,
+        workflows=[CreativeCycleWorkflow],
+        activities=[reconcile],
+    ):
+        handle = await temporal_environment.client.start_workflow(
+            CreativeCycleWorkflow.run,
+            request,
+            id=creative_cycle_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        result = await handle.result()
+        history = await handle.fetch_history()
+
+    assert result == CreativeCycleActivityResult(
+        cycle_id=request.cycle_id,
+        status="COMPLETED",
+        stage="COMPLETED",
+        terminal=True,
+    )
+    assert calls == [request]
+    replay = await Replayer(workflows=[CreativeCycleWorkflow]).replay_workflow(history)
+    assert replay.replay_failure is None
 
 
 @pytest.mark.asyncio

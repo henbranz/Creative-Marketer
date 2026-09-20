@@ -96,6 +96,12 @@ Every event uses the implemented immutable canonical envelope:
 - `intelligence.insight.expired.v1`
 - `intelligence.insight.invalidated.v1`
 
+### Orchestration
+- `orchestration.cycle.created.v1`
+- `orchestration.cycle.stage_changed.v1`
+- `orchestration.cycle.blocked.v1`
+- `orchestration.cycle.completed.v1`
+
 ### Governance
 - `governance.approval.requested.v1`
 - `governance.approval.granted.v1`

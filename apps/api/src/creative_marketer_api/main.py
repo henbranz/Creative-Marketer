@@ -15,6 +15,7 @@ from creative_marketer.agent_runtime.application import (
     initial_creative_strategist_route,
     initial_intelligence_route,
     initial_researcher_route,
+    initial_supervisor_route,
 )
 from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.audit.identity import IdentityAuditService
@@ -38,6 +39,7 @@ from creative_marketer.infrastructure.database import (
     SqlAlchemyCreativeUnitOfWorkFactory,
     SqlAlchemyIntelligenceUnitOfWorkFactory,
     SqlAlchemyMeasurementUnitOfWorkFactory,
+    SqlAlchemyOrchestrationUnitOfWorkFactory,
     SqlAlchemyProductionUnitOfWorkFactory,
     SqlAlchemyPublishingUnitOfWorkFactory,
     SqlAlchemyResearchUnitOfWorkFactory,
@@ -58,6 +60,9 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.publishing_authority import (
+    SqlAlchemyPublicationExecutionAuthority,
+)
 from creative_marketer.infrastructure.model_providers import ExecutionProcessOnlyModelProvider
 from creative_marketer.infrastructure.object_storage import S3ObjectStore
 from creative_marketer.infrastructure.research import SafeWebFetcher
@@ -73,10 +78,13 @@ from creative_marketer.observability.configuration import (
 from creative_marketer.observability.logging import configure_structured_logging, correlation_scope
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
+from creative_marketer.orchestration.application import CreativeCycleService
 from creative_marketer.production.application import initial_media_router, initial_producer_route
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
 from creative_marketer.publishing.application import PublishingService
+from creative_marketer.publishing.approval_binding import BindPublicationApproval
+from creative_marketer.publishing.gateway_composition import PublishingGatewayFactory
 from creative_marketer.publishing.provider import FakeSocialProvider
 from creative_marketer.research.application import ResearchService
 from creative_marketer_api.assembly_routes import create_assembly_router
@@ -89,6 +97,8 @@ from creative_marketer_api.creative_routes import create_creative_router
 from creative_marketer_api.intelligence_routes import create_intelligence_router
 from creative_marketer_api.knowledge_routes import create_knowledge_router
 from creative_marketer_api.measurement_routes import create_measurement_router
+from creative_marketer_api.orchestration_routes import create_orchestration_router
+from creative_marketer_api.orchestration_temporal import LazyOrchestrationWorkflowCoordinator
 from creative_marketer_api.production_routes import create_production_router
 from creative_marketer_api.publishing_routes import create_publishing_router
 from creative_marketer_api.research_routes import create_research_router
@@ -229,11 +239,12 @@ def create_app(
             resolved_identity_audit,
         )
     )
+    catalog_service = CatalogService(catalog_uow)
     application.include_router(
         create_catalog_router(
             authenticator,
             identity_uow,
-            CatalogService(catalog_uow),
+            catalog_service,
             AssetService(catalog_uow, object_store),
             resolved_settings.app_env,
             resolved_identity_audit,
@@ -248,6 +259,7 @@ def create_app(
                 initial_producer_route(),
                 initial_intelligence_route(),
                 initial_commerce_operations_route(),
+                initial_supervisor_route(),
             )
         ),
         ModelProviderRegistry(
@@ -303,22 +315,32 @@ def create_app(
             ),
         )
     )
+    assembly_service = AssemblyService(assembly_uow)
     application.include_router(
         create_assembly_router(
             authenticator,
             identity_uow,
-            AssemblyService(assembly_uow),
+            assembly_service,
             resolved_settings.app_env,
             resolved_identity_audit,
         )
+    )
+    publishing_service = PublishingService(publishing_uow, FakeSocialProvider())
+    publishing_authority = SqlAlchemyPublicationExecutionAuthority(
+        session_factory, publishing_service, resolved_settings.app_env
     )
     application.include_router(
         create_publishing_router(
             authenticator,
             identity_uow,
-            PublishingService(publishing_uow, FakeSocialProvider()),
+            publishing_service,
             resolved_settings.app_env,
             resolved_identity_audit,
+            BindPublicationApproval(
+                publishing_authority,
+                PublishingGatewayFactory(session_factory, publishing_authority),
+                SqlAlchemyApprovalUnitOfWorkFactory(session_factory),
+            ),
         )
     )
     measurement_service = MeasurementService(measurement_uow, FakeSocialMetricsProvider())
@@ -366,6 +388,29 @@ def create_app(
             identity_uow,
             agent_service,
             IntelligenceService(intelligence_uow),
+            resolved_settings.app_env,
+            resolved_identity_audit,
+        )
+    )
+    application.include_router(
+        create_orchestration_router(
+            authenticator,
+            identity_uow,
+            CreativeCycleService(
+                SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory),
+                catalog_service,
+                agent_service,
+                assembly_service,
+                (
+                    workflow_coordinator := LazyOrchestrationWorkflowCoordinator(
+                        resolved_settings.temporal_address,
+                        resolved_settings.temporal_namespace,
+                        accelerated_demo=resolved_settings.app_env in {"development", "test"},
+                    )
+                ),
+                workflow_coordinator,
+                workflow_coordinator,
+            ),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

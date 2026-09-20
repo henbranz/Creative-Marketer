@@ -1,4 +1,4 @@
-.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap intelligence-bootstrap commerce-agent-bootstrap commerce-tools-bootstrap commerce-demo-bootstrap commerce-worker media-tools-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap producer-bootstrap intelligence-bootstrap commerce-agent-bootstrap commerce-tools-bootstrap commerce-demo-bootstrap commerce-worker media-tools-bootstrap media-execution-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker orchestration-worker live-provider-preflight live-openai-smoke live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -79,6 +79,9 @@ commerce-worker:
 media-tools-bootstrap:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_media_tools.py
 
+media-execution-bootstrap:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_media_execution.py
+
 social-tools-bootstrap:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/bootstrap_social_tools.py
 
@@ -92,6 +95,9 @@ measurement-demo-conversion:
 agent-worker:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m creative_marketer_api.researcher_worker
 
+orchestration-worker:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m creative_marketer_api.orchestration_worker
+
 production-worker:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m creative_marketer_api.production_worker
 
@@ -99,7 +105,7 @@ assembly-worker:
 	docker compose --profile temporal run --rm assembly-worker
 
 demo-bootstrap:
-	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.bootstrap_demo
+	cd apps/api && DATABASE_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer uv run dotenv -f ../../.env run --no-override -- python -m scripts.bootstrap_demo
 
 live-provider-preflight:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation preflight

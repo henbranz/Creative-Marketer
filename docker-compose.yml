@@ -152,7 +152,7 @@ services:
       EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
       AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
       TEMPORAL_ADDRESS: temporal:7233
-      MODEL_PROVIDER_BACKEND: ${MODEL_PROVIDER_BACKEND:-disabled}
+      MODEL_PROVIDER_BACKEND: fake
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ALLOW_BILLABLE_MEDIA: ${ALLOW_BILLABLE_MEDIA:-false}
       RUN_LIVE_E2E: ${RUN_LIVE_E2E:-}
@@ -185,6 +185,60 @@ services:
       temporal:
         condition: service_started
 
+  production-worker:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "creative_marketer_api.production_worker"]
+    profiles: ["temporal"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      OBJECT_STORAGE_BACKEND: s3
+      OBJECT_STORAGE_ENDPOINT_URL: http://object-storage:9000
+      OBJECT_STORAGE_PUBLIC_ENDPOINT_URL: http://localhost:9000
+      OBJECT_STORAGE_ACCESS_KEY_ID: ${OBJECT_STORAGE_ACCESS_KEY_ID:-creative-marketer-local}
+      OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
+      TEMPORAL_ADDRESS: temporal:7233
+      MEDIA_IMAGE_PROVIDER: fake
+      MEDIA_VIDEO_PROVIDER: fake
+      ALLOW_BILLABLE_MEDIA: "false"
+      MEDIA_WORKLOAD_ID: local-media-worker
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+      object-storage:
+        condition: service_started
+
+  orchestration-worker:
+    build:
+      context: ./apps/api
+    command: ["python", "-m", "creative_marketer_api.orchestration_worker"]
+    profiles: ["temporal"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
+      EVENT_PUBLISHER_DATABASE_URL: postgresql+psycopg://creative_marketer_event_publisher:creative_marketer_event_publisher@postgres:5432/creative_marketer
+      AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
+      TEMPORAL_ADDRESS: temporal:7233
+      MODEL_PROVIDER_BACKEND: fake
+      AGENT_WORKLOAD_ID: ${AGENT_WORKLOAD_ID:-local-agent-worker}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      temporal:
+        condition: service_started
+
   assembly-worker:
     build:
       context: ./apps/api
@@ -206,6 +260,9 @@ services:
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
       TEMPORAL_ADDRESS: temporal:7233
       ASSEMBLY_WORKLOAD_ID: local-assembly-worker
+      MEDIA_IMAGE_PROVIDER: fake
+      MEDIA_VIDEO_PROVIDER: fake
+      ALLOW_BILLABLE_MEDIA: "false"
     depends_on:
       migrate:
         condition: service_completed_successfully

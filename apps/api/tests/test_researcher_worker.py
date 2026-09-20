@@ -2,10 +2,16 @@
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
 from creative_marketer_api import researcher_worker
+from creative_marketer_api.fake_demo_outputs import (
+    creative_output,
+    intelligence_output,
+    production_output,
+)
 
 
 @pytest.mark.asyncio
@@ -245,17 +251,37 @@ def test_fake_worker_supports_grounded_commerce_report_without_tools() -> None:
     ]
 
 
-def test_fake_worker_routes_each_non_commerce_demo_contract(monkeypatch) -> None:
-    from scripts import bootstrap_demo
+def test_fake_worker_supervisor_uses_only_deterministically_allowed_actions() -> None:
+    invocation = SimpleNamespace(
+        output_contract_key="orchestration.supervisor_report",
+        capability_context={
+            "cycle": {"stage": "AWAITING_CONCEPT_APPROVAL"},
+            "readiness": {
+                "requirements": [
+                    {
+                        "key": "concept_approval",
+                        "state": "WAITING",
+                        "message": "Choose a concept for production.",
+                    }
+                ],
+                "allowed_actions": ["APPROVE_CONCEPT"],
+            },
+        },
+    )
+    result = researcher_worker._fake_demo_result(invocation)
+    assert result.output["suggested_next_actions"] == ["APPROVE_CONCEPT"]
+    assert result.output["attention_items"] == ["Choose a concept for production."]
 
+
+def test_fake_worker_routes_each_non_commerce_demo_contract(monkeypatch) -> None:
     cases = (
-        ("creative.creative_concept_set", "_creative_output"),
-        ("production.production_plan", "_production_output"),
-        ("intelligence.intelligence_report", "_intelligence_output"),
+        ("creative.creative_concept_set", "creative_output"),
+        ("production.production_plan", "production_output"),
+        ("intelligence.intelligence_report", "intelligence_output"),
     )
     for contract, function_name in cases:
         monkeypatch.setattr(
-            bootstrap_demo,
+            researcher_worker,
             function_name,
             lambda _invocation, value=contract: {"contract": value},
         )
@@ -263,3 +289,79 @@ def test_fake_worker_routes_each_non_commerce_demo_contract(monkeypatch) -> None
         assert result.output == {"contract": contract}
     with pytest.raises(RuntimeError, match="does not support"):
         researcher_worker._fake_demo_result(SimpleNamespace(output_contract_key="unknown"))
+
+
+def test_fake_worker_supports_grounded_research_contract() -> None:
+    evidence_id = "00000000-0000-0000-0000-000000000201"
+    invocation = SimpleNamespace(
+        output_contract_key="research.research_snapshot",
+        untrusted_evidence=(
+            SimpleNamespace(
+                evidence_snapshot_id=evidence_id,
+                block_index=0,
+                block_digest="sha256:" + "a" * 64,
+            ),
+        ),
+    )
+    result = researcher_worker._fake_demo_result(invocation)
+    assert isinstance(result.output, dict)
+    citation = result.output["findings"][0]["citations"][0]
+    assert citation["evidence_snapshot_id"] == evidence_id
+    assert result.provider_response_id == "local-demo-research.research_snapshot"
+
+
+def test_installed_worker_demo_outputs_cover_the_complete_fake_agent_sequence() -> None:
+    asset_id = "00000000-0000-0000-0000-000000000301"
+    research_snapshot_id = "00000000-0000-0000-0000-000000000302"
+    concept = creative_output(
+        SimpleNamespace(
+            capability_context={
+                "research_findings": [{"key": "audience_language"}],
+                "product_claim_refs": [{"key": "durable_claim", "text": "Durable."}],
+                "research_snapshot_id": research_snapshot_id,
+                "available_assets": [{"asset_id": asset_id}],
+                "strategy_request": {
+                    "concept_count": 5,
+                    "channel_intent": "ORGANIC_SHORT_FORM",
+                },
+            }
+        )
+    )
+    concepts = cast(list[dict[str, object]], concept["concepts"])
+    assert len(concepts) == 5
+    assert {item["channel_intent"] for item in concepts} == {"ORGANIC_SHORT_FORM"}
+
+    plan = production_output(
+        SimpleNamespace(
+            capability_context={
+                "selected_assets": [{"asset_id": asset_id}],
+                "concept_scene_keys": ["hook", "proof", "action"],
+            }
+        )
+    )
+    scenes = cast(list[dict[str, object]], plan["scenes"])
+    sources = [
+        cast(list[dict[str, object]], scene["shots"])[0]["source_strategy"] for scene in scenes
+    ]
+    assert sources == [
+        "GENERATE_IMAGE",
+        "GENERATE_VIDEO",
+        "MANUAL_CAPTURE",
+    ]
+
+    unmatched = intelligence_output(SimpleNamespace(capability_context={}))
+    assert unmatched["next_experiments"] == []
+    matched = intelligence_output(
+        SimpleNamespace(
+            capability_context={
+                "performance_comparisons": [
+                    {
+                        "id": "comparison-1",
+                        "comparison_window": "24h",
+                        "metric_key": "HOOK_HOLD_RATE",
+                    }
+                ]
+            }
+        )
+    )
+    assert len(matched["next_experiments"]) == 1

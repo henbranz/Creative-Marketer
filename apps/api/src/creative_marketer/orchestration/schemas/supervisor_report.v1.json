@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://creative-manager.local/contracts/orchestration/supervisor-report-v1.json",
+  "title": "SupervisorReportV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary",
+    "current_stage_explanation",
+    "blockers",
+    "attention_items",
+    "suggested_next_actions"
+  ],
+  "properties": {
+    "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "current_stage_explanation": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "blockers": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "attention_items": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "suggested_next_actions": {
+      "type": "array",
+      "maxItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "COMPLETE_BRIEF",
+          "ADD_RESEARCH_SOURCE",
+          "APPROVE_CONCEPT",
+          "APPROVE_PRODUCTION_PLAN",
+          "PREPARE_FINAL_ASSEMBLY",
+          "REVIEW_FINAL_CREATIVE",
+          "PREPARE_PUBLICATION",
+          "APPROVE_PUBLICATION",
+          "WAIT_FOR_MEASUREMENT",
+          "REVIEW_INSIGHTS",
+          "REVIEW_EXPERIMENT",
+          "RECOVER_AGENT_RUN"
+        ]
+      }
+    },
+    "completion_summary": {"type": ["string", "null"], "maxLength": 1000}
+  }
+}

@@ -21,6 +21,8 @@ with workflow.unsafe.imports_passed_through():
         CommerceActionWorkflowInput,
         CommerceSyncActivityResult,
         CommerceSyncWorkflowInput,
+        CreativeCycleActivityResult,
+        CreativeCycleWorkflowInput,
         FinalCreativeAssemblyResult,
         FinalCreativeAssemblyWorkflowInput,
         GenerationPollResult,
@@ -41,6 +43,48 @@ with workflow.unsafe.imports_passed_through():
         WorkflowResult,
         WorkflowState,
     )
+
+
+@workflow.defn(name="CreativeCycleWorkflow")
+class CreativeCycleWorkflow:
+    """Durable wake coordinator; PostgreSQL remains the state-machine authority."""
+
+    def __init__(self) -> None:
+        self._wakeups = 0
+        self._stage = "CREATED"
+
+    @workflow.signal(name="cycle_state_may_have_changed")
+    def cycle_state_may_have_changed(self) -> None:
+        self._wakeups += 1
+
+    @workflow.query(name="status")
+    def status(self) -> str:
+        return self._stage
+
+    @workflow.run
+    async def run(self, request: CreativeCycleWorkflowInput) -> CreativeCycleActivityResult:
+        observed = -1
+        while True:
+            result = cast(
+                CreativeCycleActivityResult,
+                await workflow.execute_activity(
+                    "workflow.reconcile_creative_cycle",
+                    request,
+                    result_type=CreativeCycleActivityResult,
+                    start_to_close_timeout=timedelta(minutes=2),
+                    retry_policy=RESEARCHER_RETRY_POLICY,
+                ),
+            )
+            self._stage = result.stage
+            if result.terminal:
+                return result
+            observed = self._wakeups
+
+            def was_woken(value: int = observed) -> bool:
+                return self._wakeups > value
+
+            with suppress(TimeoutError):
+                await workflow.wait_condition(was_woken, timeout=timedelta(seconds=10))
 
 
 _EXECUTED = {"EXECUTED", "REPLAYED"}

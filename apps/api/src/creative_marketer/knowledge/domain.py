@@ -50,6 +50,8 @@ class KnowledgeNodeType(StrEnum):
     COMMERCE_OPERATIONS_REPORT = "commerce_operations_report"
     COMMERCE_ACTION_PROPOSAL = "commerce_action_proposal"
     COMMERCE_ACTION_RESULT = "commerce_action_result"
+    CREATIVE_CYCLE = "creative_cycle"
+    SUPERVISOR_REPORT = "supervisor_report"
 
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")

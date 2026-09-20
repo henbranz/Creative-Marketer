@@ -42,6 +42,12 @@ from scripts.bootstrap_intelligence import (
     INTELLIGENCE_PLATFORM_TEMPLATE_ID,
     intelligence_configuration,
 )
+from scripts.bootstrap_supervisor import (
+    SUPERVISOR_PLATFORM_TEMPLATE_ID,
+    SUPERVISOR_PLATFORM_VERSION_ID,
+    SUPERVISOR_SYSTEM_ACTOR_ID,
+    supervisor_configuration,
+)
 from tests.integration.support import IdentityStack
 
 INTELLIGENCE_PLATFORM_VERSION_ID = UUID("775ebee9-df02-59d5-a468-032fc7e21384")
@@ -78,7 +84,10 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE commerce.action_results, commerce.action_jobs, "
+                "TRUNCATE orchestration.supervisor_reports, "
+                "orchestration.supervisor_context_manifests, orchestration.cycle_steps, "
+                "orchestration.cycle_transitions, orchestration.creative_cycles, "
+                "commerce.action_results, commerce.action_jobs, "
                 "commerce.action_decisions, commerce.action_proposals, commerce.reports, "
                 "commerce.context_manifests, commerce.fulfillment_observations, "
                 "commerce.payment_observations, commerce.order_observations, "
@@ -168,6 +177,43 @@ async def admin_engine(admin_database_url: str) -> AsyncIterator[AsyncEngine]:
                 tenant_id=None,
                 activated_by_actor_kind="system",
                 activated_by_actor_id=INTELLIGENCE_SYSTEM_ACTOR_ID,
+            )
+        )
+        supervisor = supervisor_configuration()
+        await connection.execute(
+            insert(agent_definitions).values(
+                id=SUPERVISOR_PLATFORM_TEMPLATE_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                platform_template_id=None,
+                agent_key="creative_supervisor",
+                agent_type="supervisor",
+                status="active",
+                created_by_actor_kind="system",
+                created_by_actor_id=SUPERVISOR_SYSTEM_ACTOR_ID,
+            )
+        )
+        await connection.execute(
+            insert(agent_versions).values(
+                id=SUPERVISOR_PLATFORM_VERSION_ID,
+                definition_id=SUPERVISOR_PLATFORM_TEMPLATE_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                version_number=1,
+                **supervisor.primitive(),
+                configuration_digest=supervisor.configuration_digest,
+                created_by_actor_kind="system",
+                created_by_actor_id=SUPERVISOR_SYSTEM_ACTOR_ID,
+            )
+        )
+        await connection.execute(
+            insert(agent_activations).values(
+                definition_id=SUPERVISOR_PLATFORM_TEMPLATE_ID,
+                active_version_id=SUPERVISOR_PLATFORM_VERSION_ID,
+                scope_kind="platform",
+                tenant_id=None,
+                activated_by_actor_kind="system",
+                activated_by_actor_id=SUPERVISOR_SYSTEM_ACTOR_ID,
             )
         )
     yield engine

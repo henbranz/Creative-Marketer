@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -45,7 +46,7 @@ from creative_marketer.assembly.domain import (
     final_creative_digest,
 )
 from creative_marketer.assembly.infrastructure.ffmpeg import FFmpegAssemblyRenderer
-from creative_marketer.assembly.rendering import MaterializedSource
+from creative_marketer.assembly.rendering import MaterializedSource, RenderResult
 from creative_marketer.identity.domain import MembershipRole
 from creative_marketer.workflow_orchestration.contracts import (
     FinalCreativeAssemblyWorkflowInput,
@@ -349,6 +350,18 @@ def test_renderer_helpers_escape_content_and_never_construct_network_inputs(tmp_
     assert renderer._filter_path(target).endswith("overlay\\'s.ass")
     assert renderer._fit_filter(plan.items[0].fit_mode, 1080, 1920).startswith("scale=1080:1920")
     assert renderer._timeout(1000) == 30.0 and renderer._timeout(100_000) == 600.0
+    assert renderer.encoding_preset == "medium"
+    assert renderer.scaling_flags == "lanczos"
+    assert FFmpegAssemblyRenderer(encoding_preset="veryfast").encoding_preset == "veryfast"
+    assert FFmpegAssemblyRenderer(encoding_preset="ultrafast").encoding_preset == "ultrafast"
+    assert FFmpegAssemblyRenderer(scaling_flags="fast_bilinear").scaling_flags == "fast_bilinear"
+    assert FFmpegAssemblyRenderer(minimum_timeout_seconds=600)._timeout(1000) == 600
+    with pytest.raises(ValueError, match="unsupported"):
+        FFmpegAssemblyRenderer(encoding_preset="unsafe")
+    with pytest.raises(ValueError, match="unsupported"):
+        FFmpegAssemblyRenderer(scaling_flags="unsafe")
+    with pytest.raises(ValueError, match="unsupported"):
+        FFmpegAssemblyRenderer(minimum_timeout_seconds=700, maximum_timeout_seconds=600)
 
 
 @pytest.mark.ffmpeg
@@ -502,6 +515,57 @@ async def test_ffmpeg_renderer_builds_bounded_commands_and_inspects_output(
     monkeypatch.setattr(renderer, "_run", AsyncMock(return_value=b"not-json"))
     with pytest.raises(AssemblyRenderFailed):
         await renderer.source_has_audio(str(video), str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_fake_placeholder_renderer_bakes_boundaries_and_packet_loops(tmp_path, monkeypatch):
+    source = production_input(manual=candidate())
+    plan = build_assembly_plan(source, uuid4())
+    first, second = tmp_path / "generated.mp4", tmp_path / "manual.mp4"
+    first.write_bytes(b"generated")
+    second.write_bytes(b"manual")
+    renderer = FFmpegAssemblyRenderer(fake_placeholder_mode=True)
+    calls = []
+
+    async def fake_run(argv, *, timeout):
+        calls.append((argv, timeout))
+        Path(argv[-1]).write_bytes(b"\x00\x00\x00\x18ftypisom")
+        return b""
+
+    expected = cast(RenderResult, SimpleNamespace(path=str(tmp_path / "final.mp4")))
+    monkeypatch.setattr(renderer, "_run", fake_run)
+    inspect = AsyncMock(return_value=expected)
+    monkeypatch.setattr(renderer, "_inspect", inspect)
+    result = await renderer._render_fake_placeholders(
+        plan,
+        (
+            MaterializedSource(str(uuid4()), str(first), "IMAGE", False),
+            MaterializedSource(str(uuid4()), str(second), "VIDEO", False),
+        ),
+        tmp_path,
+        "fake-ffmpeg",
+    )
+
+    assert result is expected
+    assert any("-stream_loop" in argv for argv, _ in calls)
+    assert any(
+        "-f" in argv
+        and "lavfi" in argv
+        and any(value.startswith("color=c=0x") for value in argv)
+        and str(tmp_path / "generated.mp4") not in argv
+        for argv, _ in calls
+    )
+    assert all(
+        "-t" in argv for argv, _ in calls if Path(argv[-1]).name.startswith("placeholder-frame-")
+    )
+    assert any(
+        "-stream_loop" in argv and "-1" in argv and str(tmp_path / "manual.mp4") in argv
+        for argv, _ in calls
+    )
+    assert any(
+        any("setpts=PTS+" in value and "ass=" in value for value in argv) for argv, _ in calls
+    )
+    inspect.assert_awaited_once_with(tmp_path / "final.mp4", plan, "fake-ffmpeg", False)
 
 
 @pytest.mark.asyncio

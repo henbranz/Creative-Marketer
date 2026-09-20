@@ -141,6 +141,10 @@ class SocialPublishingToolExecutor:
 
 
 class PublishingGateway(Protocol):
+    async def request(
+        self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
+    ) -> GatewayResult: ...
+
     async def invoke(
         self, invocation: TrustedAgentInvocation, request: ToolInvocationRequest
     ) -> GatewayResult: ...

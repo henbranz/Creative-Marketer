@@ -96,7 +96,16 @@ Tool contracts are `media.image.generate`, `media.video.generate.start`,
 `media.video.generate.status`, and `media.video.generate.import`. Their only input is
 `generation_job_id`; trusted code resolves immutable specs. Producer has `max_tool_calls=0`. The
 explicit `make media-tools-bootstrap` command creates immutable versions and activations in
-development/test; production promotion remains a platform-controlled deployment operation.
+development/test. `make media-execution-bootstrap` then creates its tenant-scoped deterministic
+policy principal and grants only those four contracts. Production promotion remains a
+platform-controlled deployment operation.
+
+The Producer Agent is planning-only and never receives these tools. A separate non-model-routed
+`media_execution_workload` Agent Registry principal supplies the narrow Tool Gateway policy for the
+deterministic production worker. Production reloads the human cycle/Producer initiator and current
+membership separately from that execution principal, while the deployment workload identity is
+recorded on each GenerationJob. This keeps human authority, policy identity, and execution identity
+distinct.
 
 Jobs move through `PENDING_APPROVAL`, `READY`, `STARTING`, `PROCESSING`, `IMPORTING`, then
 `SUCCEEDED`, `FAILED`, or `OUTCOME_UNKNOWN`. A possibly accepted Seedance start whose response is

@@ -91,6 +91,11 @@ async def test_generic_bridge_routes_only_authoritative_capabilities() -> None:
     await RouteAgentWorkflow(starter, starter, resolver)(value, None)  # type: ignore[arg-type]
     assert starter.agent_request is not None
     assert starter.agent_request.agent_run_id == str(value.aggregate_id)
+    resolver.value = "supervisor"
+    starter.agent_request = None
+    await RouteAgentWorkflow(starter, starter, resolver)(value, None)
+    assert starter.agent_request is not None
+    assert starter.agent_request.agent_run_id == str(value.aggregate_id)
     resolver.value = "researcher"
     await RouteAgentWorkflow(starter, starter, resolver)(value, None)
     assert starter.researcher_request.agent_run_id == str(value.aggregate_id)
