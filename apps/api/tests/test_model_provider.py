@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import pytest
 from httpx import Request, Response
-from openai import APIConnectionError, APITimeoutError, RateLimitError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, RateLimitError
 
 from creative_marketer.agent_runtime.application import (
     initial_creative_strategist_route,
@@ -17,8 +17,16 @@ from creative_marketer.agent_runtime.application import (
 from creative_marketer.agent_runtime.domain import (
     InvalidModelOutput,
     ModelImageInputRef,
+    ModelIncompleteResponse,
     ModelInvocation,
+    ModelProviderAuthenticationFailed,
+    ModelProviderBadRequest,
+    ModelProviderConflict,
+    ModelProviderConnectionFailed,
     ModelProviderError,
+    ModelProviderModelUnavailable,
+    ModelProviderPermissionDenied,
+    ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
     ModelTimeout,
@@ -172,7 +180,10 @@ def test_openai_adapter_rejects_missing_or_placeholder_credentials(key: str) -> 
             ModelRateLimited,
         ),
         (APITimeoutError(request=Request("POST", "https://api.openai.com")), ModelTimeout),
-        (APIConnectionError(request=Request("POST", "https://api.openai.com")), ModelProviderError),
+        (
+            APIConnectionError(request=Request("POST", "https://api.openai.com")),
+            ModelProviderConnectionFailed,
+        ),
     ],
 )
 async def test_openai_adapter_normalizes_retryable_failures(error, expected) -> None:
@@ -181,6 +192,41 @@ async def test_openai_adapter_normalizes_retryable_failures(error, expected) -> 
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (400, ModelProviderBadRequest),
+        (408, ModelTimeout),
+        (401, ModelProviderAuthenticationFailed),
+        (403, ModelProviderPermissionDenied),
+        (404, ModelProviderModelUnavailable),
+        (409, ModelProviderConflict),
+        (422, ModelProviderBadRequest),
+        (500, ModelProviderServerError),
+        (503, ModelProviderServerError),
+    ],
+)
+async def test_openai_adapter_classifies_http_failures_without_leaking_payload(
+    status, expected
+) -> None:
+    secret = "provider-payload-secret-never-print"
+    response = Response(
+        status,
+        request=Request("POST", "https://api.openai.com"),
+        headers={"Authorization": secret},
+        json={"error": {"message": secret}},
+    )
+    client, _ = client_with(error=APIStatusError(secret, response=response, body=response.json()))
+
+    with pytest.raises(expected) as caught:
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+    assert caught.value.code != "MODEL_PROVIDER_UNAVAILABLE"
+    assert secret not in str(caught.value)
 
 
 @pytest.mark.asyncio
@@ -213,7 +259,7 @@ async def test_openai_adapter_rejects_incomplete_output_blocks_and_missing_text(
         status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens")
     )
     client, _ = client_with(incomplete)
-    with pytest.raises(ModelProviderError):
+    with pytest.raises(ModelIncompleteResponse):
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())

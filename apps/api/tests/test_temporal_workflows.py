@@ -16,6 +16,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
 
+from creative_marketer.agent_runtime.domain import AgentRunRecoveryRequired
 from creative_marketer.approval_governance.domain import ApprovalDecision, HumanDecision
 from creative_marketer.infrastructure.temporal.activities import (
     TemporalActivities,
@@ -967,6 +968,55 @@ async def test_generic_agent_activity_fails_closed_when_runtime_is_absent_or_fai
     researcher_request = ResearcherWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
     with pytest.raises(ApplicationError, match="not composed"):
         await unavailable.execute_researcher(researcher_request)
+
+
+@pytest.mark.asyncio
+async def test_recovery_required_agent_activity_is_safe_and_non_retryable() -> None:
+    class RecoveryRuntime:
+        async def execute(self, _tenant_id, _run_id):
+            raise AgentRunRecoveryRequired("sensitive provider detail")
+
+    request = AgentExecutionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), agent_runtime=RecoveryRuntime()
+    )
+    with pytest.raises(ApplicationError) as caught:
+        await activities.execute_agent(request)
+    assert caught.value.type == "AGENT_RECOVERY_REQUIRED"
+    assert caught.value.non_retryable
+    assert "sensitive" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_recovery_required_agent_workflow_does_not_retry_model_execution(
+    temporal_environment,
+) -> None:
+    class RecoveryRuntime:
+        calls = 0
+
+        async def execute(self, _tenant_id, _run_id):
+            self.calls += 1
+            raise AgentRunRecoveryRequired("operator recovery required")
+
+    runtime = RecoveryRuntime()
+    request = AgentExecutionWorkflowInput(str(uuid4()), str(uuid4()), str(uuid4()))
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), agent_runtime=runtime
+    )
+    async with create_worker(
+        temporal_environment.client,
+        activities,
+        graceful_shutdown_timeout=timedelta(0),
+    ):
+        handle = await temporal_environment.client.start_workflow(
+            AgentExecutionWorkflow.run,
+            request,
+            id=agent_execution_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        with pytest.raises(WorkflowFailureError):
+            await handle.result()
+    assert runtime.calls == 1
 
 
 @pytest.mark.asyncio

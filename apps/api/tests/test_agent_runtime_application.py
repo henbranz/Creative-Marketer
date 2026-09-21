@@ -50,12 +50,15 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunNotFound,
     AgentRunNotReady,
     AgentRunRecoveryConflict,
+    AgentRunRecoveryRequired,
     AgentRunStatus,
     BudgetExceeded,
     ModelAttempt,
     ModelAttemptStatus,
     ModelContext,
     ModelInvocationResult,
+    ModelProviderBadRequest,
+    ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
     ModelRouteUnavailable,
@@ -646,10 +649,20 @@ class MemoryRepository:
             (item for item in self.attempts.values() if item.agent_run_id == run.id), None
         )
         return (
-            replace(run, operational_status="recovery_required", is_stranded=True)
+            replace(
+                run,
+                operational_status="recovery_required",
+                is_stranded=True,
+                recovery_classification=classify_stranded_attempt(attempt).value,
+                unknown_cost=(
+                    attempt.unknown_cost or run.reserved_cost
+                    if classify_stranded_attempt(attempt).value == "PROVIDER_OUTCOME_UNKNOWN"
+                    else Decimal("0")
+                ),
+            )
             if attempt is not None
             and run.status is AgentRunStatus.RUNNING
-            and attempt.lease_expires_at <= now
+            and (attempt.status is ModelAttemptStatus.UNKNOWN or attempt.lease_expires_at <= now)
             else run
         )
 
@@ -1660,8 +1673,8 @@ async def test_transient_provider_timeout_is_retried_once_then_succeeds(monkeypa
 @pytest.mark.parametrize(
     ("error", "failure_code", "expected_calls"),
     [
-        (ModelRateLimited("limited"), "MODEL_RATE_LIMITED", 2),
         (ModelTimeout("timeout"), "MODEL_TIMEOUT", 2),
+        (ModelProviderServerError("server error"), "MODEL_PROVIDER_SERVER_ERROR", 1),
         (ModelRefusal("refused"), "MODEL_REFUSAL", 1),
     ],
 )
@@ -1686,7 +1699,7 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
     requested = await runtime.request_researcher(
         context(tenant_id), product_id=product_id, idempotency_key=failure_code
     )
-    with pytest.raises(AgentRunNotReady):
+    with pytest.raises(AgentRunRecoveryRequired):
         await runtime.execute(tenant_id, requested.id)
     persisted = repository.runs[requested.id]
     attempt = next(iter(repository.attempts.values()))
@@ -1695,8 +1708,50 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
     assert attempt.failure_code == failure_code
     assert attempt.unknown_cost == persisted.reserved_cost
     assert provider.calls == expected_calls
-    with pytest.raises(AgentRunNotReady):
+    with pytest.raises(AgentRunRecoveryRequired):
         await runtime.execute(tenant_id, requested.id)
+    assert provider.calls == expected_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "failure_code", "expected_calls"),
+    [
+        (ModelProviderBadRequest("bad request"), "MODEL_PROVIDER_BAD_REQUEST", 1),
+        (ModelRateLimited("limited"), "MODEL_RATE_LIMITED", 2),
+    ],
+)
+async def test_known_provider_rejection_fails_without_unknown_cost(
+    monkeypatch, error, failure_code, expected_calls
+) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+
+    class FailingProvider:
+        calls = 0
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise error
+
+    async def no_delay(_seconds):
+        return None
+
+    monkeypatch.setattr("creative_marketer.agent_runtime.application.asyncio.sleep", no_delay)
+    provider = FailingProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key=failure_code
+    )
+
+    failed = await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == failure_code
+    assert failed.estimated_cost == 0
+    assert attempt.status is ModelAttemptStatus.FAILED_NO_RESPONSE
+    assert attempt.provider_started_at is not None
+    assert attempt.unknown_cost == 0
     assert provider.calls == expected_calls
 
 
@@ -2047,7 +2102,7 @@ async def test_unexpected_provider_exception_is_normalized_and_never_retried() -
         context(tenant_id), product_id=product_id, idempotency_key="unexpected-provider-error"
     )
 
-    with pytest.raises(AgentRunNotReady, match="ambiguous"):
+    with pytest.raises(AgentRunRecoveryRequired, match="ambiguous"):
         await runtime.execute(tenant_id, requested.id)
 
     attempt = next(iter(repository.attempts.values()))

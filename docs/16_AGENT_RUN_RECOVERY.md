@@ -57,3 +57,8 @@ Apply migration `20260912_0016` with Agent workers stopped. Any complete legacy 
 backfilled as conservatively unknown; an incomplete legacy row aborts migration rather than becoming
 retryable. Populated attempt/reconciliation/lineage evidence also blocks downgrade because dropping it
 would erase billing and forensic history.
+
+If execution creates or observes `PROVIDER_OUTCOME_UNKNOWN`, AgentRuntime reports
+`AGENT_RECOVERY_REQUIRED`. The Temporal activity maps that condition to a safe non-retryable
+ApplicationError, so workflow retry policy cannot make a second claim or model call. Only the trusted
+operator recovery commands may close or replace that run.

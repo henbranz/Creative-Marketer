@@ -71,6 +71,8 @@ PRODUCER = "60000000-0000-0000-0000-000000000006"
 PLAN = "70000000-0000-0000-0000-000000000007"
 HISTORICAL = "80000000-0000-0000-0000-000000000008"
 SNAPSHOT = "90000000-0000-0000-0000-000000000009"
+SUCCESSOR = "a0000000-0000-0000-0000-00000000000a"
+UNRELATED = "b0000000-0000-0000-0000-00000000000b"
 
 
 class FakeApi:
@@ -102,16 +104,47 @@ def settings(**values) -> Settings:
 def succeeded(identifier, route):
     return {
         "id": identifier,
+        "tenant_id": TENANT,
         "status": "SUCCEEDED",
         "resolved_provider": "openai",
         "resolved_model": route.model,
         "model_route_version": route.route_version,
+        "pricing_version": route.pricing.version,
         "input_tokens": 1,
         "output_tokens": 1,
         "total_tokens": 2,
         "estimated_cost": "0.01",
         "currency": "USD",
     }
+
+
+def recoverable_run(identifier, route, **changes):
+    value = {
+        **succeeded(identifier, route),
+        "product_id": PRODUCT,
+        "requested_agent_definition_id": str(UUID(int=21)),
+        "resolved_agent_definition_id": str(UUID(int=22)),
+        "agent_version_id": str(UUID(int=23)),
+        "agent_version_number": 1,
+        "agent_configuration_digest": "sha256:" + "a" * 64,
+        "prompt_revision": "creative-v1",
+        "agent_type": "creative_strategist",
+        "input_context_kind": "creative_strategy.v1",
+        "input_context_schema_version": 1,
+        "input_context_digest": "sha256:" + "b" * 64,
+        "model_profile_key": route.profile_key,
+        "product_snapshot_id": SNAPSHOT,
+        "product_snapshot_digest": "sha256:" + "c" * 64,
+        "research_context_digest": "sha256:" + "d" * 64,
+        "context_digest": "sha256:" + "e" * 64,
+        "pricing_version": route.pricing.version,
+        "recovery_of_run_id": None,
+        "operational_status": "normal",
+        "reserved_cost": "0.256000",
+        "unknown_cost": "0",
+    }
+    value.update(changes)
+    return value
 
 
 def saved_state(store, **values):
@@ -421,6 +454,106 @@ def test_session_resume_inspects_exact_run_without_duplicate(tmp_path) -> None:
         == 0
     )
     assert all(method == "GET" for method, _path, _body in fake.calls)
+
+
+def test_live_session_adopts_exactly_one_valid_recovery_successor(tmp_path, capsys) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(store, creative_run_id=CREATIVE)
+    route = acceptance.initial_creative_strategist_route()
+    predecessor = recoverable_run(
+        CREATIVE,
+        route,
+        status="FAILED",
+        failure_code="STRANDED_PROVIDER_OUTCOME_UNKNOWN",
+    )
+    successor = recoverable_run(
+        SUCCESSOR,
+        route,
+        status="PENDING",
+        recovery_of_run_id=CREATIVE,
+        resolved_provider=None,
+        resolved_model=None,
+        model_route_version=None,
+        pricing_version=None,
+    )
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): [predecessor, successor]})
+
+    selected = acceptance.bind_recovery_successor(
+        fake, PRODUCT, state, store, "creative_run_id", "creative", route, "Creative Strategist"
+    )
+
+    assert selected["id"] == SUCCESSOR
+    assert store.load().creative_run_id == SUCCESSOR
+    output = capsys.readouterr().out
+    assert SUCCESSOR in output and CREATIVE in output
+
+
+def test_live_session_does_not_adopt_unrelated_recovery_successor(tmp_path) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(store, creative_run_id=CREATIVE)
+    route = acceptance.initial_creative_strategist_route()
+    predecessor = recoverable_run(CREATIVE, route, status="RUNNING")
+    unrelated = recoverable_run(SUCCESSOR, route, recovery_of_run_id=UNRELATED)
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): [predecessor, unrelated]})
+
+    selected = acceptance.bind_recovery_successor(
+        fake, PRODUCT, state, store, "creative_run_id", "creative", route, "Creative Strategist"
+    )
+
+    assert selected["id"] == CREATIVE
+    assert store.load().creative_run_id == CREATIVE
+
+
+def test_live_session_rejects_multiple_recovery_successors(tmp_path) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(store, creative_run_id=CREATIVE)
+    route = acceptance.initial_creative_strategist_route()
+    values = [
+        recoverable_run(CREATIVE, route, status="FAILED"),
+        recoverable_run(SUCCESSOR, route, recovery_of_run_id=CREATIVE),
+        recoverable_run(str(UUID(int=12)), route, recovery_of_run_id=CREATIVE),
+    ]
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): values})
+
+    with pytest.raises(RuntimeError, match="SUCCESSOR_AMBIGUOUS"):
+        acceptance.bind_recovery_successor(
+            fake,
+            PRODUCT,
+            state,
+            store,
+            "creative_run_id",
+            "creative",
+            route,
+            "Creative Strategist",
+        )
+    assert store.load().creative_run_id == CREATIVE
+
+
+def test_live_status_shows_recovery_and_separates_costs(monkeypatch, tmp_path, capsys) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(store, creative_run_id=CREATIVE)
+    route = acceptance.initial_creative_strategist_route()
+    stranded = recoverable_run(
+        CREATIVE,
+        route,
+        status="RUNNING",
+        operational_status="recovery_required",
+        recovery_classification="PROVIDER_OUTCOME_UNKNOWN",
+        estimated_cost="0",
+        reserved_cost="0.256000",
+        unknown_cost="0.256000",
+    )
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): [stranded]})
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings, **_kwargs: fake)
+
+    assert acceptance.session_status(settings(), store) == 0
+
+    output = capsys.readouterr().out
+    assert "Creative Strategist: RUNNING / RECOVERY_REQUIRED" in output
+    assert "unknown potential cost: 0.256000 USD" in output
+    assert "Session-bound actual cost: 0 USD" in output
+    assert "Session-bound reserved cost: 0.256000 USD" in output
+    assert "Session-bound unknown potential cost: 0.256000 USD" in output
 
 
 def test_reset_removes_only_local_session_state(tmp_path) -> None:

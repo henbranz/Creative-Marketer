@@ -3401,10 +3401,13 @@ class SqlAlchemyAgentRunRepository:
         )
         if owned_run is None:
             raise AgentRunRecoveryConflict("late worker cannot persist AgentRun failure")
-        expected_status = (
-            ModelAttemptStatus.RESPONSE_RECORDED
+        expected_statuses = (
+            (ModelAttemptStatus.RESPONSE_RECORDED.value,)
             if result is not None
-            else ModelAttemptStatus.CLAIMED
+            else (
+                ModelAttemptStatus.CLAIMED.value,
+                ModelAttemptStatus.PROVIDER_STARTED.value,
+            )
         )
         terminal_status = (
             ModelAttemptStatus.SUCCEEDED
@@ -3418,7 +3421,7 @@ class SqlAlchemyAgentRunRepository:
                     model_attempts.c.id == attempt_id,
                     model_attempts.c.agent_run_id == run.id,
                     model_attempts.c.workload_id == workload_id,
-                    model_attempts.c.status == expected_status.value,
+                    model_attempts.c.status.in_(expected_statuses),
                 )
                 .values(
                     status=terminal_status.value,
@@ -3471,27 +3474,43 @@ class SqlAlchemyAgentRunRepository:
         )
 
     async def operational_status(self, run: AgentRun, now: datetime) -> AgentRun:
-        if run.status is not AgentRunStatus.RUNNING:
-            return run
         attempt = (
             await self._session.execute(
                 select(model_attempts).where(
                     model_attempts.c.agent_run_id == run.id,
-                    model_attempts.c.lease_expires_at <= now,
-                    model_attempts.c.status.in_(
-                        [
-                            ModelAttemptStatus.CLAIMED.value,
-                            ModelAttemptStatus.PROVIDER_STARTED.value,
-                            ModelAttemptStatus.RESPONSE_RECORDED.value,
-                            ModelAttemptStatus.UNKNOWN.value,
-                        ]
+                    (
+                        (model_attempts.c.status == ModelAttemptStatus.UNKNOWN.value)
+                        | (
+                            (model_attempts.c.lease_expires_at <= now)
+                            & model_attempts.c.status.in_(
+                                [
+                                    ModelAttemptStatus.CLAIMED.value,
+                                    ModelAttemptStatus.PROVIDER_STARTED.value,
+                                    ModelAttemptStatus.RESPONSE_RECORDED.value,
+                                ]
+                            )
+                        )
                     ),
                 )
             )
         ).first()
         if attempt is None:
             return run
-        return replace(run, operational_status="recovery_required", is_stranded=True)
+        value = _attempt(attempt)
+        classification = classify_stranded_attempt(value)
+        unknown_cost = (
+            value.unknown_cost or run.reserved_cost
+            if classification is RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN
+            else Decimal("0")
+        )
+        recovery_required = run.status is AgentRunStatus.RUNNING
+        return replace(
+            run,
+            operational_status="recovery_required" if recovery_required else "normal",
+            is_stranded=recovery_required,
+            recovery_classification=classification.value,
+            unknown_cost=unknown_cost,
+        )
 
     async def find_stranded(self, now: datetime) -> tuple[StrandedAgentRun, ...]:
         run_ids = tuple(

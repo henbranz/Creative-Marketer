@@ -33,6 +33,12 @@ that amount to authoritative actual cost. Recovery is CLI-only; no browser or pu
 holds this authority. Exact run/attempt/workload predicates and row locking reject late worker writes
 and concurrent recovery losers.
 
+An AgentRuntime execution that creates or observes an outcome-unknown attempt raises the bounded
+`AGENT_RECOVERY_REQUIRED` condition. Temporal activities surface that condition as non-retryable;
+Temporal must not turn operator recovery into a second model execution attempt. This does not change
+the bounded retry policy for failures that occur before model authority or for explicitly classified,
+safe, known no-response HTTP rejections.
+
 ## Consequences
 
 The system favors duplicate-inference prevention and conservative accounting over availability.

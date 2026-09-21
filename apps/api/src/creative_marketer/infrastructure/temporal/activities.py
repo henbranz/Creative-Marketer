@@ -6,6 +6,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from creative_marketer.agent_runtime.application import AgentRunService
+from creative_marketer.agent_runtime.domain import AgentRunRecoveryRequired
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.tool_execution.application import ToolGateway
 from creative_marketer.tool_execution.domain import (
@@ -229,6 +230,13 @@ class TemporalActivities:
                 run = await self.agent_runtime.execute(
                     UUID(request.tenant_id), UUID(request.agent_run_id)
                 )
+            except AgentRunRecoveryRequired:
+                span.record_error("AGENT_RECOVERY_REQUIRED")
+                raise ApplicationError(
+                    "AgentRun requires explicit operator recovery",
+                    type="AGENT_RECOVERY_REQUIRED",
+                    non_retryable=True,
+                ) from None
             except Exception as error:
                 span.record_error("RESEARCHER_ACTIVITY_FAILURE")
                 raise ApplicationError(
@@ -252,6 +260,12 @@ class TemporalActivities:
             run = await self.agent_runtime.execute(
                 UUID(request.tenant_id), UUID(request.agent_run_id)
             )
+        except AgentRunRecoveryRequired:
+            raise ApplicationError(
+                "AgentRun requires explicit operator recovery",
+                type="AGENT_RECOVERY_REQUIRED",
+                non_retryable=True,
+            ) from None
         except Exception as error:
             raise ApplicationError(
                 "Agent execution failed", type="AGENT_EXECUTION_FAILURE"

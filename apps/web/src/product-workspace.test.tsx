@@ -447,6 +447,7 @@ const socialEvidence: SocialEvidence = {
 };
 const agentRun: AgentRun = {
   id: "90000000-0000-0000-0000-000000000001",
+  tenant_id: product.tenant_id,
   product_id: product.id,
   status: "SUCCEEDED",
   operational_status: "completed",
@@ -478,9 +479,12 @@ const agentRun: AgentRun = {
   output_tokens: 50,
   total_tokens: 150,
   estimated_cost: "0.001400",
+  reserved_cost: "0.160000",
+  unknown_cost: "0",
   currency: "USD",
   result_ref: "research-snapshot://result",
   failure_code: null,
+  recovery_classification: null,
 };
 const researchSnapshot: ResearchSnapshot = {
   id: "93000000-0000-0000-0000-000000000001",

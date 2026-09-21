@@ -48,6 +48,11 @@ class RecoveryClassification(StrEnum):
     RESPONSE_RECORDED = "RESPONSE_RECORDED"
 
 
+class ModelFailureDisposition(StrEnum):
+    KNOWN_NO_RESPONSE = "KNOWN_NO_RESPONSE"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+
+
 class FindingCategory(StrEnum):
     COMPETITOR = "competitor"
     POSITIONING = "positioning"
@@ -68,10 +73,56 @@ class Confidence(StrEnum):
 class ModelProviderError(Exception):
     code = "MODEL_PROVIDER_UNAVAILABLE"
     retryable = True
+    disposition = ModelFailureDisposition.OUTCOME_UNKNOWN
+
+
+class ModelProviderBadRequest(ModelProviderError):
+    code = "MODEL_PROVIDER_BAD_REQUEST"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
+class ModelProviderAuthenticationFailed(ModelProviderError):
+    code = "MODEL_PROVIDER_AUTHENTICATION_FAILED"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
+class ModelProviderPermissionDenied(ModelProviderError):
+    code = "MODEL_PROVIDER_PERMISSION_DENIED"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
+class ModelProviderModelUnavailable(ModelProviderError):
+    code = "MODEL_PROVIDER_MODEL_UNAVAILABLE"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
+class ModelProviderConflict(ModelProviderError):
+    code = "MODEL_PROVIDER_CONFLICT"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
+class ModelProviderServerError(ModelProviderError):
+    code = "MODEL_PROVIDER_SERVER_ERROR"
+    retryable = False
+
+
+class ModelProviderHttpError(ModelProviderError):
+    code = "MODEL_PROVIDER_HTTP_ERROR"
+    retryable = False
+
+
+class ModelProviderConnectionFailed(ModelProviderError):
+    code = "MODEL_PROVIDER_CONNECTION_FAILED"
 
 
 class ModelRateLimited(ModelProviderError):
     code = "MODEL_RATE_LIMITED"
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
 
 
 class ModelTimeout(ModelProviderError):
@@ -80,6 +131,11 @@ class ModelTimeout(ModelProviderError):
 
 class ModelRefusal(ModelProviderError):
     code = "MODEL_REFUSAL"
+    retryable = False
+
+
+class ModelIncompleteResponse(ModelProviderError):
+    code = "MODEL_PROVIDER_INCOMPLETE_RESPONSE"
     retryable = False
 
 
@@ -101,6 +157,10 @@ class AgentRunDenied(AgentRuntimeError):
 
 class AgentRunNotReady(AgentRuntimeError):
     code = "AGENT_RUN_NOT_READY"
+
+
+class AgentRunRecoveryRequired(AgentRunNotReady):
+    code = "AGENT_RECOVERY_REQUIRED"
 
 
 class BudgetExceeded(AgentRuntimeError):
@@ -365,7 +425,6 @@ class ModelAttempt:
             )
             or (
                 failed_no_response
-                and self.provider_started_at is None
                 and self.response_recorded_at is None
                 and self.finished_at is not None
             )
@@ -574,6 +633,8 @@ class AgentRun:
     failure_code: str | None = None
     operational_status: str = "normal"
     is_stranded: bool = False
+    recovery_classification: str | None = None
+    unknown_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         if not self.input_context_digest:
@@ -617,6 +678,8 @@ class AgentRun:
             self.operational_status == "recovery_required"
         ):
             raise ValueError("AgentRun operational state is inconsistent")
+        if self.unknown_cost < 0:
+            raise ValueError("AgentRun unknown cost cannot be negative")
 
 
 def parse_research_output(

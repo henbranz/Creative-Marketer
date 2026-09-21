@@ -1787,6 +1787,8 @@ export interface components {
       product_snapshot_id: string;
       /** Prompt Revision */
       prompt_revision: string;
+      /** Recovery Classification */
+      recovery_classification: string | null;
       /** Recovery Of Run Id */
       recovery_of_run_id: string | null;
       /**
@@ -1796,6 +1798,8 @@ export interface components {
       requested_agent_definition_id: string;
       /** Research Context Digest */
       research_context_digest: string;
+      /** Reserved Cost */
+      reserved_cost: string;
       /**
        * Resolved Agent Definition Id
        * Format: uuid
@@ -1811,8 +1815,15 @@ export interface components {
       started_at: string | null;
       /** Status */
       status: string;
+      /**
+       * Tenant Id
+       * Format: uuid
+       */
+      tenant_id: string;
       /** Total Tokens */
       total_tokens: number;
+      /** Unknown Cost */
+      unknown_cost: string;
     };
     /** AgentRunStart */
     AgentRunStart: {

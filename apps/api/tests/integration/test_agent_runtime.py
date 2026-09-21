@@ -35,7 +35,9 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunRecoveryConflict,
     AgentRunStatus,
     BudgetExceeded,
+    ModelAttemptStatus,
     ModelInvocationResult,
+    ModelProviderBadRequest,
     ModelUsage,
     RecoveryAgentUnavailable,
     RecoveryBlockedBudget,
@@ -213,6 +215,43 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
     assert snapshots[0].agent_run_id == completed.id
     assert await service.snapshot_freshness(context, snapshots[0]) == "current"
     assert len(provider.calls) == 1
+
+    class BadRequestProvider:
+        calls = 0
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelProviderBadRequest("provider payload must not persist")
+
+    bad_request_provider = BadRequestProvider()
+    rejecting_service = AgentRunService(
+        uows,
+        ModelRouter((initial_researcher_route(),)),
+        ModelProviderRegistry({"openai": bad_request_provider}),
+        IdentityProvider(),
+    )
+    rejected = await rejecting_service.request_researcher(
+        context, product_id=product.id, idempotency_key="known-provider-rejection"
+    )
+    failed = await rejecting_service.execute(context.tenant_id, rejected.id)
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == "MODEL_PROVIDER_BAD_REQUEST"
+    assert failed.estimated_cost == 0
+    assert bad_request_provider.calls == 1
+    async with admin_engine.connect() as connection:
+        attempt = (
+            await connection.execute(
+                text(
+                    "SELECT status, unknown_cost, input_tokens, output_tokens, failure_code "
+                    "FROM agent_runtime.model_attempts WHERE agent_run_id=:run"
+                ),
+                {"run": rejected.id},
+            )
+        ).one()
+    assert attempt.status == ModelAttemptStatus.FAILED_NO_RESPONSE.value
+    assert attempt.unknown_cost == 0
+    assert attempt.input_tokens == attempt.output_tokens == 0
+    assert attempt.failure_code == "MODEL_PROVIDER_BAD_REQUEST"
 
     other_tenant, other_user = await seed_catalog_identity(admin_engine)
     with pytest.raises(AgentRunNotFound):

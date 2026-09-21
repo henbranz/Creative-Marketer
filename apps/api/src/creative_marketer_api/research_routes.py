@@ -234,6 +234,7 @@ class AgentRunStart(Contract):
 
 class AgentRunResponse(Contract):
     id: UUID
+    tenant_id: UUID
     product_id: UUID
     status: str
     operational_status: str
@@ -265,9 +266,12 @@ class AgentRunResponse(Contract):
     output_tokens: int
     total_tokens: int
     estimated_cost: str
+    reserved_cost: str
+    unknown_cost: str
     currency: str
     result_ref: str | None
     failure_code: str | None
+    recovery_classification: str | None
 
 
 class ResearchCitationResponse(Contract):
@@ -454,6 +458,7 @@ def _social_evidence(value: SocialEvidenceSnapshot) -> SocialEvidenceResponse:
 def _agent_run(value: AgentRun) -> AgentRunResponse:
     return AgentRunResponse(
         id=value.id,
+        tenant_id=value.tenant_id,
         product_id=value.product_id,
         status=value.status.value,
         operational_status=value.operational_status,
@@ -485,9 +490,12 @@ def _agent_run(value: AgentRun) -> AgentRunResponse:
         output_tokens=value.output_tokens,
         total_tokens=value.total_tokens,
         estimated_cost=str(value.estimated_cost),
+        reserved_cost=str(value.reserved_cost),
+        unknown_cost=str(value.unknown_cost),
         currency=value.currency,
         result_ref=value.result_ref,
         failure_code=value.failure_code,
+        recovery_classification=value.recovery_classification,
     )
 
 

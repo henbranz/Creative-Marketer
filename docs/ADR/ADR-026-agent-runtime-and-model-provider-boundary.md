@@ -37,6 +37,15 @@ retryable failures with no provider response or reported usage receive the secon
 refusals, malformed output, and post-response validation failures do not. The attempts are part of
 one logical model call, and the SDK adapter disables its own retry multiplication.
 
+Provider adapters classify failures into stable safe codes without persisting provider bodies or
+headers. A received HTTP rejection is a known no-successful-response outcome: authentication,
+permission, bad-request, unavailable-model, conflict, and rate-limit responses may close the attempt
+as `FAILED_NO_RESPONSE` with zero usage after any bounded safe retry. Timeouts, connection failures,
+server errors, unrecognized HTTP statuses, and unexpected adapter failures remain outcome-unknown
+because request processing may have begun. A refusal or incomplete Responses API object without a
+durable normalized response/usage checkpoint also remains conservatively outcome-unknown, but
+retains its distinct safe failure code.
+
 Run and period budgets are enforced transactionally. Decimal cost uses the exact frozen price
 snapshot and provider-reported token counts. User request, Audit, and Outbox event commit together;
 an Inbox handler starts a deterministic Temporal workflow. Activities resolve the authoritative

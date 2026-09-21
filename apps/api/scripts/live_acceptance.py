@@ -195,13 +195,98 @@ def exact_run(
     api: LocalApi, product: str, kind: str, identifier: str, route: ModelRoute
 ) -> dict[str, Any]:
     run = exact(items(api, f"/v1/products/{product}/{kind}/runs"), identifier, f"{kind}_run")
-    if run.get("status") == "SUCCEEDED" and (
-        run.get("resolved_provider") != "openai"
-        or run.get("resolved_model") != route.model
-        or run.get("model_route_version") != route.route_version
+    validate_run_route(run, route)
+    return run
+
+
+def validate_run_route(run: dict[str, Any], route: ModelRoute) -> None:
+    route_values = (
+        run.get("resolved_provider"),
+        run.get("resolved_model"),
+        run.get("model_route_version"),
+        run.get("pricing_version"),
+    )
+    if any(value is not None for value in route_values) and route_values != (
+        route.provider,
+        route.model,
+        route.route_version,
+        route.pricing.version,
     ):
         raise RuntimeError("LIVE_SESSION_AGENT_RUN_ROUTE_MISMATCH")
-    return run
+
+
+RECOVERY_PROVENANCE_FIELDS = (
+    "product_id",
+    "requested_agent_definition_id",
+    "resolved_agent_definition_id",
+    "agent_version_id",
+    "agent_version_number",
+    "agent_configuration_digest",
+    "prompt_revision",
+    "agent_type",
+    "input_context_kind",
+    "input_context_schema_version",
+    "input_context_digest",
+    "model_profile_key",
+    "product_snapshot_id",
+    "product_snapshot_digest",
+    "research_context_digest",
+    "context_digest",
+)
+
+
+def bind_recovery_successor(
+    api: LocalApi,
+    product: str,
+    state: LiveState,
+    store: StateStore,
+    field_name: str,
+    kind: str,
+    route: ModelRoute,
+    label: str,
+) -> dict[str, Any]:
+    """Adopt only the unique immutable successor of the exact session-bound run."""
+
+    identifier = cast(str, getattr(state, field_name))
+    values = items(api, f"/v1/products/{product}/{kind}/runs")
+    predecessor = exact(values, identifier, f"{kind}_run")
+    successors = [value for value in values if value.get("recovery_of_run_id") == identifier]
+    if not successors:
+        validate_run_route(predecessor, route)
+        return predecessor
+    if len(successors) != 1:
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_AMBIGUOUS")
+    successor = successors[0]
+    if predecessor.get("tenant_id") != api.tenant_id or successor.get("tenant_id") != api.tenant_id:
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_TENANT_MISMATCH")
+    if any(successor.get(field) != predecessor.get(field) for field in RECOVERY_PROVENANCE_FIELDS):
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_PROVENANCE_MISMATCH")
+    if predecessor.get("product_id") != product:
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_PRODUCT_MISMATCH")
+    # The endpoint is authenticated and RLS-scoped; revalidate its explicit tenant and all
+    # exposed immutable provenance before changing the local checkpoint.
+    predecessor_route = (
+        predecessor.get("resolved_provider"),
+        predecessor.get("resolved_model"),
+        predecessor.get("model_route_version"),
+        predecessor.get("pricing_version"),
+    )
+    expected_route = (route.provider, route.model, route.route_version, route.pricing.version)
+    if predecessor_route != expected_route:
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_ROUTE_MISMATCH")
+    successor_route = (
+        successor.get("resolved_provider"),
+        successor.get("resolved_model"),
+        successor.get("model_route_version"),
+        successor.get("pricing_version"),
+    )
+    if any(value is not None for value in successor_route) and successor_route != expected_route:
+        raise RuntimeError("LIVE_SESSION_RECOVERY_SUCCESSOR_ROUTE_MISMATCH")
+    successor_id = valid_id(successor.get("id"), "recovery_successor_id")
+    setattr(state, field_name, successor_id)
+    store.save(state)
+    print(f"{label}: adopted recovery successor {successor_id} for {identifier}")
+    return successor
 
 
 def created_id(response: Any, label: str) -> str:
@@ -283,7 +368,7 @@ def advance_run(
             f"{label} requested for session {state.session_id}. Re-run after the worker completes."
         )
         return 3
-    run = exact_run(api, product, kind, identifier, route)
+    run = bind_recovery_successor(api, product, state, store, field_name, kind, route, label)
     if run.get("status") == "FAILED":
         print(f"{label}: FAIL ({run.get('failure_code') or 'AGENT_RUN_FAILED'})")
         return 2
@@ -550,18 +635,58 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
     print(f"Live acceptance session: {state.session_id}")
     print(f"Tenant: {state.tenant_id}")
     print(f"Product: {state.product_id}")
-    total = Decimal()
-    for label, identifier in (
-        ("Researcher", state.researcher_run_id),
-        ("Creative Strategist", state.creative_run_id),
-        ("Producer", state.producer_run_id),
+    actual = Decimal()
+    reserved = Decimal()
+    unknown = Decimal()
+    for label, field_name, kind, route in (
+        ("Researcher", "researcher_run_id", "research", initial_researcher_route()),
+        (
+            "Creative Strategist",
+            "creative_run_id",
+            "creative",
+            initial_creative_strategist_route(),
+        ),
+        ("Producer", "producer_run_id", "production", initial_producer_route()),
     ):
+        identifier = cast(str | None, getattr(state, field_name))
         if identifier is None:
             print(f"{label}: NOT STARTED")
         else:
-            run = cast(dict[str, Any], api.request(f"/v1/agent-runs/{identifier}"))
-            print(f"{label}: {run.get('status', 'UNKNOWN')}")
-            total += Decimal(str(run.get("estimated_cost", 0)))
+            run = bind_recovery_successor(
+                api, state.product_id, state, saved, field_name, kind, route, label
+            )
+            status = str(run.get("status", "UNKNOWN"))
+            if run.get("operational_status") == "recovery_required":
+                status += " / RECOVERY_REQUIRED"
+            print(f"{label}: {status}")
+            lineage = [run]
+            recovery_of = run.get("recovery_of_run_id")
+            seen = {str(run.get("id"))}
+            while recovery_of is not None:
+                predecessor_id = valid_id(recovery_of, "recovery_predecessor_id")
+                if predecessor_id in seen or len(seen) >= 16:
+                    raise RuntimeError("LIVE_SESSION_RECOVERY_LINEAGE_INVALID")
+                seen.add(predecessor_id)
+                predecessor = cast(dict[str, Any], api.request(f"/v1/agent-runs/{predecessor_id}"))
+                lineage.append(predecessor)
+                recovery_of = predecessor.get("recovery_of_run_id")
+            stage_unknown = sum(
+                (Decimal(str(value.get("unknown_cost", 0))) for value in lineage), Decimal()
+            )
+            if stage_unknown:
+                print(f"  unknown potential cost: {stage_unknown} {run.get('currency', 'USD')}")
+            actual += sum(
+                (Decimal(str(value.get("estimated_cost", 0))) for value in lineage), Decimal()
+            )
+            reserved += sum(
+                (
+                    Decimal(str(value.get("reserved_cost", 0)))
+                    for value in lineage
+                    if value.get("status") in {"PENDING", "RUNNING"}
+                ),
+                Decimal(),
+            )
+            unknown += stage_unknown
     for label, identifiers in (("Image", state.image_job_ids), ("Video", state.video_job_ids)):
         values = [
             cast(dict[str, Any], api.request(f"/v1/production/jobs/{i}")) for i in identifiers
@@ -570,20 +695,23 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
             ", ".join(str(v.get("status", "UNKNOWN")) for v in values) if values else "NOT STARTED"
         )
         print(f"{label}: {stage_status}")
-        total += sum(
+        actual += sum((Decimal(str(v.get("actual_cost", 0))) for v in values), Decimal())
+        reserved += sum(
             (
                 Decimal(str(v.get("reserved_cost", 0)))
-                if Decimal(str(v.get("unknown_cost", 0))) > 0
-                else Decimal(str(v.get("actual_cost", 0)))
                 for v in values
+                if v.get("status") not in {"SUCCEEDED", "FAILED", "CANCELLED"}
             ),
             Decimal(),
         )
+        unknown += sum((Decimal(str(v.get("unknown_cost", 0))) for v in values), Decimal())
     if state.assembly_plan_id:
         value = cast(dict[str, Any], api.request(f"/v1/assembly/plans/{state.assembly_plan_id}"))
         print(f"Assembly: {value.get('job', {}).get('status', 'UNKNOWN')}")
     else:
         print("Assembly: NOT STARTED")
     print(f"Final Creative: {'BOUND' if state.final_creative_id else 'NOT STARTED'}")
-    print(f"Session-bound live acceptance cost: {total} USD")
+    print(f"Session-bound actual cost: {actual} USD")
+    print(f"Session-bound reserved cost: {reserved} USD")
+    print(f"Session-bound unknown potential cost: {unknown} USD")
     return 0

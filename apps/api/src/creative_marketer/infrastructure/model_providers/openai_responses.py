@@ -11,9 +11,18 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpe
 from creative_marketer.agent_runtime.domain import (
     InvalidModelOutput,
     ModelImageInputRef,
+    ModelIncompleteResponse,
     ModelInvocation,
     ModelInvocationResult,
+    ModelProviderAuthenticationFailed,
+    ModelProviderBadRequest,
+    ModelProviderConflict,
+    ModelProviderConnectionFailed,
     ModelProviderError,
+    ModelProviderHttpError,
+    ModelProviderModelUnavailable,
+    ModelProviderPermissionDenied,
+    ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
     ModelTimeout,
@@ -125,15 +134,33 @@ class OpenAIResponsesModelProvider:
         except APITimeoutError as error:
             raise ModelTimeout("OpenAI request timed out") from error
         except APIConnectionError as error:
-            raise ModelProviderError("OpenAI unavailable") from error
+            raise ModelProviderConnectionFailed("OpenAI connection failed") from error
         except APIStatusError as error:
-            raise ModelProviderError("OpenAI request failed") from error
+            status_code = error.status_code
+            failure_type: type[ModelProviderError]
+            if status_code in {400, 422}:
+                failure_type = ModelProviderBadRequest
+            elif status_code == 401:
+                failure_type = ModelProviderAuthenticationFailed
+            elif status_code == 403:
+                failure_type = ModelProviderPermissionDenied
+            elif status_code == 404:
+                failure_type = ModelProviderModelUnavailable
+            elif status_code == 409:
+                failure_type = ModelProviderConflict
+            elif status_code == 408:
+                failure_type = ModelTimeout
+            elif 500 <= status_code <= 599:
+                failure_type = ModelProviderServerError
+            else:
+                failure_type = ModelProviderHttpError
+            raise failure_type("OpenAI request failed") from error
         if response.status in {"failed", "cancelled", "incomplete"}:
             details = getattr(response, "incomplete_details", None)
             reason = getattr(details, "reason", None)
             if reason in {"content_filter", "safety"}:
                 raise ModelRefusal("model refused the request")
-            raise ModelProviderError("OpenAI did not complete the response")
+            raise ModelIncompleteResponse("OpenAI did not complete the response")
         if any(
             getattr(content, "type", None) == "refusal"
             for item in getattr(response, "output", ())

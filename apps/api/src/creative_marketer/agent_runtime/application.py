@@ -101,6 +101,7 @@ from .domain import (
     AgentRunNotFound,
     AgentRunNotReady,
     AgentRunRecoveryConflict,
+    AgentRunRecoveryRequired,
     AgentRunStatus,
     AgentRuntimeError,
     BudgetExceeded,
@@ -108,6 +109,7 @@ from .domain import (
     ModelAttempt,
     ModelCapabilityUnavailable,
     ModelContext,
+    ModelFailureDisposition,
     ModelImageInputRef,
     ModelInvocation,
     ModelInvocationResult,
@@ -2617,6 +2619,12 @@ class AgentRunService:
                     existing = await uow.runs.get(run_id)
                     if existing is not None and existing.status is AgentRunStatus.SUCCEEDED:
                         return existing
+                    if existing is not None:
+                        operational = await uow.runs.operational_status(existing, datetime.now(UTC))
+                        if operational.is_stranded:
+                            raise AgentRunRecoveryRequired(
+                                "AgentRun requires explicit operator recovery"
+                            )
                     raise AgentRunNotReady("AgentRun cannot be claimed")
                 run, attempt = claim
                 context = await uow.runs.resolve_context(run)
@@ -2739,13 +2747,17 @@ class AgentRunService:
                     if isinstance(error, (AgentRuntimeError, ModelProviderError, CreativeError))
                     else "MODEL_INVALID_OUTPUT"
                 )
-                if result is None and provider_started_committed:
+                known_no_response = (
+                    isinstance(error, ModelProviderError)
+                    and error.disposition is ModelFailureDisposition.KNOWN_NO_RESPONSE
+                )
+                if result is None and provider_started_committed and not known_no_response:
                     async with self.uow_factory(tenant_id) as uow:
                         await uow.runs.mark_attempt_unknown(
                             run.id, attempt.id, workload.workload_id, code
                         )
                         await uow.commit()
-                    raise AgentRunNotReady(
+                    raise AgentRunRecoveryRequired(
                         "provider outcome is ambiguous and requires operator recovery"
                     ) from error
                 async with self.uow_factory(tenant_id) as uow:

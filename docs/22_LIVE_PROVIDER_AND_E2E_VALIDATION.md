@@ -173,3 +173,10 @@ authorize more. Provider billing remains authoritative; reservations are conserv
 
 CI acceptance and live-provider acceptance are separate. CI never receives provider keys and never
 runs these commands. Record live acceptance as `NOT RUN`, `PASS`, or `FAIL` in operator notes.
+
+When a session-bound AgentRun is recovered with the operator-only `agent-run-rerun` command, the
+harness may adopt only the unique successor whose `recovery_of_run_id` points to that exact run and
+whose tenant-scoped Product, Agent type/version/configuration, context provenance, and applicable
+route match. Zero successors leaves the checkpoint unchanged; multiple or mismatched successors fail
+closed. Status reports operational recovery separately from lifecycle state and reports actual,
+reserved, and unknown-potential costs as distinct values.

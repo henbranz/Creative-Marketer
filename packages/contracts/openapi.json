@@ -138,6 +138,17 @@
             "title": "Prompt Revision",
             "type": "string"
           },
+          "recovery_classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Classification"
+          },
           "recovery_of_run_id": {
             "anyOf": [
               {
@@ -157,6 +168,10 @@
           },
           "research_context_digest": {
             "title": "Research Context Digest",
+            "type": "string"
+          },
+          "reserved_cost": {
+            "title": "Reserved Cost",
             "type": "string"
           },
           "resolved_agent_definition_id": {
@@ -213,13 +228,23 @@
             "title": "Status",
             "type": "string"
           },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
           "total_tokens": {
             "title": "Total Tokens",
             "type": "integer"
+          },
+          "unknown_cost": {
+            "title": "Unknown Cost",
+            "type": "string"
           }
         },
         "required": [
           "id",
+          "tenant_id",
           "product_id",
           "status",
           "operational_status",
@@ -251,9 +276,12 @@
           "output_tokens",
           "total_tokens",
           "estimated_cost",
+          "reserved_cost",
+          "unknown_cost",
           "currency",
           "result_ref",
-          "failure_code"
+          "failure_code",
+          "recovery_classification"
         ],
         "title": "AgentRunResponse",
         "type": "object"

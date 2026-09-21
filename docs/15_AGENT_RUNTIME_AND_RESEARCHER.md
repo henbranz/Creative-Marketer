@@ -133,6 +133,13 @@ tokens, cost, and invalid-citation totals. They never contain tenant/product/sou
 content. Expired leases derive a read-only `recovery_required` operational state while preserving
 the authoritative `RUNNING` row. Recovery is an explicit, trusted CLI-only operation; see
 `16_AGENT_RUN_RECOVERY.md`. Exactly-once provider billing is not promised.
+
+Provider failures use bounded safe codes. Deterministic HTTP 400/401/403/404/409/422 and 429
+responses are classified separately and, because the provider returned a known rejection before a
+successful model response, close with zero usage rather than unknown cost. Timeout, connection, 5xx,
+unrecognized HTTP, and unexpected transport outcomes remain conservative and require operator
+recovery. Provider bodies, headers, credentials, prompts, and Product content are never persisted in
+failure details.
 ## Multi-capability runtime
 
 AgentRun now freezes generic `agent_type` and input-context kind/version/digest/reference fields.

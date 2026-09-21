@@ -36,4 +36,5 @@ RESEARCHER_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=15),
     maximum_attempts=2,
+    non_retryable_error_types=["AGENT_RECOVERY_REQUIRED"],
 )
