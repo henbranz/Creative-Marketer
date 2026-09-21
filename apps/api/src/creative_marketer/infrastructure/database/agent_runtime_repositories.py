@@ -28,12 +28,13 @@ from creative_marketer.agent_runtime.application import (
     build_intelligence_model_context,
     build_producer_model_context,
     build_supervisor_model_context,
+    compact_context,
 )
 from creative_marketer.agent_runtime.domain import (
+    AgentPeriodBudgetExceeded,
     AgentRun,
     AgentRunRecoveryConflict,
     AgentRunStatus,
-    BudgetExceeded,
     Citation,
     Confidence,
     EvidenceBlockRef,
@@ -1887,7 +1888,7 @@ class SqlAlchemyAgentRunRepository:
             or (max_runs is not None and d["reserved_runs"] + 1 > max_runs)
             or d["actual_cost"] + d["reserved_cost"] + d["unknown_cost"] + reserve_cost > max_cost
         ):
-            raise BudgetExceeded("period budget is exhausted")
+            raise AgentPeriodBudgetExceeded("period budget is exhausted")
         await self._session.execute(
             update(agent_budget_usage)
             .where(
@@ -2896,7 +2897,10 @@ class SqlAlchemyAgentRunRepository:
             created_at=s["created_at"],
         )
         context = ModelContext(
-            v["system_instructions"], dict(product.content), tuple(blocks), run.context_digest
+            v["system_instructions"],
+            cast(dict[str, object], compact_context(product.content)),
+            tuple(blocks),
+            run.context_digest,
         )
         expected = canonical_digest(
             {

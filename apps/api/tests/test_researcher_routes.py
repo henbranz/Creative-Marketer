@@ -6,6 +6,9 @@ import pytest
 from fastapi import HTTPException
 
 from creative_marketer.agent_runtime.domain import (
+    AgentContextBudgetExceeded,
+    AgentPeriodBudgetExceeded,
+    AgentRouteBudgetMismatch,
     AgentRunDenied,
     AgentRunNotFound,
     AgentRunNotReady,
@@ -111,14 +114,29 @@ async def test_researcher_run_and_snapshot_routes_return_governed_state() -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("error", "status_code"),
+    ("error", "status_code", "detail"),
     [
-        (AgentRunDenied("denied"), 403),
-        (ValueError("invalid"), 422),
-        (AgentRunNotReady("not ready"), 409),
+        (AgentRunDenied("denied"), 403, "agent_run_denied"),
+        (ValueError("invalid"), 422, "agent_runtime_error"),
+        (AgentRunNotReady("not ready"), 409, "agent_run_not_ready"),
+        (
+            AgentRouteBudgetMismatch("route"),
+            409,
+            "agent_route_budget_mismatch",
+        ),
+        (
+            AgentContextBudgetExceeded("context"),
+            409,
+            "agent_context_budget_exceeded",
+        ),
+        (
+            AgentPeriodBudgetExceeded("period"),
+            409,
+            "agent_period_budget_exceeded",
+        ),
     ],
 )
-async def test_start_researcher_maps_safe_error_codes(error, status_code) -> None:
+async def test_start_researcher_maps_safe_error_codes(error, status_code, detail) -> None:
     service = AgentService()
     service.request_error = error
     start = endpoint(router(service), "/v1/products/{product_id}/research/runs", "POST")
@@ -127,6 +145,7 @@ async def test_start_researcher_maps_safe_error_codes(error, status_code) -> Non
             service.run.product_id, AgentRunStart(idempotency_key="browser-request"), object()
         )
     assert raised.value.status_code == status_code
+    assert raised.value.detail == detail
 
 
 @pytest.mark.asyncio

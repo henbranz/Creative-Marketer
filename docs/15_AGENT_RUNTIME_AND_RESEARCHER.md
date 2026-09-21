@@ -75,6 +75,15 @@ Evidence older than 30 days is marked stale. Each selected block binds EvidenceS
 ID, block index/kind, a content digest, and stale flag. Product context is drawn only from the exact
 ProductKnowledgeSnapshot. Assets and object keys are absent.
 
+The Researcher budget fitter removes only absent or empty Product fields from the provider-facing
+representation; it never changes the immutable Product snapshot or its provenance digest. It then
+uses the route's total-token bound minus its maximum output tokens as the input allowance and takes
+the longest canonical prefix of complete EvidenceBlocks that fits the conservative UTF-8 byte
+bound. Blocks are never text-truncated, lower-priority blocks never bypass a non-fitting
+higher-priority block, and at least one complete block is required. Fixed context that cannot fit,
+or an allowance that cannot hold the first block, fails before reservation and before any provider
+call.
+
 System instructions are separate from the user message. The user message labels Product context as
 trusted and external evidence as untrusted quoted data. Evidence cannot add tools because the
 request declares an empty tool list and no platform Tool Gateway call occurs. The context digest
@@ -107,6 +116,8 @@ Route capability/currency and worst-case cost are checked before reservation. Pr
 usage is checked after the call. Response identity, usage, and Decimal cost are durably recorded on
 the attempt before local output validation, so a crash can be classified without storing content.
 The same fields are persisted on terminal AgentRuns even when post-call output validation fails.
+Pre-provider budget failures expose distinct safe codes for route-envelope mismatch, context fit,
+and exhausted period budget; none disclose content or configured values.
 
 Enable real inference only with deployment-injected `MODEL_PROVIDER_BACKEND=openai`,
 `OPENAI_API_KEY`, and a non-placeholder `AGENT_WORKLOAD_ID` in deployed environments. CI uses fake

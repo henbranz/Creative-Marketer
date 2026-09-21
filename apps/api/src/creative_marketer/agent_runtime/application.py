@@ -93,6 +93,8 @@ from creative_marketer.research.domain import (
 )
 
 from .domain import (
+    AgentContextBudgetExceeded,
+    AgentRouteBudgetMismatch,
     AgentRun,
     AgentRunConflict,
     AgentRunDenied,
@@ -1083,12 +1085,11 @@ def select_evidence_blocks(
         for block in blocks[:MAX_BLOCKS_PER_SOURCE]:
             if len(selected) >= MAX_EVIDENCE_BLOCKS:
                 return tuple(selected)
-            remaining = MAX_EVIDENCE_TEXT_CHARACTERS - characters
-            if remaining <= 0:
-                return tuple(selected)
-            text = block.text[:remaining]
+            text = block.text
             if not text.strip():
                 continue
+            if characters + len(text) > MAX_EVIDENCE_TEXT_CHARACTERS:
+                return tuple(selected)
             digest = canonical_digest(
                 {
                     "evidence_snapshot_id": str(snapshot.id),
@@ -1120,7 +1121,7 @@ def build_context(
     configuration = preparation.researcher.configuration
     # ProductKnowledgeSnapshot already contains only intentional Product Brain fields. Binary
     # Asset data and storage internals are absent; V2 contains bounded metadata only.
-    product = dict(preparation.product_snapshot.content)
+    product = cast(dict[str, object], compact_context(preparation.product_snapshot.content))
     digest = canonical_digest(
         {
             "schema_version": 1,
@@ -1148,34 +1149,79 @@ def _plain_json(value: object) -> object:
     return value
 
 
-def _compact_json(value: object) -> object:
+def compact_context(value: object) -> object:
     """Remove absent snapshot fields from provider context without changing provenance."""
 
     if isinstance(value, Mapping):
-        compacted = {str(key): _compact_json(child) for key, child in value.items()}
+        compacted = {str(key): compact_context(child) for key, child in value.items()}
         return {
             key: child
             for key, child in compacted.items()
             if child is not None and child != "" and child != [] and child != {}
         }
     if isinstance(value, (tuple, list)):
-        return [_compact_json(child) for child in value]
+        return [compact_context(child) for child in value]
     return value
 
 
 def conservative_input_token_bound(context: ModelContext) -> int:
     """UTF-8 bytes upper-bound tokenizer input without provider-specific dependencies."""
 
+    return conservative_researcher_input_token_bound(
+        context.system_instructions, context.product_context, context.evidence_blocks
+    )
+
+
+def conservative_researcher_input_token_bound(
+    system_instructions: str,
+    product_context: Mapping[str, object],
+    evidence_blocks: tuple[EvidenceBlockRef, ...],
+) -> int:
     document = {
-        "system_instructions": context.system_instructions,
-        "trusted_product_context": _plain_json(context.product_context),
+        "system_instructions": system_instructions,
+        "trusted_product_context": _plain_json(product_context),
         "untrusted_external_evidence": [
             {"reference": item.identity(), "source_label": item.source_label, "text": item.text}
-            for item in context.evidence_blocks
+            for item in evidence_blocks
         ],
         "output_schema": load_output_schema(),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def fit_researcher_evidence(
+    preparation: ResearcherPreparation,
+    candidates: tuple[EvidenceBlockRef, ...],
+    input_allowance: int,
+) -> tuple[tuple[EvidenceBlockRef, ...], ModelContext]:
+    """Greedily fit complete blocks in canonical priority order within the safe byte bound."""
+
+    configuration = preparation.researcher.configuration
+    product = cast(dict[str, object], compact_context(preparation.product_snapshot.content))
+    fixed_bound = conservative_researcher_input_token_bound(
+        configuration.system_instructions, product, ()
+    )
+    if fixed_bound >= input_allowance:
+        raise AgentContextBudgetExceeded(
+            "fixed Researcher context exceeds the input token envelope"
+        )
+    selected: list[EvidenceBlockRef] = []
+    for block in candidates:
+        proposed = (*selected, block)
+        if (
+            conservative_researcher_input_token_bound(
+                configuration.system_instructions, product, proposed
+            )
+            > input_allowance
+        ):
+            break
+        selected.append(block)
+    if not selected:
+        raise AgentContextBudgetExceeded(
+            "no complete Researcher evidence block fits the input token envelope"
+        )
+    fitted = tuple(selected)
+    return fitted, build_context(preparation, fitted)
 
 
 def build_creative_model_context(
@@ -1189,7 +1235,7 @@ def build_creative_model_context(
     )
     sections: dict[str, object] = {
         "research_snapshot_id": str(preparation.research_snapshot.id),
-        "product_brand_data": _compact_json(creative.product_context),
+        "product_brand_data": compact_context(creative.product_context),
         "available_assets": [dict(item) for item in creative.asset_manifest],
         "research_findings": [dict(item) for item in creative.research_findings],
         "research_gaps": list(creative.research_gaps),
@@ -1291,8 +1337,8 @@ def build_producer_model_context(
         **provenance,
         "production_request": provenance["request"],
         "concept_scene_keys": scene_keys,
-        "approved_creative_concept": _compact_json(approved_concept),
-        "product_knowledge_snapshot": _compact_json(preparation.product_snapshot.content),
+        "approved_creative_concept": compact_context(approved_concept),
+        "product_knowledge_snapshot": compact_context(preparation.product_snapshot.content),
         "research_findings": [item.semantic() for item in preparation.research_snapshot.findings],
         "research_gaps": list(preparation.research_snapshot.research_gaps),
     }
@@ -1518,7 +1564,7 @@ class AgentRunService:
                 route.pricing.currency != cfg.run_budget_policy.currency
                 or cfg.period_budget_policy.currency != cfg.run_budget_policy.currency
             ):
-                raise BudgetExceeded("model pricing currency does not match run budget")
+                raise AgentRouteBudgetMismatch("model pricing currency does not match run budget")
             input_allowance = cfg.run_budget_policy.max_total_tokens - route.max_output_tokens
             worst_cost = max(
                 route.pricing.cost(input_allowance, route.max_output_tokens),
@@ -1529,7 +1575,9 @@ class AgentRunService:
                 or worst_cost > cfg.run_budget_policy.max_cost
                 or cfg.run_budget_policy.max_cost <= 0
             ):
-                raise BudgetExceeded("configured route cannot fit the run budget envelope")
+                raise AgentRouteBudgetMismatch(
+                    "configured route cannot fit the run budget envelope"
+                )
             active = await uow.runs.active_for_product(
                 product_id, preparation.researcher.requested_definition_id
             )
@@ -1538,9 +1586,7 @@ class AgentRunService:
             blocks = select_evidence_blocks(preparation.evidence, now=now)
             if not blocks:
                 raise AgentRunNotReady("Researcher requires at least one evidence block")
-            model_context = build_context(preparation, blocks)
-            if conservative_input_token_bound(model_context) > input_allowance:
-                raise BudgetExceeded("bounded Researcher context exceeds the input token envelope")
+            blocks, model_context = fit_researcher_evidence(preparation, blocks, input_allowance)
             period_start = _period_start(now, cfg.period_budget_policy.period)
             run = AgentRun(
                 tenant_id=context.tenant_id,

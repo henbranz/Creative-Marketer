@@ -107,6 +107,18 @@ class BudgetExceeded(AgentRuntimeError):
     code = "AGENT_BUDGET_EXCEEDED"
 
 
+class AgentRouteBudgetMismatch(BudgetExceeded):
+    code = "AGENT_ROUTE_BUDGET_MISMATCH"
+
+
+class AgentContextBudgetExceeded(BudgetExceeded):
+    code = "AGENT_CONTEXT_BUDGET_EXCEEDED"
+
+
+class AgentPeriodBudgetExceeded(BudgetExceeded):
+    code = "AGENT_PERIOD_BUDGET_EXCEEDED"
+
+
 class AgentRunRecoveryConflict(AgentRuntimeError):
     code = "AGENT_RUN_RECOVERY_CONFLICT"
 

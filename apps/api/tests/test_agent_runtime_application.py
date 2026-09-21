@@ -34,12 +34,17 @@ from creative_marketer.agent_runtime.application import (
     WorkloadIdentity,
     build_context,
     build_creative_model_context,
+    conservative_input_token_bound,
+    fit_researcher_evidence,
     initial_creative_strategist_route,
     initial_intelligence_route,
     initial_supervisor_route,
     select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
+    AgentContextBudgetExceeded,
+    AgentPeriodBudgetExceeded,
+    AgentRouteBudgetMismatch,
     AgentRunConflict,
     AgentRunDenied,
     AgentRunNotFound,
@@ -186,6 +191,58 @@ def preparation(tenant_id, product_id) -> ResearcherPreparation:
         product_snapshot,
         manifest,
         ((evidence, ResearchCategory.COMPETITOR, "Competitor"),),
+    )
+
+
+def preparation_with_blocks(
+    prepared: ResearcherPreparation,
+    texts: tuple[str, ...],
+    *,
+    product_content: dict[str, object] | None = None,
+) -> ResearcherPreparation:
+    original, category, label = prepared.evidence[0]
+    assert isinstance(original, EvidenceSnapshot)
+    blocks = tuple(
+        EvidenceBlock(EvidenceBlockKind.PARAGRAPH, text, ordinal)
+        for ordinal, text in enumerate(texts)
+    )
+    digest_input = original.digest_input()
+    digest_input["blocks"] = [block.semantic() for block in blocks]
+    evidence = replace(
+        original,
+        blocks=blocks,
+        semantic_digest=research_sha256_v1(digest_input),
+    )
+    reference = ResearchEvidenceReference(
+        evidence.source_id,
+        evidence.id,
+        evidence.semantic_digest,
+        category,
+        evidence.captured_at,
+    )
+    manifest = ResearchContextManifest.build(
+        prepared.product_snapshot.tenant_id,
+        prepared.product_snapshot.product_id,
+        (reference,),
+    )
+    product = prepared.product_snapshot
+    if product_content is not None:
+        product = replace(
+            product,
+            content=product_content,
+            digest=event_sha256_v1(
+                {
+                    "schema_version": product.schema_version,
+                    "source_revision": product.source_revision,
+                    "content": product_content,
+                }
+            ),
+        )
+    return replace(
+        prepared,
+        product_snapshot=product,
+        manifest=manifest,
+        evidence=((evidence, category, label),),
     )
 
 
@@ -405,7 +462,7 @@ class MemoryRepository:
 
     async def reserve_period_budget(self, **values):
         if not self.budget_available:
-            raise BudgetExceeded("period budget exhausted")
+            raise AgentPeriodBudgetExceeded("period budget exhausted")
         self.reservations.append(values)
 
     async def claim(self, run_id, workload_id, model_route, lease_expires_at):
@@ -494,7 +551,24 @@ class MemoryRepository:
                     ChannelIntent(str(request_ref["channel_intent"])),
                 ),
             )[1]
-        blocks = select_evidence_blocks(self.prepared.evidence)
+        selected = {
+            (
+                item["evidence_snapshot_id"],
+                item["block_index"],
+                item["block_digest"],
+            )
+            for item in run.selected_evidence
+        }
+        blocks = tuple(
+            block
+            for block in select_evidence_blocks(self.prepared.evidence)
+            if (
+                str(block.evidence_snapshot_id),
+                block.block_index,
+                block.block_digest,
+            )
+            in selected
+        )
         return build_context(self.prepared, blocks)
 
     async def finish_success(self, run, result, snapshot, cost, attempt_id, workload_id):
@@ -1111,6 +1185,135 @@ async def test_request_fails_closed_when_insert_race_has_no_matching_replay(monk
         await runtime.request_researcher(
             context(tenant_id), product_id=product_id, idempotency_key="unmatched-insert-race"
         )
+
+
+def test_researcher_evidence_fitting_keeps_all_blocks_within_allowance() -> None:
+    prepared = preparation_with_blocks(preparation(uuid4(), uuid4()), ("a" * 500, "b" * 500))
+    candidates = select_evidence_blocks(prepared.evidence)
+    allowance = conservative_input_token_bound(build_context(prepared, candidates))
+
+    fitted, model_context = fit_researcher_evidence(prepared, candidates, allowance)
+
+    assert fitted == candidates
+    assert model_context.evidence_blocks == candidates
+    assert conservative_input_token_bound(model_context) <= allowance
+
+
+def test_evidence_character_cap_never_truncates_the_last_selected_block() -> None:
+    prepared = preparation_with_blocks(
+        preparation(uuid4(), uuid4()),
+        tuple(chr(97 + index) * 8_192 for index in range(10)),
+    )
+    snapshot, category, _ = prepared.evidence[0]
+    selected = select_evidence_blocks(
+        (
+            (snapshot, category, "first"),
+            (snapshot, category, "second"),
+        )
+    )
+
+    assert len(selected) == 14
+    assert all(len(item.text) == 8_192 for item in selected)
+    assert sum(len(item.text) for item in selected) <= 120_000
+
+
+def test_researcher_evidence_fitting_is_deterministic_and_never_truncates_blocks() -> None:
+    prepared = preparation_with_blocks(
+        preparation(uuid4(), uuid4()),
+        ("a" * 2_400, "b" * 2_400, "c" * 2_400),
+    )
+    candidates = select_evidence_blocks(prepared.evidence)
+    first_only = build_context(prepared, candidates[:1])
+    allowance = conservative_input_token_bound(first_only)
+
+    fitted, model_context = fit_researcher_evidence(prepared, candidates, allowance)
+
+    assert fitted == candidates[:1]
+    assert fitted[0].text == "a" * 2_400
+    assert model_context.evidence_blocks == fitted
+    assert conservative_input_token_bound(model_context) <= allowance
+
+
+def test_researcher_evidence_fitting_never_bypasses_a_higher_priority_block() -> None:
+    prepared = preparation_with_blocks(
+        preparation(uuid4(), uuid4()),
+        ("first", "x" * 8_192, "last"),
+    )
+    candidates = select_evidence_blocks(prepared.evidence)
+    allowance = conservative_input_token_bound(build_context(prepared, candidates[:1]))
+
+    fitted, _ = fit_researcher_evidence(prepared, candidates, allowance)
+
+    assert [item.block_index for item in fitted] == [0]
+    assert [item.text for item in fitted] == ["first"]
+
+
+def test_researcher_evidence_fitting_requires_one_complete_block_and_bounded_overhead() -> None:
+    prepared = preparation_with_blocks(preparation(uuid4(), uuid4()), ("x" * 8_192,))
+    candidates = select_evidence_blocks(prepared.evidence)
+    fixed_allowance = conservative_input_token_bound(build_context(prepared, candidates[:1])) - 1
+    with pytest.raises(AgentContextBudgetExceeded, match="no complete"):
+        fit_researcher_evidence(prepared, candidates, fixed_allowance)
+
+    oversized_fixed = preparation_with_blocks(
+        prepared,
+        ("evidence",),
+        product_content={"product": {"description": "p" * 8_192}},
+    )
+    with pytest.raises(AgentContextBudgetExceeded, match="fixed Researcher context"):
+        fit_researcher_evidence(
+            oversized_fixed,
+            select_evidence_blocks(oversized_fixed.evidence),
+            2_000,
+        )
+
+
+@pytest.mark.asyncio
+async def test_researcher_persists_exact_fitted_evidence_visible_to_provider() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation_with_blocks(
+        preparation(tenant_id, product_id),
+        ("a" * 2_000, "b" * 2_000, "c" * 2_000),
+    )
+    candidates = select_evidence_blocks(prepared.evidence)
+    allowance = conservative_input_token_bound(build_context(prepared, candidates[:1]))
+    cfg = replace(
+        prepared.researcher.configuration,
+        run_budget_policy=replace(
+            prepared.researcher.configuration.run_budget_policy,
+            max_total_tokens=route().max_output_tokens + allowance,
+        ),
+    )
+    prepared = replace(
+        prepared,
+        researcher=replace(
+            prepared.researcher,
+            configuration=cfg,
+            configuration_digest=cfg.configuration_digest,
+        ),
+    )
+
+    def model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "fitted-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    provider = FakeModelProvider(model)
+    runtime, _, _, _ = service(prepared, provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="fitted-evidence"
+    )
+    completed = await runtime.execute(tenant_id, requested.id)
+
+    assert completed.status is AgentRunStatus.SUCCEEDED
+    assert len(requested.selected_evidence) == 1
+    assert requested.selected_evidence == tuple(
+        item.identity() for item in provider.calls[0].untrusted_evidence
+    )
 
 
 @pytest.mark.asyncio
@@ -1858,8 +2061,8 @@ async def test_unexpected_provider_exception_is_normalized_and_never_retried() -
     ("run_budget", "expected"),
     [
         (RunBudgetPolicy(0, 0, 12000, Decimal("0.15"), "USD"), AgentRunNotReady),
-        (RunBudgetPolicy(1, 0, 6000, Decimal("0.15"), "USD"), BudgetExceeded),
-        (RunBudgetPolicy(1, 0, 12000, Decimal("0.01"), "USD"), BudgetExceeded),
+        (RunBudgetPolicy(1, 0, 6000, Decimal("0.15"), "USD"), AgentRouteBudgetMismatch),
+        (RunBudgetPolicy(1, 0, 12000, Decimal("0.01"), "USD"), AgentRouteBudgetMismatch),
     ],
 )
 async def test_invalid_researcher_call_token_and_cost_envelopes_are_blocked(
@@ -1971,10 +2174,43 @@ async def test_empty_evidence_and_currency_mismatch_fail_before_reservation() ->
         ),
     )
     runtime, _, _, _ = service(mismatched, provider)
-    with pytest.raises(BudgetExceeded, match="currency"):
+    with pytest.raises(AgentRouteBudgetMismatch, match="currency"):
         await runtime.request_researcher(
             context(tenant_id), product_id=product_id, idempotency_key="currency"
         )
+    assert provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_context_and_period_budget_failures_are_distinct_and_pre_provider() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    provider = FakeModelProvider(
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+    )
+    oversized = preparation_with_blocks(
+        preparation(tenant_id, product_id),
+        ("evidence",),
+        product_content={"product": {"description": "p" * 8_192}},
+    )
+    runtime, repository, _, _ = service(oversized, provider)
+    with pytest.raises(AgentContextBudgetExceeded) as context_failure:
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="context-budget"
+        )
+    assert context_failure.value.code == "AGENT_CONTEXT_BUDGET_EXCEEDED"
+    assert repository.runs == {}
+    assert provider.calls == []
+
+    prepared = preparation(tenant_id, product_id)
+    runtime, repository, _, _ = service(prepared, provider)
+    repository.budget_available = False
+    with pytest.raises(AgentPeriodBudgetExceeded) as period_failure:
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="period-budget"
+        )
+    assert period_failure.value.code == "AGENT_PERIOD_BUDGET_EXCEEDED"
+    assert repository.runs == {}
+    assert provider.calls == []
 
 
 @pytest.mark.asyncio
