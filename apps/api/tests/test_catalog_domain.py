@@ -143,6 +143,41 @@ def test_claims_cannot_be_both_allowed_and_prohibited() -> None:
         )
 
 
+def test_invalid_catalog_values_fail_closed_before_snapshotting() -> None:
+    brand, _, product, _, brief = product_brain()
+    with pytest.raises(CatalogValidationError, match="both allowed and prohibited"):
+        BrandProfile(
+            tenant_id=brand.tenant_id,
+            brand_id=brand.id,
+            allowed_claims=("Safe",),
+            prohibited_claims=("safe",),
+        )
+    with pytest.raises(CatalogValidationError, match="list exceeds"):
+        Audience(name="Operators", desires=tuple(str(index) for index in range(31)))
+    with pytest.raises(CatalogValidationError, match="value exceeds"):
+        ProductProfile(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            shipping_summary="x" * 2001,
+        )
+    with pytest.raises(CatalogValidationError, match="price is invalid"):
+        ProductProfile(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            price="not-a-number",  # type: ignore[arg-type]
+            currency="USD",
+        )
+    with pytest.raises(CatalogValidationError, match="ISO-style"):
+        ProductProfile(
+            tenant_id=product.tenant_id,
+            product_id=product.id,
+            price=Decimal("1"),
+            currency="US1",
+        )
+    with pytest.raises(CatalogValidationError, match="revision must be positive"):
+        replace(brief, revision=0)
+
+
 def test_audience_is_structured_and_bounded() -> None:
     audience = Audience(name="Operators", pain_points=("Manual work",), desires=("Control",))
     assert audience.semantic()["pain_points"] == ["Manual work"]
