@@ -11,11 +11,7 @@ from creative_marketer.agent_runtime.application import (
     AgentRunService,
     ModelProviderRegistry,
     ModelRouter,
-    initial_commerce_operations_route,
-    initial_creative_strategist_route,
-    initial_intelligence_route,
-    initial_researcher_route,
-    initial_supervisor_route,
+    initial_agent_model_routes,
 )
 from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.audit.identity import IdentityAuditService
@@ -79,7 +75,7 @@ from creative_marketer.observability.logging import configure_structured_logging
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
 from creative_marketer.orchestration.application import CreativeCycleService
-from creative_marketer.production.application import initial_media_router, initial_producer_route
+from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
 from creative_marketer.publishing.application import PublishingService
@@ -252,16 +248,7 @@ def create_app(
     )
     agent_service = AgentRunService(
         agent_runtime_uow,
-        ModelRouter(
-            (
-                initial_researcher_route(),
-                initial_creative_strategist_route(),
-                initial_producer_route(),
-                initial_intelligence_route(),
-                initial_commerce_operations_route(),
-                initial_supervisor_route(),
-            )
-        ),
+        ModelRouter(initial_agent_model_routes()),
         ModelProviderRegistry(
             {"openai": ExecutionProcessOnlyModelProvider()}
             if resolved_settings.model_provider_backend in {"openai", "fake"}

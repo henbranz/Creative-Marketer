@@ -10,7 +10,7 @@ from uuid import UUID
 from creative_marketer.agent_runtime.application import (
     AgentRunRecoveryService,
     ModelRouter,
-    initial_researcher_route,
+    initial_agent_model_routes,
 )
 from creative_marketer.infrastructure.database.agent_runtime_uow import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
@@ -40,7 +40,7 @@ def _service(settings: Settings) -> AgentRunRecoveryService:
         raise RuntimeError("AGENT_RECOVERY_OPERATOR_ID and AGENT_RECOVERY_TENANT_ID are required")
     return AgentRunRecoveryService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(create_session_factory(str(settings.database_url))),
-        ModelRouter((initial_researcher_route(),)),
+        ModelRouter(initial_agent_model_routes()),
         ConfiguredRecoveryOperatorProvider(
             settings.agent_recovery_tenant_id,
             settings.agent_recovery_operator_id,

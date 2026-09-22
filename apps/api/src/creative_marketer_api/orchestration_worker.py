@@ -17,11 +17,7 @@ from creative_marketer.agent_runtime.application import (
     AgentRunService,
     ModelProviderRegistry,
     ModelRouter,
-    initial_commerce_operations_route,
-    initial_creative_strategist_route,
-    initial_intelligence_route,
-    initial_researcher_route,
-    initial_supervisor_route,
+    initial_agent_model_routes,
 )
 from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.catalog.application import CatalogService
@@ -84,7 +80,6 @@ from creative_marketer.measurement.application import MeasurementService
 from creative_marketer.measurement.provider import FakeSocialMetricsProvider
 from creative_marketer.orchestration.application import CreativeCycleService
 from creative_marketer.orchestration.domain import CycleStatus
-from creative_marketer.production.application import initial_producer_route
 from creative_marketer.publishing.application import PublishingService
 from creative_marketer.publishing.execution import GovernedPublicationJobExecutor
 from creative_marketer.publishing.gateway_composition import PublishingGatewayFactory
@@ -316,16 +311,7 @@ async def run() -> None:
     sessions = create_session_factory(str(settings.database_url))
     runtime = AgentRunService(
         SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
-        ModelRouter(
-            (
-                initial_researcher_route(),
-                initial_creative_strategist_route(),
-                initial_producer_route(),
-                initial_intelligence_route(),
-                initial_commerce_operations_route(),
-                initial_supervisor_route(),
-            )
-        ),
+        ModelRouter(initial_agent_model_routes()),
         ModelProviderRegistry({"openai": ExecutionProcessOnlyModelProvider()}),
         ConfiguredWorkloadIdentityProvider(settings.agent_workload_id, settings.app_env),
     )

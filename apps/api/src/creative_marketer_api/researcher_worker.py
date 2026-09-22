@@ -12,11 +12,7 @@ from creative_marketer.agent_runtime.application import (
     ModelProvider,
     ModelProviderRegistry,
     ModelRouter,
-    initial_commerce_operations_route,
-    initial_creative_strategist_route,
-    initial_intelligence_route,
-    initial_researcher_route,
-    initial_supervisor_route,
+    initial_agent_model_routes,
 )
 from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
 from creative_marketer.catalog.asset_application import UnavailableObjectStore
@@ -53,7 +49,6 @@ from creative_marketer.infrastructure.temporal.workflows import (
 )
 from creative_marketer.infrastructure.workload_identity import ConfiguredWorkloadIdentityProvider
 from creative_marketer.observability.ports import NullTelemetry
-from creative_marketer.production.application import initial_producer_route
 from creative_marketer.workflow_orchestration.agent_bridge import RouteAgentWorkflow
 from creative_marketer.workflow_orchestration.researcher_bridge import StartResearcherWorkflow
 from creative_marketer_api.config import Settings
@@ -297,14 +292,7 @@ async def run() -> None:
         if authorization is not None:
             authorization()
     telemetry = NullTelemetry()
-    routes = (
-        initial_researcher_route(),
-        initial_creative_strategist_route(),
-        initial_producer_route(),
-        initial_intelligence_route(),
-        initial_commerce_operations_route(),
-        initial_supervisor_route(),
-    )
+    routes = initial_agent_model_routes()
     session_factory = create_session_factory(str(settings.database_url))
     runtime_uow = SqlAlchemyAgentRuntimeUnitOfWorkFactory(session_factory)
     object_store = (

@@ -76,6 +76,7 @@ from creative_marketer.production.application import (
     PRODUCTION_CONTRACT_KEY,
     PRODUCTION_CONTRACT_VERSION,
     build_production_context,
+    initial_producer_route,
     load_production_plan_schema,
     production_context_from_payload,
     validate_production_plan,
@@ -798,6 +799,18 @@ def initial_supervisor_route() -> ModelRoute:
         pricing=ModelPricing(
             "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
         ),
+    )
+
+
+def initial_agent_model_routes() -> tuple[ModelRoute, ...]:
+    """Current exact routes shared by API, workers, and trusted recovery."""
+    return (
+        initial_researcher_route(),
+        initial_creative_strategist_route(),
+        initial_producer_route(),
+        initial_intelligence_route(),
+        initial_commerce_operations_route(),
+        initial_supervisor_route(),
     )
 
 

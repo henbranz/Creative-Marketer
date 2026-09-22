@@ -11,6 +11,7 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunStatus,
     ModelAttempt,
     ModelAttemptStatus,
+    ModelRouteUnavailable,
     RecoveryClassification,
     StrandedAgentRun,
 )
@@ -119,6 +120,71 @@ def test_recovery_service_requires_paired_trusted_configuration() -> None:
         )
     )
     assert configured.operator_provider is not None
+
+
+def test_recovery_router_has_exact_agent_worker_route_parity_without_fallback() -> None:
+    configured = _service(
+        Settings(
+            agent_recovery_operator_id="operations/recovery",
+            agent_recovery_tenant_id=uuid4(),
+        )
+    )
+    expected = {
+        "research_balanced": (
+            "openai-gpt-5.6-sol-research-2026-09-13",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "reasoning", "structured_output"),
+        ),
+        "creative_balanced": (
+            "openai-gpt-5.6-sol-creative-2026-09-13",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "reasoning", "structured_output"),
+        ),
+        "production_deep": (
+            "openai-gpt-5.6-sol-production-2026-09-13",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "image_input", "reasoning", "structured_output"),
+        ),
+        "intelligence_deep": (
+            "openai-gpt-5.6-sol-intelligence-2026-09-19",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "reasoning", "structured_output"),
+        ),
+        "commerce_operations": (
+            "openai-gpt-5.6-sol-commerce-2026-09-19",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "reasoning", "structured_output"),
+        ),
+        "supervisor_balanced": (
+            "openai-gpt-5.6-sol-supervisor-2026-09-19",
+            "openai",
+            "gpt-5.6-sol",
+            "openai-gpt-5.6-sol-2026-09-13",
+            ("text", "reasoning", "structured_output"),
+        ),
+    }
+
+    for profile, (route_version, provider, model, pricing, capabilities) in expected.items():
+        route = configured.router.resolve(profile, capabilities)
+        assert (route.route_version, route.provider, route.model, route.pricing.version) == (
+            route_version,
+            provider,
+            model,
+            pricing,
+        )
+
+    with pytest.raises(ModelRouteUnavailable):
+        configured.router.resolve("unknown_profile", ())
 
 
 @pytest.mark.asyncio

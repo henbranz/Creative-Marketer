@@ -36,6 +36,7 @@ from creative_marketer.agent_runtime.application import (
     build_creative_model_context,
     conservative_input_token_bound,
     fit_researcher_evidence,
+    initial_agent_model_routes,
     initial_creative_strategist_route,
     initial_intelligence_route,
     initial_supervisor_route,
@@ -71,6 +72,7 @@ from creative_marketer.agent_runtime.domain import (
     UnknownCostReconciliationConflict,
     canonical_digest,
     classify_stranded_attempt,
+    parse_research_output,
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
 from creative_marketer.creative.domain import (
@@ -1760,11 +1762,12 @@ async def _stranded(
     run_id,
     *,
     status: ModelAttemptStatus,
+    model_route=None,
 ) -> StrandedAgentRun:
     claimed = await repository.claim(
         run_id,
         "dead-worker",
-        route(),
+        model_route or route(),
         datetime.now(UTC) + timedelta(minutes=15),
     )
     assert claimed is not None
@@ -1917,6 +1920,114 @@ async def test_ambiguous_recovery_creates_new_run_and_reconciles_unknown_cost_on
     with pytest.raises(AgentRunRecoveryConflict):
         await recovery.rerun_as_new(original.id)
     assert audit.values[-1].action == "agent.run.unknown_cost_reconciled"
+
+
+@pytest.mark.asyncio
+async def test_creative_unknown_recovery_creates_one_frozen_successor_without_provider_call() -> (
+    None
+):
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def provider_must_not_run(_invocation):
+        pytest.fail("recovery routing and successor creation must not invoke a model provider")
+
+    provider = FakeModelProvider(provider_must_not_run)
+    runtime, repository, audit, outbox = service(prepared, provider)
+    selected_blocks = select_evidence_blocks(prepared.evidence)
+    research_run = replace(
+        run(),
+        tenant_id=tenant_id,
+        product_id=product_id,
+        product_snapshot_id=prepared.product_snapshot.id,
+        product_snapshot_digest=prepared.product_snapshot.digest,
+        research_context_digest=prepared.manifest.digest,
+    )
+    snapshot = parse_research_output(
+        output(selected_blocks[0]),
+        run=research_run,
+        selected_blocks=selected_blocks,
+    )
+    repository.creative_prepared = creative_preparation(prepared, snapshot)
+    requested = await runtime.request_creative_strategist(
+        context(tenant_id),
+        product_id=product_id,
+        request=CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
+        idempotency_key="creative-recovery-no-provider",
+    )
+    stranded = await _stranded(
+        repository,
+        requested.id,
+        status=ModelAttemptStatus.PROVIDER_STARTED,
+        model_route=initial_creative_strategist_route(),
+    )
+    original = stranded.run
+    assert not provider.calls
+
+    mismatched_routes = tuple(
+        replace(value, route_version="historical-route-mismatch")
+        if value.profile_key == "creative_balanced"
+        else value
+        for value in initial_agent_model_routes()
+    )
+    mismatched_recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter(mismatched_routes),
+        OperatorProvider(tenant_id),
+        clock=lambda: datetime(2030, 2, 3, 12, tzinfo=UTC),
+    )
+    with pytest.raises(ModelRouteUnavailable, match="historical"):
+        await mismatched_recovery.rerun_as_new(original.id)
+    assert repository.runs[original.id].status is AgentRunStatus.RUNNING
+    assert not provider.calls
+
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter(initial_agent_model_routes()),
+        OperatorProvider(tenant_id),
+        clock=lambda: datetime(2030, 2, 3, 12, tzinfo=UTC),
+    )
+    successor = await recovery.rerun_as_new(original.id)
+
+    assert not provider.calls
+    assert repository.runs[original.id].status is AgentRunStatus.FAILED
+    assert repository.runs[original.id].failure_code == "STRANDED_PROVIDER_OUTCOME_UNKNOWN"
+    predecessor_attempt = next(
+        value for value in repository.attempts.values() if value.agent_run_id == original.id
+    )
+    assert predecessor_attempt.status is ModelAttemptStatus.UNKNOWN
+    assert predecessor_attempt.unknown_cost == original.reserved_cost
+    successors = [
+        value for value in repository.runs.values() if value.recovery_of_run_id == original.id
+    ]
+    assert successors == [successor]
+    assert successor.status is AgentRunStatus.PENDING
+    assert successor.reserved_cost == original.reserved_cost
+    assert repository.reservations[-1]["reserve_cost"] == original.reserved_cost
+    for field_name in (
+        "requested_agent_definition_id",
+        "resolved_agent_definition_id",
+        "agent_version_id",
+        "agent_version_number",
+        "agent_configuration_digest",
+        "prompt_revision",
+        "agent_type",
+        "input_context_kind",
+        "input_context_schema_version",
+        "input_context_digest",
+        "input_context_refs",
+        "product_id",
+        "product_snapshot_id",
+        "product_snapshot_digest",
+        "research_context_digest",
+        "context_digest",
+        "model_profile_key",
+        "output_contract_key",
+        "output_contract_version",
+        "max_total_tokens",
+        "currency",
+    ):
+        assert getattr(successor, field_name) == getattr(original, field_name)
 
 
 @pytest.mark.asyncio
