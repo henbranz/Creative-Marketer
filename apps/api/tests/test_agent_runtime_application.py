@@ -1947,6 +1947,48 @@ async def test_rejection_audit_failure_blocks_next_transport_attempt(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_runtime_still_rejects_duplicates_omitted_from_provider_schema():
+    from copy import deepcopy
+
+    from creative_marketer.infrastructure.model_providers.openai_schema import (
+        normalize_openai_strict_output_schema,
+    )
+
+    class UniqueResearcher(ResearcherCapability):
+        def output_schema(self, version):
+            canonical = deepcopy(super().output_schema(version))
+            canonical["properties"]["research_gaps"]["uniqueItems"] = True
+            return canonical
+
+    class NormalizingFakeProvider(FakeModelProvider):
+        def validate_invocation(self, invocation):
+            wire = normalize_openai_strict_output_schema(invocation.output_schema)
+            assert "uniqueItems" not in wire["properties"]["research_gaps"]
+            assert invocation.output_schema["properties"]["research_gaps"]["uniqueItems"] is True
+
+    def model(invocation):
+        value = output(invocation.untrusted_evidence[0])
+        value["research_gaps"] = ["duplicate", "duplicate"]
+        return ModelInvocationResult(
+            value, "offline-result", ModelUsage(100, 50, 150), "openai", "gpt-5.6-sol"
+        )
+
+    tenant, product = uuid4(), uuid4()
+    provider = NormalizingFakeProvider(model)
+    runtime, repository, _, _ = service(preparation(tenant, product), provider)
+    runtime.capabilities = AgentCapabilityRegistry((UniqueResearcher(),))
+    requested = await runtime.request_researcher(
+        context(tenant), product_id=product, idempotency_key="canonical-uniqueness"
+    )
+    failed = await runtime.execute(tenant, requested.id)
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == "MODEL_INVALID_OUTPUT"
+    assert repository.snapshots == {}
+    assert failed.unknown_cost == 0
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_invalid_openai_schema_fails_before_provider_start_without_unknown_cost() -> None:
     tenant_id, product_id = uuid4(), uuid4()
 

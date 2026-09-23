@@ -21,7 +21,39 @@ output schema in a model invocation. AgentRuntime invokes this provider prefligh
 the capability invocation and before committing `PROVIDER_STARTED`. Unsupported composition
 keywords, invalid roots, non-closed objects, optional declared properties, and unsupported formats
 fail with the content-free `MODEL_PROVIDER_SCHEMA_UNSUPPORTED` code. The adapter also validates on
-direct entry. Invalid schemas are never silently rewritten and never reach the network.
+direct entry. Unsupported schemas are rejected before network I/O, except for the explicit,
+provider-evidenced representation normalization below. Canonical contracts are never rewritten.
+
+The 2026-09-23 count-only delta investigation established two independent A/B/A results:
+
+- Full Creative schema with three string `const`-only nodes: rejected. Replace only those nodes
+  with equivalent singleton `enum` nodes: accepted. Restore `const`: rejected again.
+- Producer after that normalization: rejected. Remove only `uniqueItems`: accepted. Restore
+  `uniqueItems`: rejected again.
+
+Both failures returned HTTP 400 / `invalid_request_error` / `invalid_json_schema` /
+`text.format.schema` / `BadRequestError` from `/v1/responses/input_tokens`. This is direct evidence
+for these exact representations, not a blanket assertion that every possible typed `const` or
+every documented nested union/reference shape is unsupported.
+
+The provider boundary therefore deep-copies canonical schemas, replaces `const` with singleton
+`enum`, omits `uniqueItems` from provider generation constraints, and then validates the normalized
+result. A node containing both `const` and `enum` fails closed rather than overwriting one constraint.
+Traversal visits schema positions only, never keyword-shaped literal values in enum/default data.
+The raw provider-schema validator rejects unnormalized `const`/`uniqueItems`, preventing recurrence
+through alternate entry points. Both the runtime preflight and direct Responses adapter entry use
+the same normalization; the offline request gate examines the actual provider-facing representation.
+
+Singleton enum is semantically equivalent to const. Omitting uniqueness makes only the provider's
+generation constraint weaker: AgentRuntime still validates received output against the unchanged
+canonical schema before capability persistence, and domain validators remain unchanged. Duplicate
+values therefore cannot become accepted application output. No `$schema`, `$id`, `$defs`, `$ref`,
+`anyOf`, format, nullability, or other constraints are removed.
+
+All six current agent schemas subsequently passed the count endpoint using synthetic context.
+This is not a generation-success guarantee or authorization to retry a live run. Safe request IDs,
+the 16-request accounting, variants, and counts are recorded in
+`docs/PHASE9_CREATIVE_400_INVESTIGATION.md`. No generation request was sent.
 
 Canonical provider schemas use nested `anyOf` for disjoint alternatives. Application validation
 continues to enforce full semantic constraints after a response. Open-ended Intelligence scope is

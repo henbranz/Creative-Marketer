@@ -1,5 +1,10 @@
 # Phase 9 — Creative Strategist request rejection investigation
 
+**Current update:** the count-only delta pass below confirms the Creative `const` representation
+defect and a separate Producer `uniqueItems` defect through A/B/A evidence. The original investigation
+is preserved as historical evidence; its UNKNOWN classifications describe knowledge at that time.
+See [section 8](#8-count-only-schema-delta-resolution-2026-09-23) for the current conclusion.
+
 Investigated 2026-09-23 against application HEAD `74a7ad12a28dc8227567ad9f3fc3add020bfe4ac`.
 This is an investigation, not live acceptance or retry authorization.
 
@@ -234,3 +239,110 @@ with zero GenerationJobs. Inspection used SELECT-only read-only transactions and
 No paid inference, real Responses generation, image generation, Seedance call, or full live E2E ran.
 
 ROOT CAUSE NOT YET PROVEN — DO NOT RETRY
+
+## 8. Count-only schema delta resolution (2026-09-23)
+
+Starting HEAD: `ac9bfd90d06895c58b5c8ec3943a56f77526f970`. Locked SDK: OpenAI Python 2.54.0,
+unchanged. Exactly **16 POST `/v1/responses/input_tokens` requests** in this delta task, including
+controls and all-six-agent verification. The earlier Diagnostic 0 call is separate; its safe request
+ID was `req_26451b8247d342bfaa6102c0c2eb8176`. No POST `/v1/responses` request, generation,
+AgentRun, worker start, Temporal operation, recovery, or reconciliation occurred.
+
+All experimental schemas were deep copies held in memory. Nothing experimental was written into
+canonical schema files. Every delta used identical Creative synthetic instructions/input, model,
+reasoning, contract name, strict format, and empty tools; only the specified schema family changed.
+The count endpoint omits create-only `store` and `max_output_tokens`. SDK retries and redirects were
+disabled, network requests were restricted to the official count endpoint, and a durable local
+safe-field ledger enforced a maximum of 20 attempted requests. All 16 received results. No further
+count request is needed for this task.
+
+### Delta table and safe diagnostics
+
+Every rejected row below returned the same bounded diagnostic tuple:
+
+- HTTP status: `400`
+- error type: `invalid_request_error`
+- error code: `invalid_json_schema`
+- param: `text.format.schema`
+- SDK exception class: `BadRequestError`
+
+Only request IDs differ. No provider message, raw body, request body, schema contents, headers,
+credentials, or live Product/Research context is retained here.
+
+| Call | Variant | Exact change | Result | Safe request ID |
+| --- | --- | --- | --- | --- |
+| 1 | A_MINIMAL | Requested minimal closed object control | ACCEPTED, 90 tokens | — |
+| 2 | B_CANONICAL | Unchanged full Creative schema | REJECTED, tuple above | `req_cff0a63d6e0a4b7ba2fb50edb4fa8b40` |
+| 3 | C1_REMOVE_SCHEMA | Remove only root `$schema` | REJECTED, tuple above | `req_31a7def0557f4f56a86e3ffdd715e0d3` |
+| 4 | C2_REMOVE_ID | Remove only root `$id` | REJECTED, tuple above | `req_25ecff1f51f544cbb3646f548769fba8` |
+| 5 | C3_REMOVE_BOTH | Remove only root `$schema` and `$id` | REJECTED, tuple above | `req_802fafe001cc42c7bd16c789b01b1365` |
+| 6 | CONST_TO_SINGLE_ENUM | Replace the three string `const` nodes with equivalent singleton `enum` nodes | ACCEPTED, 728 tokens | — |
+| 7 | CONST_TO_SINGLE_ENUM_RESTORED | Restore only those three `const` nodes | REJECTED, tuple above | `req_1790773202b14a3782047f8cc6bfeba8` |
+| 8 | AGENT_RESEARCHER | Researcher provider schema | ACCEPTED, 305 tokens | — |
+| 9 | AGENT_CREATIVE_STRATEGIST | Creative provider schema with const normalization | ACCEPTED, 728 tokens | — |
+| 10 | AGENT_PRODUCER | Producer provider schema with const normalization | REJECTED, tuple above | `req_5b83c818d6b946f19c0be717dac550fc` |
+| 11 | PRODUCER_REMOVE_UNIQUE_ITEMS | Relative to call 10, remove only `uniqueItems` | ACCEPTED, 926 tokens | — |
+| 12 | PRODUCER_UNIQUE_ITEMS_RESTORED | Restore only `uniqueItems` to call 11 | REJECTED, tuple above | `req_f0b542e972104382b8085db2e32776db` |
+| 13 | AGENT_PRODUCER_FINAL | Producer with both proven provider normalizations | ACCEPTED, 926 tokens | — |
+| 14 | AGENT_INTELLIGENCE | Intelligence with final provider normalization | ACCEPTED, 433 tokens | — |
+| 15 | AGENT_COMMERCE_OPERATIONS | Commerce Operations with final provider normalization | ACCEPTED, 273 tokens | — |
+| 16 | AGENT_SUPERVISOR | Supervisor with final provider normalization | ACCEPTED, 251 tokens | — |
+
+### Exact conclusion and causality
+
+Calls **2 → 6 → 7** isolate Creative's three **string `const`-only schema nodes**: rejected →
+equivalent singleton enums accepted → const restored and rejected. Metadata, references, union
+placement, UUID format, nullability, and other constraints stayed unchanged in that comparison.
+The existing asset discriminator alternatives remain disjoint. This proves the current exact
+Creative representation defect, not that all possible typed-const variants are unsupported, nor
+recovery of historical provider messages. Later keyword-family experiments/ddmin were unnecessary
+once this A/B/A was complete.
+
+The six-agent sweep did not hide Producer's rejection. Calls **10 → 11 → 12** isolate its separate
+`uniqueItems` incompatibility after const normalization. The final Producer recheck passed. The
+other agent schemas sharing that keyword passed with the same final normalization.
+
+### Provider documentation comparison
+
+Official [Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs)
+requires an object root, no root anyOf, closed objects, and all declared properties required. It
+supports nested anyOf and definitions/references; UUID format and nullable types are documented.
+These constructs were preserved. The guide mentions const values in size accounting, which does
+not establish support for these exact const-only nodes. `uniqueItems` is not promised in the listed
+array constraints. Direct A/B/A provider evidence, not an inference from omission in the guide,
+justifies both narrow transformations.
+
+The [counting guide](https://developers.openai.com/api/docs/guides/token-counting) documents counting
+before model generation. No explicit separate counting fee was established; these requests are
+**not claimed to be free**. Count acceptance does not prove that Responses generation will succeed.
+
+### Implemented boundary and unchanged semantics
+
+`normalize_openai_strict_output_schema` makes a separate provider-facing copy, converts const to
+singleton enum, removes provider-facing uniqueItems, and validates that normalized result. It is
+idempotent and only visits schema positions, not literal payloads. Conflicting const-plus-enum is
+rejected rather than silently overwriting a constraint. The compatibility validator rejects raw
+const/uniqueItems. Both pre-provider-start validation and direct adapter execution normalize; the
+offline request preflight reports the actual normalized schema shape.
+
+No canonical JSON file or application/domain validator changed. Singleton enum preserves the
+constant invariant exactly. Uniqueness remains in canonical post-response validation; duplicate
+output fails before accepted capability output is persisted. Regression tests cover original
+Creative const shapes, enum equivalence, unchanged unrelated keywords, literal-data traversal,
+normalization idempotence, all agent schemas, emitted SDK parameters, and runtime duplicate rejection.
+Provider diagnostics, immutable run/attempt semantics, historical costs, routing, and retries remain
+unchanged. No dependency upgrade.
+
+### Protected state and validation
+
+Read-only before/after checks confirm cycle `49b53abc-35fd-4305-9b7c-05951b377cfa` remains
+`ACTIVE / AWAITING_PRODUCTION_APPROVAL`; ProductionPlan `aa1fa31c-df26-4421-b324-9cf0e664f8b5`
+exists with zero GenerationJobs; the Product still has four Creative runs. Session
+`c1185337-6dbd-431f-92f6-4fc22d996e40` is untouched. No live retry is authorized by this report.
+
+Local validation: 157 focused tests passed; full backend 979 passed / 1 skipped, coverage 95.10%;
+46 isolated Temporal tests passed. Ruff, formatting, mypy, and the contract drift check passed.
+Testing uses mock providers and isolated test infrastructure only. Commit/push is operator-approved;
+the final SHA and CI outcome are reported in the task handoff. This does not authorize live inference.
+
+EXACT SCHEMA ROOT CAUSE CONFIRMED — READY FOR CONTROLLED LIVE RETRY

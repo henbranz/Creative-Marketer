@@ -34,7 +34,7 @@ from creative_marketer.infrastructure.model_providers.openai_diagnostics import 
     safe_status_diagnostic,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
-    validate_openai_strict_output_schema,
+    normalize_openai_strict_output_schema,
 )
 
 
@@ -59,7 +59,7 @@ class OpenAIResponsesModelProvider:
         self._image_materializer = image_materializer
 
     def validate_invocation(self, invocation: ModelInvocation) -> None:
-        validate_openai_strict_output_schema(invocation.output_schema)
+        normalize_openai_strict_output_schema(invocation.output_schema)
 
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult:
         self.validate_invocation(invocation)
@@ -131,7 +131,7 @@ class OpenAIResponsesModelProvider:
                         "name": invocation.output_contract_key.replace(".", "_")
                         + "_v"
                         + str(invocation.output_contract_version),
-                        "schema": dict(invocation.output_schema),
+                        "schema": normalize_openai_strict_output_schema(invocation.output_schema),
                         "strict": True,
                     }
                 },

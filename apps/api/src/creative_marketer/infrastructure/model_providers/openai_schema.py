@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 
 from creative_marketer.agent_runtime.domain import ModelProviderSchemaUnsupported
 
@@ -14,6 +15,8 @@ _UNSUPPORTED_KEYWORDS = frozenset(
         "if",
         "then",
         "else",
+        "const",
+        "uniqueItems",
     }
 )
 _SUPPORTED_FORMATS = frozenset(
@@ -29,6 +32,42 @@ _SUPPORTED_FORMATS = frozenset(
         "uuid",
     }
 )
+
+
+def normalize_openai_strict_output_schema(schema: Mapping[str, object]) -> dict[str, object]:
+    """Copy canonical schema; normalize only count-endpoint-proven incompatibilities.
+
+    Traverse schema positions only, never literal enum/const/default payloads. The
+    original schema remains authoritative for application-side output validation:
+    const becomes equivalent singleton enum; uniqueItems stays enforced canonically.
+    """
+    normalized = deepcopy(dict(schema))
+    _normalize_node(normalized)
+    validate_openai_strict_output_schema(normalized)
+    return normalized
+
+
+def _normalize_node(node: dict[str, object]) -> None:
+    node.pop("uniqueItems", None)
+    if "const" in node:
+        # Do not overwrite another constraint: intersection needs separate evidence.
+        if "enum" in node:
+            _unsupported()
+        node["enum"] = [node.pop("const")]
+    for collection_key in ("properties", "$defs", "definitions"):
+        collection = node.get(collection_key)
+        if isinstance(collection, dict):
+            for child in collection.values():
+                if isinstance(child, dict):
+                    _normalize_node(child)
+    items = node.get("items")
+    if isinstance(items, dict):
+        _normalize_node(items)
+    alternatives = node.get("anyOf")
+    if isinstance(alternatives, list):
+        for child in alternatives:
+            if isinstance(child, dict):
+                _normalize_node(child)
 
 
 def validate_openai_strict_output_schema(schema: Mapping[str, object]) -> None:

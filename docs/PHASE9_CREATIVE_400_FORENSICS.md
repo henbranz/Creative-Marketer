@@ -1,5 +1,10 @@
 # Phase 9 — existing HTTP 400 evidence and unexecuted synthetic probes
 
+**Later resolution:** the count-only delta investigation now confirms the exact Creative const
+representation defect and a separate Producer uniqueItems defect. Historical forensic findings
+below remain valid: no lost historical metadata was recovered. See the appended resolution and
+the [delta evidence table](PHASE9_CREATIVE_400_INVESTIGATION.md#8-count-only-schema-delta-resolution-2026-09-23).
+
 Date: 2026-09-23. Starting commit: `6d200414312cd0acd5153e25836e32c187c9d7a3`.
 
 ## Conclusion
@@ -168,3 +173,38 @@ Temporal test servers, not live acceptance runs. No paid call or image/video gen
 Validation results and final commit/CI link are reported in the accompanying task handoff.
 
 FORENSICS EXHAUSTED — SYNTHETIC PROBE READY, OPERATOR APPROVAL REQUIRED
+
+## Later resolution — count-only delta debugging
+
+Diagnostic 0 first reproduced `400 / invalid_request_error / invalid_json_schema /
+text.format.schema / BadRequestError` without generation, request ID
+`req_26451b8247d342bfaa6102c0c2eb8176`.
+
+The subsequent delta task made exactly **16 count requests** (hard cap 20), with no generation.
+Minimal control passed at 90 tokens. Canonical Creative failed; removing root `$schema`, `$id`, or
+both did not fix it. Replacing only its three string const-only nodes with singleton enums passed
+at 728 tokens; restoring const reproduced the identical rejection category. This is an A/B/A proof
+for the exact canonical representation, not evidence that every conceivable typed const is invalid.
+
+The six-agent sweep uncovered and isolated a second failure: Producer after const normalization
+failed; removing only uniqueItems passed at 926 tokens; restoring uniqueItems failed again.
+All final provider-facing schemas passed: Researcher 305, Creative 728, Producer 926, Intelligence
+433, Commerce Operations 273, Supervisor 251 input tokens. These are synthetic count-endpoint
+measurements, not live-context estimates, generated output, or a guarantee of generation success.
+
+The provider adapter now copies and normalizes const to singleton enum and omits uniqueItems only
+provider-side, then validates the normalized schema. Canonical schemas/domain validators remain
+unchanged and enforce constants and uniqueness after response receipt. The local validator rejects
+unnormalized occurrences, and runtime regression coverage proves duplicate output cannot persist
+as accepted capability output. No schema metadata, references, unions, formats, or nullability were
+removed. ADR-043 records the explicit boundary.
+
+The official OpenAI Structured Outputs and token-counting documentation informed the supported
+feature comparison, not a speculative removal of documented features. No separate counting fee was
+confirmed, so counting is not described as free. Both paid synthetic generation probes remain
+unexecuted. No live AgentRun, session, cycle, plan, cost reconciliation, or worker changed.
+
+Exact variant results, bounded error metadata/request IDs, and protected-state checks are retained
+in the [investigation update](PHASE9_CREATIVE_400_INVESTIGATION.md#8-count-only-schema-delta-resolution-2026-09-23).
+
+EXACT SCHEMA ROOT CAUSE CONFIRMED — READY FOR CONTROLLED LIVE RETRY

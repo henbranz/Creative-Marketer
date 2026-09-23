@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
 
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -86,6 +87,35 @@ async def test_openai_adapter_rejects_schema_before_network_call() -> None:
         await provider.generate_structured(invalid)
     assert caught.value.code == "MODEL_PROVIDER_SCHEMA_UNSUPPORTED"
     create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wire_schema_is_normalized_without_mutating_canonical_constraints() -> None:
+    canonical = {
+        "type": "object",
+        "required": ["values"],
+        "additionalProperties": False,
+        "properties": {
+            "values": {"type": "array", "uniqueItems": True, "items": {"const": "EXISTING_ASSET"}}
+        },
+    }
+    before = deepcopy(canonical)
+    call = replace(invocation(), output_schema=canonical)
+    response = SimpleNamespace(
+        status="completed",
+        output_text='{"values": ["EXISTING_ASSET"]}',
+        usage=SimpleNamespace(input_tokens=10, output_tokens=5, total_tokens=15),
+        id="offline",
+        model="gpt-5.6-sol",
+    )
+    client, create = client_with(response)
+    provider = OpenAIResponsesModelProvider("offline-only", client=client)
+    provider.validate_invocation(call)
+    await provider.generate_structured(call)
+    wire = create.await_args.kwargs["text"]["format"]["schema"]
+    assert canonical == before
+    assert "uniqueItems" not in wire["properties"]["values"]
+    assert wire["properties"]["values"]["items"] == {"enum": ["EXISTING_ASSET"]}
 
 
 @pytest.mark.asyncio

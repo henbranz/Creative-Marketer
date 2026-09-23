@@ -146,7 +146,7 @@ async def test_exact_creative_schema_and_real_sdk_serialize_offline(monkeypatch)
 
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", forbid)
     result = await gate.inspect_invocation(creative_invocation(), 14647, 32000)
-    assert result["schema_bytes"] == 4809
+    assert result["schema_bytes"] == 4812
     assert result["schema_container_depth"] == 7
     assert result["object_schemas"] == 9
     assert result["refs"] == 7

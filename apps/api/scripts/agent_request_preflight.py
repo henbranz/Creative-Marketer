@@ -29,7 +29,7 @@ from creative_marketer.infrastructure.model_providers.openai_responses import (
     OpenAIResponsesModelProvider,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
-    validate_openai_strict_output_schema,
+    normalize_openai_strict_output_schema,
 )
 from creative_marketer_api.config import Settings
 
@@ -110,8 +110,8 @@ async def inspect_invocation(
         or input_bound + invocation.max_output_tokens > min(total_limit, 1_050_000)
     ):
         raise ValueError("invalid token envelope")
-    validate_openai_strict_output_schema(invocation.output_schema)
-    metadata = schema_metadata(invocation.output_schema)
+    provider_schema = normalize_openai_strict_output_schema(invocation.output_schema)
+    metadata = schema_metadata(provider_schema)
     if metadata["properties"] > 5000 or metadata["schema_container_depth"] > 10:
         raise ValueError("schema exceeds documented structural limits")
     captured: dict[str, Any] = {}
