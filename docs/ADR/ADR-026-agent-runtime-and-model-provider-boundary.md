@@ -46,6 +46,15 @@ because request processing may have begun. A refusal or incomplete Responses API
 durable normalized response/usage checkpoint also remains conservatively outcome-unknown, but
 retains its distinct safe failure code.
 
+Provider HTTP diagnostic values also cross the boundary as an immutable, SDK-free
+`ProviderRejection`. Type/code/param use bounded machine-token validation; messages, raw bodies,
+arbitrary headers, prompts, and credentials never cross it. AgentRuntime appends
+`agent.model.provider_rejected` to existing tenant-scoped Audit, binding the authoritative run,
+attempt, workload, and correlation IDs. Terminal diagnostics commit atomically with the failure or
+unknown-outcome checkpoint. A retryable rejection commits its diagnostic before another transport
+attempt; Audit failure cannot silently permit the retry. Observed HTTP errors do not change the
+known-no-response versus unknown-cost classification above. This adds no schema or historical backfill.
+
 Run and period budgets are enforced transactionally. Decimal cost uses the exact frozen price
 snapshot and provider-reported token counts. User request, Audit, and Outbox event commit together;
 an Inbox handler starts a deterministic Temporal workflow. Activities resolve the authoritative

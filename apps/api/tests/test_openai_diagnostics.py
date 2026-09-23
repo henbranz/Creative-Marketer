@@ -16,6 +16,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelProviderAuthenticationFailed,
     ModelProviderBadRequest,
 )
+from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection, diagnostic_token
 from creative_marketer.creative.application import load_creative_output_schema
 from creative_marketer.infrastructure.model_providers.openai_diagnostics import (
     safe_status_diagnostic,
@@ -112,6 +113,8 @@ async def test_real_sdk_status_mapping_and_safe_logs(status, expected, exception
                 invocation()
             )
     assert str(caught.value) == "OpenAI request failed"
+    assert caught.value.rejection.request_id == "req_12345678"
+    assert caught.value.rejection.exception_class == exception_class
     assert type(caught.value.__cause__).__name__ == exception_class
     assert exception_class in caplog.text
     assert "req_12345678" in caplog.text
@@ -155,6 +158,50 @@ async def test_exact_creative_schema_and_real_sdk_serialize_offline(monkeypatch)
     assert result["provider_acceptance"] == "UNVERIFIED"
     assert result["retry_authorized"] is False
     assert "never-print-product" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "value", ["future_provider_code", "text.format.schema", "x:y-z.v2", "A" * 128]
+)
+def test_unknown_machine_tokens_survive(value):
+    assert diagnostic_token(value) == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "A" * 129,
+        "free text",
+        "line\nbreak",
+        '"quoted"',
+        "{private}",
+        "[private]",
+        "https://example.com",
+        "https:example.com",
+        "www.example.com",
+        "mailto:private",
+        "sk-private-secret",
+        "Bearer-token",
+        "a" * 16 + "." + "b" * 8 + "." + "c" * 8,
+        {"message": "secret"},
+        ["private"],
+        42,
+    ],
+)
+def test_untrusted_diagnostic_content_is_redacted(value):
+    assert diagnostic_token(value) == "REDACTED"
+
+
+def test_pure_diagnostic_value_enforces_bounds_and_does_not_retain_input():
+    assert diagnostic_token(None) is None
+    value = ProviderRejection(400, param="private product text", request_id="sk-private")
+    assert value.param == "REDACTED"
+    assert value.request_id is None
+    assert "private" not in repr(value)
+    for status in [200, 600, True, "400"]:
+        with pytest.raises(ValueError, match="invalid provider rejection status"):
+            ProviderRejection(status)
 
 
 @pytest.mark.asyncio

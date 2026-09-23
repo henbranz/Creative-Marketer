@@ -1804,6 +1804,10 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
     monkeypatch, error, failure_code, expected_calls
 ) -> None:
     tenant_id, product_id = uuid4(), uuid4()
+    from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection
+
+    if isinstance(error, (ModelTimeout, ModelProviderServerError)):
+        error.rejection = ProviderRejection(408 if isinstance(error, ModelTimeout) else 500)
 
     class FailingProvider:
         calls = 0
@@ -1820,7 +1824,7 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
 
     monkeypatch.setattr("creative_marketer.agent_runtime.application.asyncio.sleep", no_delay)
     provider = FailingProvider()
-    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    runtime, repository, audit, _ = service(preparation(tenant_id, product_id), provider)
     requested = await runtime.request_researcher(
         context(tenant_id), product_id=product_id, idempotency_key=failure_code
     )
@@ -1832,6 +1836,8 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
     assert attempt.status is ModelAttemptStatus.UNKNOWN
     assert attempt.failure_code == failure_code
     assert attempt.unknown_cost == persisted.reserved_cost
+    diagnostics = [item for item in audit.values if item.action == "agent.model.provider_rejected"]
+    assert len(diagnostics) == (expected_calls if error.rejection else 0)
     assert provider.calls == expected_calls
     with pytest.raises(AgentRunRecoveryRequired):
         await runtime.execute(tenant_id, requested.id)
@@ -1850,6 +1856,16 @@ async def test_known_provider_rejection_fails_without_unknown_cost(
     monkeypatch, error, failure_code, expected_calls
 ) -> None:
     tenant_id, product_id = uuid4(), uuid4()
+    from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection
+
+    error.rejection = ProviderRejection(
+        429 if expected_calls == 2 else 400,
+        error_type="future_machine_type",
+        error_code="future_machine_code",
+        param="text.format.schema",
+        request_id="req_12345678",
+        exception_class="BadRequestError",
+    )
 
     class FailingProvider:
         calls = 0
@@ -1866,7 +1882,7 @@ async def test_known_provider_rejection_fails_without_unknown_cost(
 
     monkeypatch.setattr("creative_marketer.agent_runtime.application.asyncio.sleep", no_delay)
     provider = FailingProvider()
-    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    runtime, repository, audit, _ = service(preparation(tenant_id, product_id), provider)
     requested = await runtime.request_researcher(
         context(tenant_id), product_id=product_id, idempotency_key=failure_code
     )
@@ -1881,6 +1897,53 @@ async def test_known_provider_rejection_fails_without_unknown_cost(
     assert attempt.provider_started_at is not None
     assert attempt.unknown_cost == 0
     assert provider.calls == expected_calls
+    records = [item for item in audit.values if item.action == "agent.model.provider_rejected"]
+    assert len(records) == expected_calls
+    for record in records:
+        assert record.tenant_id == tenant_id
+        assert record.agent_run_id == requested.id
+        assert record.attempt_id == attempt.id
+        assert __import__("json").loads(record.safe_metadata.canonical_json) == {
+            "provider": "openai",
+            "agent_run_id": str(requested.id),
+            "model_attempt_id": str(attempt.id),
+            **error.rejection.as_dict(),
+        }
+
+
+@pytest.mark.asyncio
+async def test_rejection_audit_failure_blocks_next_transport_attempt(monkeypatch):
+    from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection
+
+    tenant, product = uuid4(), uuid4()
+
+    class LimitedProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelRateLimited("limited", rejection=ProviderRejection(429))
+
+    provider = LimitedProvider()
+    runtime, repository, audit, _ = service(preparation(tenant, product), provider)
+    requested = await runtime.request_researcher(
+        context(tenant), product_id=product, idempotency_key="audit-unavailable"
+    )
+    original = audit.append
+
+    async def unavailable(record):
+        if record.action == "agent.model.provider_rejected":
+            raise RuntimeError("audit unavailable")
+        await original(record)
+
+    monkeypatch.setattr(audit, "append", unavailable)
+    with pytest.raises(AgentRunRecoveryRequired):
+        await runtime.execute(tenant, requested.id)
+    assert provider.calls == 1
+    assert next(iter(repository.attempts.values())).status is ModelAttemptStatus.UNKNOWN
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelUsage,
 )
 from creative_marketer.infrastructure.model_providers.openai_diagnostics import (
+    provider_rejection,
     safe_status_diagnostic,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
@@ -141,7 +142,9 @@ class OpenAIResponsesModelProvider:
             }
             response: Any = await self._client.responses.create(**parameters)
         except RateLimitError as error:
-            raise ModelRateLimited("OpenAI rate limit") from error
+            raise ModelRateLimited(
+                "OpenAI rate limit", rejection=provider_rejection(error)
+            ) from error
         except APITimeoutError as error:
             raise ModelTimeout("OpenAI request timed out") from error
         except APIConnectionError as error:
@@ -182,7 +185,9 @@ class OpenAIResponsesModelProvider:
                 failure_type = ModelProviderServerError
             else:
                 failure_type = ModelProviderHttpError
-            raise failure_type("OpenAI request failed") from error
+            raise failure_type(
+                "OpenAI request failed", rejection=provider_rejection(error)
+            ) from error
         if response.status in {"failed", "cancelled", "incomplete"}:
             details = getattr(response, "incomplete_details", None)
             reason = getattr(details, "reason", None)

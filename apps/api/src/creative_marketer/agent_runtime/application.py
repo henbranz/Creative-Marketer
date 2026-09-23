@@ -2720,6 +2720,13 @@ class AgentRunService:
                             or transport_attempt == MAX_PROVIDER_TRANSPORT_ATTEMPTS
                         ):
                             raise
+                        if error.rejection is not None:
+                            # HTTP diagnostics must be durable before another transport attempt.
+                            async with self.uow_factory(tenant_id) as uow:
+                                await self._append_provider_rejection(
+                                    uow, run, attempt, workload, error
+                                )
+                                await uow.commit()
                         # Only transport outcomes with no response usage are retried. These are
                         # attempts within one bounded logical model call, not an autonomous loop.
                         await asyncio.sleep(0.25 * transport_attempt)
@@ -2804,6 +2811,11 @@ class AgentRunService:
                         await uow.runs.mark_attempt_unknown(
                             run.id, attempt.id, workload.workload_id, code
                         )
+                        if isinstance(error, ModelProviderError) and error.rejection is not None:
+                            # An HTTP response does not prove a zero-cost provider outcome.
+                            await self._append_provider_rejection(
+                                uow, run, attempt, workload, error
+                            )
                         await uow.commit()
                     raise AgentRunRecoveryRequired(
                         "provider outcome is ambiguous and requires operator recovery"
@@ -2817,6 +2829,13 @@ class AgentRunService:
                         attempt_id=attempt.id,
                         workload_id=workload.workload_id,
                     )
+                    if (
+                        known_no_response
+                        and isinstance(error, ModelProviderError)
+                        and error.rejection is not None
+                    ):
+                        # Atomic with failure/cost settlement; never backfill historical runs.
+                        await self._append_provider_rejection(uow, run, attempt, workload, error)
                     await self._append_workload_completion(uow, failed, workload, None)
                     await uow.commit()
                 self.telemetry.count(
@@ -2860,6 +2879,44 @@ class AgentRunService:
                         "model_profile": run.model_profile_key,
                         "provider": run.resolved_provider,
                         "model": run.resolved_model,
+                    }
+                ),
+            )
+        )
+
+    async def _append_provider_rejection(
+        self,
+        uow: AgentRuntimeUnitOfWork,
+        run: AgentRun,
+        attempt: ModelAttempt,
+        workload: WorkloadIdentity,
+        error: ModelProviderError,
+    ) -> None:
+        if error.rejection is None:
+            return
+        await uow.audit.append(
+            AuditRecord(
+                scope_kind=AuditScopeKind.TENANT,
+                tenant_id=run.tenant_id,
+                actor_kind=AuditActorKind.WORKLOAD,
+                actor_id=workload.workload_id,
+                action="agent.model.provider_rejected",
+                outcome=AuditOutcome.FAILED,
+                resource_type="agent_run",
+                resource_id=str(run.id),
+                agent_definition_id=run.requested_agent_definition_id,
+                agent_version_id=run.agent_version_id,
+                agent_run_id=run.id,
+                attempt_id=attempt.id,
+                correlation_id=run.correlation_id,
+                environment=workload.environment,
+                reason_code=error.code,
+                safe_metadata=safe_metadata(
+                    {
+                        "provider": run.resolved_provider,
+                        "agent_run_id": str(run.id),
+                        "model_attempt_id": str(attempt.id),
+                        **error.rejection.as_dict(),
                     }
                 ),
             )

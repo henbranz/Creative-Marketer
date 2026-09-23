@@ -11,6 +11,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from uuid import UUID, uuid4
 
+from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection
+
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 MAX_FINDINGS = 30
 MAX_CITATIONS_PER_FINDING = 8
@@ -74,6 +76,10 @@ class ModelProviderError(Exception):
     code = "MODEL_PROVIDER_UNAVAILABLE"
     retryable = True
     disposition = ModelFailureDisposition.OUTCOME_UNKNOWN
+
+    def __init__(self, message: str, *, rejection: ProviderRejection | None = None) -> None:
+        super().__init__(message)
+        self.rejection = rejection
 
 
 class ModelProviderBadRequest(ModelProviderError):

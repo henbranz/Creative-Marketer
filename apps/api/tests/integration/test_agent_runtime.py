@@ -224,7 +224,18 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
 
         async def generate_structured(self, _invocation):
             self.calls += 1
-            raise ModelProviderBadRequest("provider payload must not persist")
+            from creative_marketer.agent_runtime.provider_diagnostics import ProviderRejection
+
+            raise ModelProviderBadRequest(
+                "provider payload must not persist",
+                rejection=ProviderRejection(
+                    400,
+                    error_code="future_schema_code",
+                    param="text.format.schema",
+                    request_id="req_12345678",
+                    exception_class="BadRequestError",
+                ),
+            )
 
     bad_request_provider = BadRequestProvider()
     rejecting_service = AgentRunService(
@@ -245,12 +256,28 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
         attempt = (
             await connection.execute(
                 text(
-                    "SELECT status, unknown_cost, input_tokens, output_tokens, failure_code "
+                    "SELECT id, status, unknown_cost, input_tokens, output_tokens, failure_code "
                     "FROM agent_runtime.model_attempts WHERE agent_run_id=:run"
                 ),
                 {"run": rejected.id},
             )
         ).one()
+        rejection = (
+            await connection.execute(
+                text(
+                    "SELECT tenant_id, agent_run_id, attempt_id, safe_metadata "
+                    "FROM audit.audit_records "
+                    "WHERE agent_run_id=:run AND action='agent.model.provider_rejected'"
+                ),
+                {"run": rejected.id},
+            )
+        ).one()
+        assert rejection.tenant_id == context.tenant_id
+        assert rejection.agent_run_id == rejected.id
+        assert rejection.attempt_id == attempt.id
+        assert rejection.safe_metadata["error_code"] == "future_schema_code"
+        assert rejection.safe_metadata["request_id"] == "req_12345678"
+        assert "provider payload" not in str(rejection.safe_metadata)
     assert attempt.status == ModelAttemptStatus.FAILED_NO_RESPONSE.value
     assert attempt.unknown_cost == 0
     assert attempt.input_tokens == attempt.output_tokens == 0
