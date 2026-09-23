@@ -31,6 +31,7 @@ from creative_marketer.agent_runtime.application import (
     compact_context,
 )
 from creative_marketer.agent_runtime.domain import (
+    KNOWN_FAILED_NO_RESPONSE_CODES,
     AgentPeriodBudgetExceeded,
     AgentRun,
     AgentRunRecoveryConflict,
@@ -40,6 +41,7 @@ from creative_marketer.agent_runtime.domain import (
     EvidenceBlockRef,
     Finding,
     FindingCategory,
+    KnownFailedAgentRun,
     ModelAttempt,
     ModelAttemptStatus,
     ModelContext,
@@ -3593,6 +3595,53 @@ class SqlAlchemyAgentRunRepository:
             return None
         attempt = _attempt(attempt_row)
         return StrandedAgentRun(_run(run_row), attempt, classify_stranded_attempt(attempt))
+
+    async def get_known_failed_no_response(
+        self, run_id: UUID, *, for_update: bool = False
+    ) -> KnownFailedAgentRun | None:
+        run_query = select(agent_runs).where(
+            agent_runs.c.id == run_id,
+            agent_runs.c.status == AgentRunStatus.FAILED.value,
+        )
+        if for_update:
+            run_query = run_query.with_for_update()
+        run_row = (await self._session.execute(run_query)).first()
+        if run_row is None:
+            return None
+        run = _run(run_row)
+        attempt_query = select(model_attempts).where(model_attempts.c.agent_run_id == run_id)
+        if for_update:
+            attempt_query = attempt_query.with_for_update()
+        attempt_rows = (await self._session.execute(attempt_query)).all()
+        if len(attempt_rows) != 1:
+            return None
+        attempt = _attempt(attempt_rows[0])
+        has_successor = await self._session.scalar(
+            select(agent_runs.c.id).where(agent_runs.c.recovery_of_run_id == run_id).limit(1)
+        )
+        has_reconciliation = await self._session.scalar(
+            select(model_cost_reconciliations.c.id)
+            .where(model_cost_reconciliations.c.agent_run_id == run_id)
+            .limit(1)
+        )
+        if (
+            attempt.status is not ModelAttemptStatus.FAILED_NO_RESPONSE
+            or attempt.provider_response_id is not None
+            or any((attempt.input_tokens, attempt.output_tokens, attempt.total_tokens))
+            or attempt.estimated_cost != 0
+            or attempt.unknown_cost != 0
+            or run.provider_response_id is not None
+            or run.result_ref is not None
+            or any((run.input_tokens, run.output_tokens, run.total_tokens))
+            or run.estimated_cost != 0
+            or run.model_call_count != 1
+            or run.failure_code not in KNOWN_FAILED_NO_RESPONSE_CODES
+            or attempt.failure_code != run.failure_code
+            or has_successor is not None
+            or has_reconciliation is not None
+        ):
+            return None
+        return KnownFailedAgentRun(run, attempt)
 
     async def recovery_configuration(self, run: AgentRun) -> AgentVersionConfiguration | None:
         definition_ids = {

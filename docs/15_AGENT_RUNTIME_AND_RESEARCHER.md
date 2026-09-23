@@ -141,6 +141,14 @@ unrecognized HTTP, and unexpected transport outcomes remain conservative and req
 recovery. Provider bodies, headers, credentials, prompts, and Product content are never persisted in
 failure details.
 
+Before the durable `PROVIDER_STARTED` checkpoint, the selected provider validates the complete
+invocation against provider-specific deterministic constraints. The OpenAI adapter rejects
+unsupported strict Structured Output keywords, non-object/root-`anyOf` schemas, open objects, and
+object properties not listed in `required` with `MODEL_PROVIDER_SCHEMA_UNSUPPORTED`. This path makes
+no network call, records zero usage/cost/unknown cost, and persists no schema body. The adapter
+repeats the validation at its direct execution boundary as defense in depth; it never rewrites an
+invalid canonical schema.
+
 Worker eligibility is enforced before claim. A fake Agent worker rejects the governed `live-*`
 acceptance idempotency namespace while the AgentRun is still `PENDING`; it therefore cannot create
 a ModelAttempt, record workload provenance, start provider authority, or introduce unknown cost.

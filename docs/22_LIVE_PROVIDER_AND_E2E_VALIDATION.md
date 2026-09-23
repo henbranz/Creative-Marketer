@@ -192,3 +192,9 @@ route match. Zero successors leaves the checkpoint unchanged; multiple or mismat
 closed. Status reports operational recovery separately from lifecycle state and reports actual,
 reserved, immutable original unknown, reconciled actual, and remaining unknown-potential costs as
 distinct values.
+
+A terminal `FAILED_NO_RESPONSE` run with authoritative zero response, tokens, actual cost, and
+unknown cost may use the same operator-only rerun command after its deterministic request defect is
+fixed. The predecessor is not reset or reconciled. The harness applies the same exact unique-
+successor provenance checks before adopting the new run; creating the successor does not invoke the
+provider.

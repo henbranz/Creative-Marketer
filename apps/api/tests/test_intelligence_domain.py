@@ -220,7 +220,7 @@ def test_structured_output_binds_exact_comparison_and_caps_synthetic_confidence(
                     "comparison_ids": [str(comparison.id)],
                     "metric": "ctr",
                     "confidence": "HIGH",
-                    "scope": {"platform": "instagram"},
+                    "scope": {"dimensions": [{"key": "platform", "value": "instagram"}]},
                     "limitations": ["Observational only."],
                 }
             ],

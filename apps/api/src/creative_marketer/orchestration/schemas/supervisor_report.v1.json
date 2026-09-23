@@ -9,7 +9,8 @@
     "current_stage_explanation",
     "blockers",
     "attention_items",
-    "suggested_next_actions"
+    "suggested_next_actions",
+    "completion_summary"
   ],
   "properties": {
     "summary": {"type": "string", "minLength": 1, "maxLength": 1000},

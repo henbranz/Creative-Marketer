@@ -109,6 +109,20 @@ def load_intelligence_output_schema() -> Mapping[str, object]:
     return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
+def _scope_from_provider(value: object) -> dict[str, object]:
+    assert isinstance(value, dict)
+    dimensions = value["dimensions"]
+    assert isinstance(dimensions, list)
+    scope: dict[str, object] = {}
+    for item in dimensions:
+        assert isinstance(item, dict)
+        key = str(item["key"])
+        if key in scope:
+            raise InvalidIntelligenceOutput("provider scope contains duplicate dimensions")
+        scope[key] = item["value"]
+    return scope
+
+
 def validate_intelligence_output(
     output: Mapping[str, object],
     *,
@@ -197,6 +211,7 @@ def validate_intelligence_output(
         if manifest.data_trust_level is DataTrustLevel.SYNTHETIC or sample_size < 3:
             confidence = Confidence.LOW
         comparison = comparison_by_id[evidence_ids[0]] if evidence_ids else None
+        scope = _scope_from_provider(raw["scope"])
         content = {
             "report_id": str(report.id),
             "statement": str(raw["statement"]),
@@ -206,7 +221,7 @@ def validate_intelligence_output(
             "baseline": str(comparison.baseline_value) if comparison else None,
             "observed_delta": str(comparison.absolute_delta) if comparison else None,
             "confidence": confidence.value,
-            "scope": dict(raw["scope"]),
+            "scope": scope,
             "limitations": [str(item) for item in raw["limitations"]],
             "data_trust_level": manifest.data_trust_level.value,
         }
@@ -222,7 +237,7 @@ def validate_intelligence_output(
                 comparison.baseline_value if comparison else None,
                 comparison.absolute_delta if comparison else None,
                 confidence,
-                dict(raw["scope"]),
+                scope,
                 tuple(str(item) for item in raw["limitations"]),
                 manifest.data_trust_level,
                 canonical_digest(content),

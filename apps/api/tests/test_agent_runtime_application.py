@@ -44,6 +44,7 @@ from creative_marketer.agent_runtime.application import (
     select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
+    KNOWN_FAILED_NO_RESPONSE_CODES,
     AgentContextBudgetExceeded,
     AgentExecutionNotAllowed,
     AgentPeriodBudgetExceeded,
@@ -56,11 +57,13 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunRecoveryRequired,
     AgentRunStatus,
     BudgetExceeded,
+    KnownFailedAgentRun,
     ModelAttempt,
     ModelAttemptStatus,
     ModelContext,
     ModelInvocationResult,
     ModelProviderBadRequest,
+    ModelProviderSchemaUnsupported,
     ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
@@ -92,6 +95,9 @@ from creative_marketer.identity.application.authentication import (
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
+from creative_marketer.infrastructure.model_providers.openai_schema import (
+    validate_openai_strict_output_schema,
+)
 from creative_marketer.intelligence.domain import (
     CanonicalRef,
     DataTrustLevel,
@@ -687,6 +693,33 @@ class MemoryRepository:
         ):
             return None
         return StrandedAgentRun(run, attempt, classify_stranded_attempt(attempt))
+
+    async def get_known_failed_no_response(self, run_id, *, for_update=False):
+        del for_update
+        run = self.runs.get(run_id)
+        attempts = [item for item in self.attempts.values() if item.agent_run_id == run_id]
+        if run is None or len(attempts) != 1:
+            return None
+        attempt = attempts[0]
+        if (
+            run.status is not AgentRunStatus.FAILED
+            or attempt.status is not ModelAttemptStatus.FAILED_NO_RESPONSE
+            or attempt.provider_response_id is not None
+            or any((attempt.input_tokens, attempt.output_tokens, attempt.total_tokens))
+            or attempt.estimated_cost != 0
+            or attempt.unknown_cost != 0
+            or run.provider_response_id is not None
+            or run.result_ref is not None
+            or any((run.input_tokens, run.output_tokens, run.total_tokens))
+            or run.estimated_cost != 0
+            or run.model_call_count != 1
+            or run.failure_code not in KNOWN_FAILED_NO_RESPONSE_CODES
+            or attempt.failure_code != run.failure_code
+            or any(value.recovery_of_run_id == run_id for value in self.runs.values())
+            or any(value[0] == run_id for value in self.reconciliations)
+        ):
+            return None
+        return KnownFailedAgentRun(run, attempt)
 
     async def find_stranded(self, now):
         values = []
@@ -1729,6 +1762,9 @@ async def test_transient_provider_timeout_is_retried_once_then_succeeds(monkeypa
     class TransientProvider:
         calls = 0
 
+        def validate_invocation(self, _invocation):
+            return None
+
         async def generate_structured(self, invocation):
             self.calls += 1
             if self.calls == 1:
@@ -1771,6 +1807,9 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
 
     class FailingProvider:
         calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
 
         async def generate_structured(self, _invocation):
             self.calls += 1
@@ -1815,6 +1854,9 @@ async def test_known_provider_rejection_fails_without_unknown_cost(
     class FailingProvider:
         calls = 0
 
+        def validate_invocation(self, _invocation):
+            return None
+
         async def generate_structured(self, _invocation):
             self.calls += 1
             raise error
@@ -1839,6 +1881,52 @@ async def test_known_provider_rejection_fails_without_unknown_cost(
     assert attempt.provider_started_at is not None
     assert attempt.unknown_cost == 0
     assert provider.calls == expected_calls
+
+
+@pytest.mark.asyncio
+async def test_invalid_openai_schema_fails_before_provider_start_without_unknown_cost() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+
+    class InvalidSchemaResearcher(ResearcherCapability):
+        def output_schema(self, version):
+            del version
+            return {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["value"],
+                "properties": {"value": {"oneOf": [{"const": "schema-secret-must-not-persist"}]}},
+            }
+
+    class StrictSchemaProvider:
+        calls = 0
+
+        def validate_invocation(self, invocation):
+            validate_openai_strict_output_schema(invocation.output_schema)
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            pytest.fail("invalid schema must not cross the provider boundary")
+
+    provider = StrictSchemaProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    runtime.capabilities = AgentCapabilityRegistry((InvalidSchemaResearcher(),))
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="invalid-provider-schema"
+    )
+
+    failed = await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == ModelProviderSchemaUnsupported.code
+    assert failed.estimated_cost == 0
+    assert failed.input_tokens == failed.output_tokens == failed.total_tokens == 0
+    assert attempt.status is ModelAttemptStatus.FAILED_NO_RESPONSE
+    assert attempt.provider_started_at is None
+    assert attempt.unknown_cost == 0
+    assert attempt.failure_code == ModelProviderSchemaUnsupported.code
+    assert provider.calls == 0
+    assert "schema-secret" not in (failed.failure_code or "")
 
 
 async def _stranded(
@@ -2121,6 +2209,152 @@ async def test_creative_unknown_recovery_creates_one_frozen_successor_without_pr
         "currency",
     ):
         assert getattr(successor, field_name) == getattr(original, field_name)
+
+
+@pytest.mark.asyncio
+async def test_known_failed_no_response_creates_frozen_successor_without_provider_call() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+
+    class KnownBadRequestProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelProviderBadRequest("safe provider rejection")
+
+    provider = KnownBadRequestProvider()
+    runtime, repository, audit, outbox = service(preparation(tenant_id, product_id), provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="known-failed-retry"
+    )
+    original = await runtime.execute(tenant_id, requested.id)
+    original_attempt = next(
+        value for value in repository.attempts.values() if value.agent_run_id == original.id
+    )
+    assert original.status is AgentRunStatus.FAILED
+    assert original_attempt.status is ModelAttemptStatus.FAILED_NO_RESPONSE
+    assert provider.calls == 1
+
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+        clock=lambda: datetime(2030, 2, 3, 12, tzinfo=UTC),
+    )
+    successor = await recovery.rerun_as_new(original.id)
+
+    assert provider.calls == 1
+    assert repository.runs[original.id] == original
+    assert repository.attempts[original_attempt.id] == original_attempt
+    assert successor.status is AgentRunStatus.PENDING
+    assert successor.recovery_of_run_id == original.id
+    assert successor.period_start == datetime(2030, 2, 3, tzinfo=UTC)
+    assert repository.reservations[-1]["run_id"] == successor.id
+    assert repository.reservations[-1]["reserve_cost"] == original.reserved_cost
+    assert audit.values[-1].action == "agent.run.known_failure_retry_requested"
+    assert '"classification":"KNOWN_FAILED_NO_RESPONSE"' in (
+        audit.values[-1].safe_metadata.canonical_json
+    )
+    assert outbox.values[-1].causation_id == original.id
+    for field_name in (
+        "requested_agent_definition_id",
+        "resolved_agent_definition_id",
+        "agent_version_id",
+        "agent_version_number",
+        "agent_configuration_digest",
+        "prompt_revision",
+        "agent_type",
+        "input_context_kind",
+        "input_context_schema_version",
+        "input_context_digest",
+        "input_context_refs",
+        "product_id",
+        "product_snapshot_id",
+        "product_snapshot_digest",
+        "research_context_digest",
+        "context_digest",
+        "model_profile_key",
+        "output_contract_key",
+        "output_contract_version",
+        "max_total_tokens",
+        "reserved_cost",
+        "currency",
+    ):
+        assert getattr(successor, field_name) == getattr(original, field_name)
+    with pytest.raises(AgentRunRecoveryConflict, match="eligible"):
+        await recovery.rerun_as_new(original.id)
+
+
+@pytest.mark.asyncio
+async def test_known_failure_retry_rejects_uncertain_response_and_nonzero_usage() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    runtime, repository, audit, outbox = service(
+        preparation(tenant_id, product_id),
+        FakeModelProvider(
+            ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+        ),
+    )
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="known-failure-ineligible"
+    )
+    stranded = await _stranded(repository, requested.id, status=ModelAttemptStatus.PROVIDER_STARTED)
+    failed = replace(
+        stranded.run,
+        status=AgentRunStatus.FAILED,
+        completed_at=datetime.now(UTC),
+        failure_code="MODEL_PROVIDER_BAD_REQUEST",
+    )
+    repository.runs[failed.id] = failed
+    attempt = stranded.attempt
+    cases = (
+        replace(
+            attempt,
+            status=ModelAttemptStatus.UNKNOWN,
+            finished_at=datetime.now(UTC),
+            unknown_cost=failed.reserved_cost,
+            failure_code="MODEL_PROVIDER_UNAVAILABLE",
+        ),
+        replace(
+            attempt,
+            status=ModelAttemptStatus.RESPONSE_RECORDED,
+            response_recorded_at=datetime.now(UTC),
+            provider_response_id="response-recorded",
+            input_tokens=1,
+            total_tokens=1,
+            estimated_cost=Decimal("0.000004"),
+        ),
+        replace(
+            attempt,
+            status=ModelAttemptStatus.FAILED_NO_RESPONSE,
+            finished_at=datetime.now(UTC),
+            input_tokens=1,
+            total_tokens=1,
+            estimated_cost=Decimal("0.000004"),
+            failure_code="MODEL_PROVIDER_BAD_REQUEST",
+        ),
+    )
+    for value in cases:
+        repository.attempts = {value.id: value}
+        assert await repository.get_known_failed_no_response(failed.id) is None
+
+    repository.attempts = {
+        attempt.id: replace(
+            attempt,
+            status=ModelAttemptStatus.FAILED_NO_RESPONSE,
+            finished_at=datetime.now(UTC),
+            failure_code="MODEL_INVALID_OUTPUT",
+        )
+    }
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, audit, outbox),
+        ModelRouter((route(),)),
+        OperatorProvider(tenant_id),
+    )
+    with pytest.raises(AgentRunRecoveryConflict, match="eligible"):
+        await recovery.rerun_as_new(failed.id)
 
 
 @pytest.mark.asyncio

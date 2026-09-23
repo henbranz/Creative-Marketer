@@ -26,6 +26,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelProviderError,
     ModelProviderModelUnavailable,
     ModelProviderPermissionDenied,
+    ModelProviderSchemaUnsupported,
     ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
@@ -50,7 +51,12 @@ def invocation() -> ModelInvocation:
         system_instructions="Only analyze supplied evidence.",
         trusted_product_context={"name": "Product"},
         untrusted_evidence=(block(),),
-        output_schema={"type": "object"},
+        output_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": [],
+            "properties": {},
+        },
         output_contract_key="research.research_snapshot",
         output_contract_version=1,
         max_output_tokens=6000,
@@ -61,6 +67,25 @@ def invocation() -> ModelInvocation:
 def client_with(response=None, error=None):
     create = AsyncMock(return_value=response, side_effect=error)
     return SimpleNamespace(responses=SimpleNamespace(create=create)), create
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_rejects_schema_before_network_call() -> None:
+    client, create = client_with()
+    provider = OpenAIResponsesModelProvider("unit-live-credential", client=client)
+    invalid = replace(
+        invocation(),
+        output_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["value"],
+            "properties": {"value": {"oneOf": [{"type": "string"}]}},
+        },
+    )
+    with pytest.raises(ModelProviderSchemaUnsupported) as caught:
+        await provider.generate_structured(invalid)
+    assert caught.value.code == "MODEL_PROVIDER_SCHEMA_UNSUPPORTED"
+    create.assert_not_awaited()
 
 
 @pytest.mark.asyncio

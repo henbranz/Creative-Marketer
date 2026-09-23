@@ -108,6 +108,7 @@ from .domain import (
     AgentRuntimeError,
     BudgetExceeded,
     EvidenceBlockRef,
+    KnownFailedAgentRun,
     ModelAttempt,
     ModelCapabilityUnavailable,
     ModelContext,
@@ -816,6 +817,8 @@ def initial_agent_model_routes() -> tuple[ModelRoute, ...]:
 
 
 class ModelProvider(Protocol):
+    def validate_invocation(self, invocation: ModelInvocation) -> None: ...
+
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult: ...
 
 
@@ -1041,6 +1044,9 @@ class AgentRunRepository(Protocol):
     async def get_stranded(
         self, run_id: UUID, now: datetime, *, for_update: bool = False
     ) -> StrandedAgentRun | None: ...
+    async def get_known_failed_no_response(
+        self, run_id: UUID, *, for_update: bool = False
+    ) -> KnownFailedAgentRun | None: ...
     async def recovery_configuration(self, run: AgentRun) -> AgentVersionConfiguration | None: ...
     async def abandon_stranded(
         self,
@@ -2678,6 +2684,9 @@ class AgentRunService:
             schema = capability.output_schema(run.output_contract_version)
             provider = self.providers.resolve(route.provider)
             invocation = capability.invocation(run, route, context)
+            # Provider-specific compatibility is deterministic and must complete before
+            # PROVIDER_STARTED grants authority for network I/O or ambiguous cost.
+            provider.validate_invocation(invocation)
             async with self.uow_factory(tenant_id) as uow:
                 attempt = await uow.runs.mark_provider_started(
                     run.id, attempt.id, workload.workload_id
@@ -3018,9 +3027,22 @@ class AgentRunRecoveryService:
         with self.telemetry.span("agent_recovery.rerun", {}) as span:
             async with self.uow_factory(operator.tenant_id) as uow:
                 stranded = await uow.runs.get_stranded(run_id, self.clock(), for_update=True)
+                known_failure = None
                 if stranded is None:
-                    raise AgentRunRecoveryConflict("run is not currently stranded")
-                original = stranded.run
+                    known_failure = await uow.runs.get_known_failed_no_response(
+                        run_id, for_update=True
+                    )
+                if stranded is None and known_failure is None:
+                    raise AgentRunRecoveryConflict("run is not eligible for an operator rerun")
+                if stranded is not None:
+                    original = stranded.run
+                    attempt = stranded.attempt
+                else:
+                    assert known_failure is not None
+                    original = known_failure.run
+                    attempt = known_failure.attempt
+                if original.tenant_id != operator.tenant_id:
+                    raise AgentRunRecoveryConflict("run is not eligible for an operator rerun")
                 cfg = await uow.runs.recovery_configuration(original)
                 if cfg is None:
                     raise RecoveryAgentUnavailable("bound Agent is no longer available")
@@ -3034,18 +3056,23 @@ class AgentRunRecoveryService:
                     or route.model != original.resolved_model
                 ):
                     raise ModelRouteUnavailable("historical model route is unavailable")
-                failure_code = _recovery_failure_code(stranded.classification)
+                failure_code = (
+                    _recovery_failure_code(stranded.classification)
+                    if stranded is not None
+                    else original.failure_code or "MODEL_PROVIDER_KNOWN_NO_RESPONSE"
+                )
                 recovered_at = self.clock()
                 recovery_period_start = _period_start(recovered_at, cfg.period_budget_policy.period)
                 await uow.runs.lock_period_budgets(
                     original.requested_agent_definition_id,
                     (original.period_start, recovery_period_start),
                 )
-                await uow.runs.abandon_stranded(
-                    stranded,
-                    workload_id=operator.workload.workload_id,
-                    failure_code=failure_code,
-                )
+                if stranded is not None:
+                    await uow.runs.abandon_stranded(
+                        stranded,
+                        workload_id=operator.workload.workload_id,
+                        failure_code=failure_code,
+                    )
                 successor = replace(
                     original,
                     id=uuid4(),
@@ -3091,17 +3118,27 @@ class AgentRunRecoveryService:
                     raise RecoveryBlockedBudget("recovery requires a fresh budget") from error
                 if not await uow.runs.add_recovery_run(successor):
                     raise AgentRunRecoveryConflict("run already has a recovery successor")
+                known_failure_retry = known_failure is not None
+                if known_failure_retry:
+                    audit_action = "agent.run.known_failure_retry_requested"
+                    classification = "KNOWN_FAILED_NO_RESPONSE"
+                    cost_category = "known_zero"
+                else:
+                    assert stranded is not None
+                    audit_action = "agent.run.recovery_requested"
+                    classification = stranded.classification.value
+                    cost_category = _cost_category(stranded.classification)
                 await uow.audit.append(
                     _recovery_audit(
                         operator,
                         original,
-                        action="agent.run.recovery_requested",
+                        action=audit_action,
                         reason_code=failure_code,
                         metadata={
-                            "model_attempt_id": str(stranded.attempt.id),
+                            "model_attempt_id": str(attempt.id),
                             "recovery_run_id": str(successor.id),
-                            "classification": stranded.classification.value,
-                            "cost_category": _cost_category(stranded.classification),
+                            "classification": classification,
+                            "cost_category": cost_category,
                         },
                     )
                 )

@@ -82,6 +82,12 @@ class ModelProviderBadRequest(ModelProviderError):
     disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
 
 
+class ModelProviderSchemaUnsupported(ModelProviderError):
+    code = "MODEL_PROVIDER_SCHEMA_UNSUPPORTED"
+    retryable = False
+    disposition = ModelFailureDisposition.KNOWN_NO_RESPONSE
+
+
 class ModelProviderAuthenticationFailed(ModelProviderError):
     code = "MODEL_PROVIDER_AUTHENTICATION_FAILED"
     retryable = False
@@ -137,6 +143,19 @@ class ModelRefusal(ModelProviderError):
 class ModelIncompleteResponse(ModelProviderError):
     code = "MODEL_PROVIDER_INCOMPLETE_RESPONSE"
     retryable = False
+
+
+KNOWN_FAILED_NO_RESPONSE_CODES = frozenset(
+    {
+        ModelProviderBadRequest.code,
+        ModelProviderSchemaUnsupported.code,
+        ModelProviderAuthenticationFailed.code,
+        ModelProviderPermissionDenied.code,
+        ModelProviderModelUnavailable.code,
+        ModelProviderConflict.code,
+        ModelRateLimited.code,
+    }
+)
 
 
 class AgentRuntimeError(Exception):
@@ -448,6 +467,14 @@ class StrandedAgentRun:
     run: AgentRun
     attempt: ModelAttempt
     classification: RecoveryClassification
+
+
+@dataclass(frozen=True, slots=True)
+class KnownFailedAgentRun:
+    """Terminal zero-usage provider rejection eligible for an explicit new run."""
+
+    run: AgentRun
+    attempt: ModelAttempt
 
 
 def classify_stranded_attempt(attempt: ModelAttempt) -> RecoveryClassification:

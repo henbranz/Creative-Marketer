@@ -28,6 +28,9 @@ from creative_marketer.agent_runtime.domain import (
     ModelTimeout,
     ModelUsage,
 )
+from creative_marketer.infrastructure.model_providers.openai_schema import (
+    validate_openai_strict_output_schema,
+)
 
 
 class ModelImageMaterializer(Protocol):
@@ -50,7 +53,11 @@ class OpenAIResponsesModelProvider:
         self._client = client or AsyncOpenAI(api_key=api_key, max_retries=0)
         self._image_materializer = image_materializer
 
+    def validate_invocation(self, invocation: ModelInvocation) -> None:
+        validate_openai_strict_output_schema(invocation.output_schema)
+
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult:
+        self.validate_invocation(invocation)
         evidence = [
             {
                 "reference": item.identity(),

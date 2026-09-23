@@ -7,7 +7,7 @@
     "summary": {"type": "string", "minLength": 1, "maxLength": 2000},
     "inventory_exceptions": {"type": "array", "maxItems": 50, "items": {"type": "object", "additionalProperties": false, "required": ["observation_id", "explanation"], "properties": {"observation_id": {"type": "string", "format": "uuid"}, "explanation": {"type": "string", "maxLength": 500}}}},
     "order_exceptions": {"type": "array", "maxItems": 50, "items": {"type": "object", "additionalProperties": false, "required": ["observation_id", "explanation"], "properties": {"observation_id": {"type": "string", "format": "uuid"}, "explanation": {"type": "string", "maxLength": 500}}}},
-    "action_proposals": {"type": "array", "maxItems": 20, "items": {"oneOf": [
+    "action_proposals": {"type": "array", "maxItems": 20, "items": {"anyOf": [
       {"type": "object", "additionalProperties": false, "required": ["action_type", "external_variant_id", "exact_quantity", "reason"], "properties": {"action_type": {"const": "INVENTORY_ADJUSTMENT"}, "external_variant_id": {"type": "string", "minLength": 1, "maxLength": 255}, "exact_quantity": {"type": "integer", "minimum": 0}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}},
       {"type": "object", "additionalProperties": false, "required": ["action_type", "external_order_id", "exact_amount", "currency", "reason"], "properties": {"action_type": {"const": "REFUND"}, "external_order_id": {"type": "string", "minLength": 1, "maxLength": 255}, "exact_amount": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+)?$"}, "currency": {"type": "string", "pattern": "^[A-Z]{3}$"}, "reason": {"type": "string", "minLength": 1, "maxLength": 1000}}}
     ]}},

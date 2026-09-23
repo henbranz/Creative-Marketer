@@ -41,6 +41,17 @@ kind/digest/references, contract, route, pricing version, and limits remain froz
 definitions or an unavailable
 historical route fail closed.
 
+The same explicit `rerun` command also accepts one narrow terminal known-failure case. The original
+run must be `FAILED`; it must have exactly one `FAILED_NO_RESPONSE` ModelAttempt; run and attempt
+must have no provider response ID, zero tokens, zero actual/estimated/unknown cost, matching safe
+known-no-response failure codes, no reconciliation, and no existing successor. The operator tenant,
+historical AgentVersion/configuration, exact route/pricing, frozen Product/context provenance, and a
+fresh current-period budget must all remain valid. `SUCCEEDED`, `CANCELLED`, outcome-unknown,
+response-recorded, nonzero-usage/cost, and arbitrary application-validation failures are ineligible.
+The terminal predecessor remains immutable; creation writes one ordinary pending successor and the
+distinct `agent.run.known_failure_retry_requested` Audit action. Successor creation itself performs
+no provider call and does not require or create cost reconciliation.
+
 When provider evidence later establishes actual cost for an ambiguous run, `reconcile-cost` creates
 immutable evidence exactly once and moves unknown cost to actual cost. It never changes the original
 AgentRun outcome. Do not guess an amount to unblock a tenant.

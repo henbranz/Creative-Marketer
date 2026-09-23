@@ -117,6 +117,8 @@ def test_recovery_service_requires_paired_trusted_configuration() -> None:
                 _env_file=None,
                 database_url="postgresql+psycopg://test:test@localhost/test",
                 audit_fingerprint_key="unit-test-audit-fingerprint-key-32",
+                agent_recovery_operator_id=None,
+                agent_recovery_tenant_id=None,
             )
         )
     configured = _service(

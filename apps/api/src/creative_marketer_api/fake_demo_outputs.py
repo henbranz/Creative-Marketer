@@ -231,7 +231,7 @@ def intelligence_output(invocation: object) -> dict[str, object]:
                 "comparison_ids": [comparison["id"]],
                 "metric": comparison["metric_key"],
                 "confidence": "LOW",
-                "scope": {"platform": "local-demo"},
+                "scope": {"dimensions": [{"key": "platform", "value": "local-demo"}]},
                 "limitations": ["Synthetic and observational evidence only."],
             }
         ],

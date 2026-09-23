@@ -37,7 +37,7 @@
       }
     },
     "asset_requirement": {
-      "oneOf": [
+      "anyOf": [
         {
           "type": "object", "additionalProperties": false,
           "required": ["kind", "asset_id", "intended_role"],

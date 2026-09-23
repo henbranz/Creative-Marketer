@@ -12,6 +12,9 @@ class FakeModelProvider:
         self._result = result
         self.calls: list[ModelInvocation] = []
 
+    def validate_invocation(self, invocation: ModelInvocation) -> None:
+        del invocation
+
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult:
         self.calls.append(invocation)
         return self._result(invocation) if callable(self._result) else self._result

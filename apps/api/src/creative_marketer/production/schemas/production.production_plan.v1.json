@@ -39,7 +39,7 @@
         "audio_intent": {"$ref": "#/$defs/nullableText"},
         "source_strategy": {"enum": ["USE_EXISTING_ASSET", "GENERATE_IMAGE", "GENERATE_VIDEO", "MANUAL_CAPTURE"]},
         "existing_asset_id": {"type": ["string", "null"], "format": "uuid"},
-        "image_generation_spec": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/imageSpec"}]}
+        "image_generation_spec": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/imageSpec"}]}
       }
     },
     "scene": {

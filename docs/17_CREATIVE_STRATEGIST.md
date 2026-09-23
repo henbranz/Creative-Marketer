@@ -52,6 +52,11 @@ missing disclaimers, prohibited normalized phrases, unsupported fields/enums, or
 keys/titles/hooks/scene sequences. Phrase matching is only a deterministic safety layer; human and
 future final-media compliance review remain required.
 
+The `asset_requirement` alternatives use a nested `anyOf` with disjoint `kind` constants
+(`EXISTING_ASSET` and `MISSING_ASSET`). This preserves both exact branch contracts while remaining
+compatible with OpenAI strict Structured Outputs; `oneOf` is rejected by the local provider schema
+preflight before provider authority.
+
 Product facts require deterministic ProductClaimRefs derived from the frozen Product snapshot.
 Research supports creative strategy but never grants authority for Product facts. Concepts and sets
 have semantic digests and immutable server-generated identities.

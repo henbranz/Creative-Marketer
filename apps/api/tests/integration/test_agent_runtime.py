@@ -219,6 +219,9 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
     class BadRequestProvider:
         calls = 0
 
+        def validate_invocation(self, _invocation):
+            return None
+
         async def generate_structured(self, _invocation):
             self.calls += 1
             raise ModelProviderBadRequest("provider payload must not persist")
@@ -252,6 +255,26 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
     assert attempt.unknown_cost == 0
     assert attempt.input_tokens == attempt.output_tokens == 0
     assert attempt.failure_code == "MODEL_PROVIDER_BAD_REQUEST"
+
+    recovery = AgentRunRecoveryService(
+        uows,
+        ModelRouter((initial_researcher_route(),)),
+        OperatorProvider(context.tenant_id),
+    )
+    successor = await recovery.rerun_as_new(failed.id)
+    assert successor.status is AgentRunStatus.PENDING
+    assert successor.recovery_of_run_id == failed.id
+    assert successor.agent_version_id == failed.agent_version_id
+    assert successor.agent_configuration_digest == failed.agent_configuration_digest
+    assert successor.context_digest == failed.context_digest
+    assert successor.model_profile_key == failed.model_profile_key
+    assert bad_request_provider.calls == 1
+    with pytest.raises(AgentRunRecoveryConflict, match="eligible"):
+        await recovery.rerun_as_new(failed.id)
+    unchanged = await rejecting_service.get_run(context, failed.id)
+    assert unchanged.status is AgentRunStatus.FAILED
+    assert unchanged.failure_code == "MODEL_PROVIDER_BAD_REQUEST"
+    assert unchanged.estimated_cost == 0
 
     other_tenant, other_user = await seed_catalog_identity(admin_engine)
     with pytest.raises(AgentRunNotFound):
