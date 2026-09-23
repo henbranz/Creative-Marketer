@@ -268,6 +268,9 @@ class AgentRunResponse(Contract):
     estimated_cost: str
     reserved_cost: str
     unknown_cost: str
+    original_unknown_cost: str
+    reconciled_actual_cost: str
+    remaining_unknown_cost: str
     currency: str
     result_ref: str | None
     failure_code: str | None
@@ -492,6 +495,9 @@ def _agent_run(value: AgentRun) -> AgentRunResponse:
         estimated_cost=str(value.estimated_cost),
         reserved_cost=str(value.reserved_cost),
         unknown_cost=str(value.unknown_cost),
+        original_unknown_cost=str(value.unknown_cost),
+        reconciled_actual_cost=str(value.reconciled_actual_cost),
+        remaining_unknown_cost=str(value.remaining_unknown_cost),
         currency=value.currency,
         result_ref=value.result_ref,
         failure_code=value.failure_code,

@@ -341,6 +341,40 @@ def test_openai_smoke_fails_before_api_when_live_model_provider_is_disabled(
     assert called is False
 
 
+def test_openai_smoke_rejects_known_fake_workload_before_api(monkeypatch, tmp_path) -> None:
+    called = False
+
+    def unexpected_api(_settings):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(acceptance, "api_for", unexpected_api)
+    configured = settings(agent_workload_id="local-fake-agent-worker")
+
+    with pytest.raises(RuntimeError, match="LIVE_AGENT_WORKLOAD_IS_FAKE"):
+        acceptance.openai_smoke(
+            configured, acceptance.StateStore(tmp_path / "live-validation.json")
+        )
+    assert called is False
+
+
+def test_openai_smoke_rejects_legacy_local_workload_before_api(monkeypatch, tmp_path) -> None:
+    called = False
+
+    def unexpected_api(_settings):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(acceptance, "api_for", unexpected_api)
+    configured = settings(agent_workload_id="local-agent-worker")
+
+    with pytest.raises(RuntimeError, match="LIVE_AGENT_WORKLOAD_NOT_LIVE"):
+        acceptance.openai_smoke(
+            configured, acceptance.StateStore(tmp_path / "live-validation.json")
+        )
+    assert called is False
+
+
 def test_session_tenant_or_product_mismatch_requires_explicit_reset(tmp_path) -> None:
     store = acceptance.StateStore(tmp_path / "live-validation.json")
     saved_state(store)
@@ -542,6 +576,8 @@ def test_live_status_shows_recovery_and_separates_costs(monkeypatch, tmp_path, c
         estimated_cost="0",
         reserved_cost="0.256000",
         unknown_cost="0.256000",
+        reconciled_actual_cost="0",
+        remaining_unknown_cost="0.256000",
     )
     fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): [stranded]})
     monkeypatch.setattr(acceptance, "api_for", lambda _settings, **_kwargs: fake)
@@ -550,10 +586,41 @@ def test_live_status_shows_recovery_and_separates_costs(monkeypatch, tmp_path, c
 
     output = capsys.readouterr().out
     assert "Creative Strategist: RUNNING / RECOVERY_REQUIRED" in output
-    assert "unknown potential cost: 0.256000 USD" in output
+    assert "immutable original unknown cost: 0.256000 USD" in output
+    assert "remaining unknown potential cost: 0.256000 USD" in output
     assert "Session-bound actual cost: 0 USD" in output
     assert "Session-bound reserved cost: 0.256000 USD" in output
     assert "Session-bound unknown potential cost: 0.256000 USD" in output
+
+
+def test_live_status_reports_reconciled_cost_without_mutating_original_unknown(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(store, creative_run_id=CREATIVE)
+    route = acceptance.initial_creative_strategist_route()
+    reconciled = recoverable_run(
+        CREATIVE,
+        route,
+        status="FAILED",
+        failure_code="STRANDED_PROVIDER_OUTCOME_UNKNOWN",
+        estimated_cost="0",
+        reserved_cost="0.256000",
+        unknown_cost="0.256000",
+        reconciled_actual_cost="0",
+        remaining_unknown_cost="0",
+    )
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/creative/runs"): [reconciled]})
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings, **_kwargs: fake)
+
+    assert acceptance.session_status(settings(), store) == 0
+
+    output = capsys.readouterr().out
+    assert "immutable original unknown cost: 0.256000 USD" in output
+    assert "reconciled actual cost: 0 USD" in output
+    assert "remaining unknown potential cost:" not in output
+    assert "Session-bound actual cost: 0 USD" in output
+    assert "Session-bound unknown potential cost: 0 USD" in output
 
 
 def test_reset_removes_only_local_session_state(tmp_path) -> None:

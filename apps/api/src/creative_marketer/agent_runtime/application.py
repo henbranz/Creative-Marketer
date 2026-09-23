@@ -95,6 +95,7 @@ from creative_marketer.research.domain import (
 
 from .domain import (
     AgentContextBudgetExceeded,
+    AgentExecutionNotAllowed,
     AgentRouteBudgetMismatch,
     AgentRun,
     AgentRunConflict,
@@ -929,6 +930,27 @@ class WorkloadIdentityProvider(Protocol):
     async def current(self) -> WorkloadIdentity: ...
 
 
+class AgentExecutionAdmissionPolicy(Protocol):
+    """Deterministic pre-claim worker eligibility boundary."""
+
+    def authorize(self, run: AgentRun) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class AllowAgentExecution:
+    def authorize(self, run: AgentRun) -> None:
+        del run
+
+
+@dataclass(frozen=True, slots=True)
+class RejectIdempotencyPrefixes:
+    prefixes: tuple[str, ...]
+
+    def authorize(self, run: AgentRun) -> None:
+        if any(run.idempotency_key.startswith(prefix) for prefix in self.prefixes):
+            raise AgentExecutionNotAllowed("worker is not eligible for this AgentRun")
+
+
 @dataclass(frozen=True, slots=True)
 class RecoveryOperator:
     tenant_id: UUID
@@ -1525,6 +1547,7 @@ class AgentRunService:
     workload_identity_provider: WorkloadIdentityProvider
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
     capabilities: AgentCapabilityRegistry = field(default_factory=default_capability_registry)
+    execution_admission: AgentExecutionAdmissionPolicy = field(default_factory=AllowAgentExecution)
 
     async def request_researcher(
         self, context: ExecutionContext, *, product_id: UUID, idempotency_key: str
@@ -2619,6 +2642,9 @@ class AgentRunService:
                 pending = await uow.runs.get(run_id, for_update=True)
                 if pending is None:
                     raise AgentRunNotFound("AgentRun not found")
+                # This policy runs while the authoritative row is locked and before route
+                # resolution, claim, ModelAttempt creation, or any cost/provenance mutation.
+                self.execution_admission.authorize(pending)
                 route = self.router.resolve(
                     pending.model_profile_key, ("text", "reasoning", "structured_output")
                 )

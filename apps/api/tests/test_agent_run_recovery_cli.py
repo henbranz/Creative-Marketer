@@ -112,7 +112,13 @@ async def test_recovery_cli_reconciles_exact_decimal_once(monkeypatch: Any, caps
 
 def test_recovery_service_requires_paired_trusted_configuration() -> None:
     with pytest.raises(RuntimeError, match="AGENT_RECOVERY_OPERATOR_ID"):
-        _service(Settings())
+        _service(
+            Settings(
+                _env_file=None,
+                database_url="postgresql+psycopg://test:test@localhost/test",
+                audit_fingerprint_key="unit-test-audit-fingerprint-key-32",
+            )
+        )
     configured = _service(
         Settings(
             agent_recovery_operator_id="operations/recovery",

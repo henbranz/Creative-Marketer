@@ -142,7 +142,7 @@ services:
     build:
       context: ./apps/api
     command: ["python", "-m", "creative_marketer_api.researcher_worker"]
-    profiles: ["temporal"]
+    profiles: ["fake-agent"]
     env_file:
       - path: .env
         required: false
@@ -158,7 +158,7 @@ services:
       RUN_LIVE_E2E: ${RUN_LIVE_E2E:-}
       LIVE_E2E_MAX_USD: ${LIVE_E2E_MAX_USD:-10}
       LIVE_E2E_PRODUCT_ID: ${LIVE_E2E_PRODUCT_ID:-}
-      AGENT_WORKLOAD_ID: ${AGENT_WORKLOAD_ID:-local-agent-worker}
+      AGENT_WORKLOAD_ID: local-fake-agent-worker
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -232,7 +232,7 @@ services:
       AUDIT_FINGERPRINT_KEY: local-only-audit-fingerprint-key-change-me
       TEMPORAL_ADDRESS: temporal:7233
       MODEL_PROVIDER_BACKEND: fake
-      AGENT_WORKLOAD_ID: ${AGENT_WORKLOAD_ID:-local-agent-worker}
+      AGENT_WORKLOAD_ID: local-fake-agent-worker
     depends_on:
       migrate:
         condition: service_completed_successfully

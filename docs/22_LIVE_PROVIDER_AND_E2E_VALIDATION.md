@@ -38,6 +38,16 @@ make temporal-up
 make demo-bootstrap
 ```
 
+`make temporal-up` starts Temporal only. It does not start the fake Agent worker. For an intentional
+free fake/demo Agent execution, start it explicitly in a separate terminal:
+
+```bash
+docker compose --profile temporal --profile fake-agent up researcher-worker
+```
+
+That service is pinned to `MODEL_PROVIDER_BACKEND=fake`, workload identity
+`local-fake-agent-worker`, and rejects every `live-*` AgentRun before claim.
+
 Use the Tenant ID printed by bootstrap in `CM_TENANT_ID`. The API is at
 <http://localhost:8000>, the product UI at <http://localhost:3000>, and Temporal at
 <http://localhost:8233>. A `NEXT_PUBLIC_*` change requires rebuilding/restarting the web app.
@@ -79,7 +89,8 @@ make assembly-worker
 ```
 
 The generic Agent worker runs Researcher, Creative Strategist, and Producer. Provider keys remain
-inside infrastructure processes; agents receive neither keys nor media tools.
+inside infrastructure processes; agents receive neither keys nor media tools. Its local workload
+identity is `local-live-agent-worker`; do not reuse the fake worker identity.
 
 ## 5. Controlled smoke flow
 
@@ -179,4 +190,5 @@ harness may adopt only the unique successor whose `recovery_of_run_id` points to
 whose tenant-scoped Product, Agent type/version/configuration, context provenance, and applicable
 route match. Zero successors leaves the checkpoint unchanged; multiple or mismatched successors fail
 closed. Status reports operational recovery separately from lifecycle state and reports actual,
-reserved, and unknown-potential costs as distinct values.
+reserved, immutable original unknown, reconciled actual, and remaining unknown-potential costs as
+distinct values.

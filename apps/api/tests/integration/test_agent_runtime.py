@@ -886,6 +886,22 @@ async def test_stranded_recovery_is_new_run_concurrency_safe_and_late_worker_fai
         ).one()
     assert reconciled_budget.unknown_cost == Decimal("0.000000")
     assert reconciled_budget.actual_cost == Decimal("0.011400")
+    reconciled_run = await runtime.get_run(context, original.id)
+    assert reconciled_run.unknown_cost == Decimal("0.150000")
+    assert reconciled_run.reconciled_actual_cost == Decimal("0.010000")
+    assert reconciled_run.remaining_unknown_cost == Decimal("0")
+    async with admin_engine.connect() as connection:
+        immutable_attempt = (
+            await connection.execute(
+                text(
+                    "SELECT status, unknown_cost FROM agent_runtime.model_attempts "
+                    "WHERE agent_run_id=:run"
+                ),
+                {"run": original.id},
+            )
+        ).one()
+    assert immutable_attempt.status == "UNKNOWN"
+    assert immutable_attempt.unknown_cost == Decimal("0.150000")
 
     safe_run = await runtime.request_researcher(
         context, product_id=product.id, idempotency_key="recovery-safe-before-provider"

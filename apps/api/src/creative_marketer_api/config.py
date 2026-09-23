@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     temporal_address: str = Field(default="localhost:7233", min_length=1, max_length=255)
     temporal_namespace: str = Field(default="default", min_length=1, max_length=128)
     production_max_plan_cost_usd: Decimal = Field(default=Decimal("100"), gt=0)
-    agent_workload_id: str = Field(default="local-agent-worker", min_length=1, max_length=128)
+    agent_workload_id: str = Field(default="local-live-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
     agent_recovery_tenant_id: UUID | None = None
 

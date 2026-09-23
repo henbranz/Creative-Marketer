@@ -105,6 +105,10 @@
             "title": "Operational Status",
             "type": "string"
           },
+          "original_unknown_cost": {
+            "title": "Original Unknown Cost",
+            "type": "string"
+          },
           "output_tokens": {
             "title": "Output Tokens",
             "type": "integer"
@@ -138,6 +142,10 @@
             "title": "Prompt Revision",
             "type": "string"
           },
+          "reconciled_actual_cost": {
+            "title": "Reconciled Actual Cost",
+            "type": "string"
+          },
           "recovery_classification": {
             "anyOf": [
               {
@@ -160,6 +168,10 @@
               }
             ],
             "title": "Recovery Of Run Id"
+          },
+          "remaining_unknown_cost": {
+            "title": "Remaining Unknown Cost",
+            "type": "string"
           },
           "requested_agent_definition_id": {
             "format": "uuid",
@@ -278,6 +290,9 @@
           "estimated_cost",
           "reserved_cost",
           "unknown_cost",
+          "original_unknown_cost",
+          "reconciled_actual_cost",
+          "remaining_unknown_cost",
           "currency",
           "result_ref",
           "failure_code",

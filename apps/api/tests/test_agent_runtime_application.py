@@ -26,6 +26,7 @@ from creative_marketer.agent_runtime.application import (
     ModelProviderRegistry,
     ModelRouter,
     RecoveryOperator,
+    RejectIdempotencyPrefixes,
     ResearcherCapability,
     ResearcherPreparation,
     ResolvedResearcher,
@@ -44,6 +45,7 @@ from creative_marketer.agent_runtime.application import (
 )
 from creative_marketer.agent_runtime.domain import (
     AgentContextBudgetExceeded,
+    AgentExecutionNotAllowed,
     AgentPeriodBudgetExceeded,
     AgentRouteBudgetMismatch,
     AgentRunConflict,
@@ -650,22 +652,26 @@ class MemoryRepository:
         attempt = next(
             (item for item in self.attempts.values() if item.agent_run_id == run.id), None
         )
-        return (
-            replace(
-                run,
-                operational_status="recovery_required",
-                is_stranded=True,
-                recovery_classification=classify_stranded_attempt(attempt).value,
-                unknown_cost=(
-                    attempt.unknown_cost or run.reserved_cost
-                    if classify_stranded_attempt(attempt).value == "PROVIDER_OUTCOME_UNKNOWN"
-                    else Decimal("0")
-                ),
-            )
-            if attempt is not None
-            and run.status is AgentRunStatus.RUNNING
-            and (attempt.status is ModelAttemptStatus.UNKNOWN or attempt.lease_expires_at <= now)
-            else run
+        if attempt is None or not (
+            attempt.status is ModelAttemptStatus.UNKNOWN or attempt.lease_expires_at <= now
+        ):
+            return run
+        classification = classify_stranded_attempt(attempt).value
+        original_unknown = (
+            attempt.unknown_cost or run.reserved_cost
+            if classification == "PROVIDER_OUTCOME_UNKNOWN"
+            else Decimal("0")
+        )
+        reconciliation = next((item for item in self.reconciliations if item[0] == run.id), None)
+        recovery_required = run.status is AgentRunStatus.RUNNING
+        return replace(
+            run,
+            operational_status="recovery_required" if recovery_required else "normal",
+            is_stranded=recovery_required,
+            recovery_classification=classification,
+            unknown_cost=original_unknown,
+            reconciled_actual_cost=reconciliation[1] if reconciliation else Decimal("0"),
+            remaining_unknown_cost=Decimal("0") if reconciliation else original_unknown,
         )
 
     async def get_stranded(self, run_id, now, *, for_update=False):
@@ -774,6 +780,14 @@ class IdentityProvider:
         return WorkloadIdentity("test-researcher-worker", "test")
 
 
+class NamedIdentityProvider:
+    def __init__(self, workload_id):
+        self.workload_id = workload_id
+
+    async def current(self):
+        return WorkloadIdentity(self.workload_id, "test")
+
+
 class OperatorProvider:
     def __init__(self, tenant_id):
         self.value = RecoveryOperator(
@@ -822,6 +836,76 @@ def service(prepared, provider):
         IdentityProvider(),
     )
     return value, repository, audit, outbox
+
+
+@pytest.mark.asyncio
+async def test_fake_execution_rejects_live_run_before_claim_and_live_worker_can_claim() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "live-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    runtime, repository, _, _ = service(prepared, FakeModelProvider(model))
+    requested = await runtime.request_researcher(
+        context(tenant_id),
+        product_id=product_id,
+        idempotency_key=f"live-research-{uuid4()}",
+    )
+    runtime.workload_identity_provider = NamedIdentityProvider("local-fake-agent-worker")
+    runtime.execution_admission = RejectIdempotencyPrefixes(("live-",))
+
+    with pytest.raises(AgentExecutionNotAllowed):
+        await runtime.execute(tenant_id, requested.id)
+
+    assert repository.runs[requested.id].status is AgentRunStatus.PENDING
+    assert repository.runs[requested.id].executed_by_workload_id is None
+    assert repository.attempts == {}
+    assert repository.runs[requested.id].unknown_cost == 0
+
+    runtime.workload_identity_provider = NamedIdentityProvider("local-live-agent-worker")
+    runtime.execution_admission = RejectIdempotencyPrefixes(())
+    completed = await runtime.execute(tenant_id, requested.id)
+
+    assert completed.status is AgentRunStatus.SUCCEEDED
+    assert completed.executed_by_workload_id == "local-live-agent-worker"
+    attempt = next(iter(repository.attempts.values()))
+    assert attempt.workload_id == "local-live-agent-worker"
+    assert attempt.unknown_cost == 0
+
+
+@pytest.mark.asyncio
+async def test_fake_execution_remains_available_for_non_live_demo_run() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+
+    def model(invocation):
+        return ModelInvocationResult(
+            output(invocation.untrusted_evidence[0]),
+            "fake-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    runtime, repository, _, _ = service(prepared, FakeModelProvider(model))
+    runtime.workload_identity_provider = NamedIdentityProvider("local-fake-agent-worker")
+    runtime.execution_admission = RejectIdempotencyPrefixes(("live-",))
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="demo-research"
+    )
+
+    completed = await runtime.execute(tenant_id, requested.id)
+
+    assert completed.status is AgentRunStatus.SUCCEEDED
+    assert completed.executed_by_workload_id == "local-fake-agent-worker"
+    assert next(iter(repository.attempts.values())).unknown_cost == 0
 
 
 def intelligence_preparation(base: ResearcherPreparation) -> IntelligencePreparation:
@@ -1920,6 +2004,15 @@ async def test_ambiguous_recovery_creates_new_run_and_reconciles_unknown_cost_on
     with pytest.raises(AgentRunRecoveryConflict):
         await recovery.rerun_as_new(original.id)
     assert audit.values[-1].action == "agent.run.unknown_cost_reconciled"
+    reconciled = await runtime.get_run(context(tenant_id), original.id)
+    assert reconciled.unknown_cost == original.reserved_cost
+    assert reconciled.reconciled_actual_cost == Decimal("0.010000")
+    assert reconciled.remaining_unknown_cost == 0
+    predecessor_attempt = next(
+        item for item in repository.attempts.values() if item.agent_run_id == original.id
+    )
+    assert predecessor_attempt.status is ModelAttemptStatus.UNKNOWN
+    assert predecessor_attempt.unknown_cost == original.reserved_cost
 
 
 @pytest.mark.asyncio

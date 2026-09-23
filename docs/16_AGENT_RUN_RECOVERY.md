@@ -45,6 +45,11 @@ When provider evidence later establishes actual cost for an ambiguous run, `reco
 immutable evidence exactly once and moves unknown cost to actual cost. It never changes the original
 AgentRun outcome. Do not guess an amount to unblock a tenant.
 
+Operator-facing AgentRun reads expose the immutable original unknown amount, the reconciliation's
+actual amount, and the remaining unreconciled unknown amount separately. A reconciliation to zero
+therefore leaves the immutable UNKNOWN ModelAttempt and its original amount intact while reporting
+zero remaining potential cost.
+
 ## Race and privacy behavior
 
 Recovery locks the authoritative run and attempt. A late worker must still match run, attempt,

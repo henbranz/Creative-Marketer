@@ -405,6 +405,13 @@ def bound_plan(
 def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
     if settings.model_provider_backend != "openai":
         raise RuntimeError("LIVE_MODEL_PROVIDER_NOT_ENABLED")
+    if settings.agent_workload_id == "local-fake-agent-worker":
+        raise RuntimeError("LIVE_AGENT_WORKLOAD_IS_FAKE")
+    if (
+        settings.app_env in {"development", "test"}
+        and settings.agent_workload_id != "local-live-agent-worker"
+    ):
+        raise RuntimeError("LIVE_AGENT_WORKLOAD_NOT_LIVE")
     api = api_for(settings)
     product = str(settings.live_e2e_product_id)
     saved = store or StateStore()
@@ -670,13 +677,39 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
                 predecessor = cast(dict[str, Any], api.request(f"/v1/agent-runs/{predecessor_id}"))
                 lineage.append(predecessor)
                 recovery_of = predecessor.get("recovery_of_run_id")
-            stage_unknown = sum(
-                (Decimal(str(value.get("unknown_cost", 0))) for value in lineage), Decimal()
+            original_unknown = sum(
+                (
+                    Decimal(str(value.get("original_unknown_cost", value.get("unknown_cost", 0))))
+                    for value in lineage
+                ),
+                Decimal(),
             )
+            reconciled_actual = sum(
+                (Decimal(str(value.get("reconciled_actual_cost", 0))) for value in lineage),
+                Decimal(),
+            )
+            stage_unknown = sum(
+                (
+                    Decimal(str(value.get("remaining_unknown_cost", value.get("unknown_cost", 0))))
+                    for value in lineage
+                ),
+                Decimal(),
+            )
+            if original_unknown:
+                print(
+                    f"  immutable original unknown cost: {original_unknown} "
+                    f"{run.get('currency', 'USD')}"
+                )
+            if reconciled_actual or original_unknown != stage_unknown:
+                print(f"  reconciled actual cost: {reconciled_actual} {run.get('currency', 'USD')}")
             if stage_unknown:
-                print(f"  unknown potential cost: {stage_unknown} {run.get('currency', 'USD')}")
-            actual += sum(
-                (Decimal(str(value.get("estimated_cost", 0))) for value in lineage), Decimal()
+                print(
+                    f"  remaining unknown potential cost: {stage_unknown} "
+                    f"{run.get('currency', 'USD')}"
+                )
+            actual += (
+                sum((Decimal(str(value.get("estimated_cost", 0))) for value in lineage), Decimal())
+                + reconciled_actual
             )
             reserved += sum(
                 (

@@ -3503,6 +3503,21 @@ class SqlAlchemyAgentRunRepository:
             if classification is RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN
             else Decimal("0")
         )
+        reconciliation = (
+            await self._session.execute(
+                select(
+                    model_cost_reconciliations.c.actual_cost,
+                    model_cost_reconciliations.c.unknown_cost,
+                ).where(
+                    model_cost_reconciliations.c.agent_run_id == run.id,
+                    model_cost_reconciliations.c.model_attempt_id == value.id,
+                )
+            )
+        ).first()
+        reconciled_actual_cost = (
+            reconciliation._mapping["actual_cost"] if reconciliation is not None else Decimal("0")
+        )
+        remaining_unknown_cost = Decimal("0") if reconciliation is not None else unknown_cost
         recovery_required = run.status is AgentRunStatus.RUNNING
         return replace(
             run,
@@ -3510,6 +3525,8 @@ class SqlAlchemyAgentRunRepository:
             is_stranded=recovery_required,
             recovery_classification=classification.value,
             unknown_cost=unknown_cost,
+            reconciled_actual_cost=reconciled_actual_cost,
+            remaining_unknown_cost=remaining_unknown_cost,
         )
 
     async def find_stranded(self, now: datetime) -> tuple[StrandedAgentRun, ...]:

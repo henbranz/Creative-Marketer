@@ -1769,6 +1769,8 @@ export interface components {
       model_route_version: string | null;
       /** Operational Status */
       operational_status: string;
+      /** Original Unknown Cost */
+      original_unknown_cost: string;
       /** Output Tokens */
       output_tokens: number;
       /** Pricing Version */
@@ -1787,10 +1789,14 @@ export interface components {
       product_snapshot_id: string;
       /** Prompt Revision */
       prompt_revision: string;
+      /** Reconciled Actual Cost */
+      reconciled_actual_cost: string;
       /** Recovery Classification */
       recovery_classification: string | null;
       /** Recovery Of Run Id */
       recovery_of_run_id: string | null;
+      /** Remaining Unknown Cost */
+      remaining_unknown_cost: string;
       /**
        * Requested Agent Definition Id
        * Format: uuid

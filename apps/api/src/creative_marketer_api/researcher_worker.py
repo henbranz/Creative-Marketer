@@ -12,6 +12,7 @@ from creative_marketer.agent_runtime.application import (
     ModelProvider,
     ModelProviderRegistry,
     ModelRouter,
+    RejectIdempotencyPrefixes,
     initial_agent_model_routes,
 )
 from creative_marketer.agent_runtime.domain import ModelInvocationResult, ModelUsage
@@ -57,6 +58,9 @@ from creative_marketer_api.fake_demo_outputs import (
     intelligence_output,
     production_output,
 )
+
+FAKE_AGENT_WORKLOAD_ID = "local-fake-agent-worker"
+LIVE_AGENT_WORKLOAD_ID = "local-live-agent-worker"
 
 
 class DatabaseAgentTypeResolver:
@@ -291,6 +295,24 @@ async def run() -> None:
         authorization = getattr(settings, "require_live_spend_authorization", None)
         if authorization is not None:
             authorization()
+    if (
+        settings.model_provider_backend == "fake"
+        and settings.agent_workload_id != FAKE_AGENT_WORKLOAD_ID
+    ):
+        raise RuntimeError(f"Fake Agent worker requires AGENT_WORKLOAD_ID={FAKE_AGENT_WORKLOAD_ID}")
+    if (
+        settings.model_provider_backend == "openai"
+        and settings.agent_workload_id == FAKE_AGENT_WORKLOAD_ID
+    ):
+        raise RuntimeError("OpenAI Agent worker rejects the fake workload identity")
+    if (
+        settings.model_provider_backend == "openai"
+        and settings.app_env in {"development", "test"}
+        and settings.agent_workload_id != LIVE_AGENT_WORKLOAD_ID
+    ):
+        raise RuntimeError(
+            f"Local OpenAI Agent worker requires AGENT_WORKLOAD_ID={LIVE_AGENT_WORKLOAD_ID}"
+        )
     telemetry = NullTelemetry()
     routes = initial_agent_model_routes()
     session_factory = create_session_factory(str(settings.database_url))
@@ -330,6 +352,11 @@ async def run() -> None:
         ModelProviderRegistry({"openai": provider}),
         ConfiguredWorkloadIdentityProvider(settings.agent_workload_id, settings.app_env),
         telemetry,
+        execution_admission=(
+            RejectIdempotencyPrefixes(("live-",))
+            if settings.model_provider_backend == "fake"
+            else RejectIdempotencyPrefixes(())
+        ),
     )
     client = await connect_client(
         __import__("os").getenv("TEMPORAL_ADDRESS", "localhost:7233"),

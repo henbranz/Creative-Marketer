@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 from creative_marketer_api import researcher_worker
+from creative_marketer_api.config import REPOSITORY_ROOT
 from creative_marketer_api.fake_demo_outputs import (
     creative_output,
     intelligence_output,
@@ -126,7 +127,7 @@ async def test_worker_composes_credential_only_in_worker_process(monkeypatch) ->
         openai_api_key=SimpleNamespace(get_secret_value=lambda: "unit-live-credential"),
         database_url="postgresql://runtime",
         event_publisher_database_url="postgresql://publisher",
-        agent_workload_id="test/researcher-worker",
+        agent_workload_id=researcher_worker.LIVE_AGENT_WORKLOAD_ID,
         app_env="test",
     )
     client = object()
@@ -180,6 +181,51 @@ async def test_worker_fails_closed_without_enabled_provider(monkeypatch) -> None
     )
     with pytest.raises(RuntimeError, match="MODEL_PROVIDER_BACKEND=openai"):
         await researcher_worker.run()
+
+
+@pytest.mark.asyncio
+async def test_fake_and_live_workers_reject_each_others_local_workload_identity(
+    monkeypatch,
+) -> None:
+    fake_settings = SimpleNamespace(
+        model_provider_backend="fake",
+        openai_api_key=None,
+        agent_workload_id=researcher_worker.LIVE_AGENT_WORKLOAD_ID,
+    )
+    monkeypatch.setattr(researcher_worker, "Settings", lambda: fake_settings)
+    with pytest.raises(RuntimeError, match="local-fake-agent-worker"):
+        await researcher_worker.run()
+
+    live_settings = SimpleNamespace(
+        model_provider_backend="openai",
+        openai_api_key=SimpleNamespace(get_secret_value=lambda: "unit-live-credential"),
+        agent_workload_id=researcher_worker.FAKE_AGENT_WORKLOAD_ID,
+        app_env="test",
+        require_live_spend_authorization=lambda: None,
+    )
+    monkeypatch.setattr(researcher_worker, "Settings", lambda: live_settings)
+    with pytest.raises(RuntimeError, match="rejects the fake workload"):
+        await researcher_worker.run()
+
+    legacy_settings = SimpleNamespace(
+        model_provider_backend="openai",
+        openai_api_key=SimpleNamespace(get_secret_value=lambda: "unit-live-credential"),
+        agent_workload_id="local-agent-worker",
+        app_env="development",
+        require_live_spend_authorization=lambda: None,
+    )
+    monkeypatch.setattr(researcher_worker, "Settings", lambda: legacy_settings)
+    with pytest.raises(RuntimeError, match="local-live-agent-worker"):
+        await researcher_worker.run()
+
+
+def test_compose_fake_worker_is_explicitly_profiled_and_identified() -> None:
+    compose = REPOSITORY_ROOT / "docker-compose.yml"
+    text = compose.read_text(encoding="utf-8")
+    service = text.split("  researcher-worker:", 1)[1].split("\n  commerce-worker:", 1)[0]
+    assert 'profiles: ["fake-agent"]' in service
+    assert "MODEL_PROVIDER_BACKEND: fake" in service
+    assert "AGENT_WORKLOAD_ID: local-fake-agent-worker" in service
 
 
 def test_worker_main_owns_asyncio_entrypoint(monkeypatch) -> None:

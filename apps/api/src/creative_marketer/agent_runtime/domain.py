@@ -155,6 +155,10 @@ class AgentRunDenied(AgentRuntimeError):
     code = "AGENT_RUN_DENIED"
 
 
+class AgentExecutionNotAllowed(AgentRunDenied):
+    code = "AGENT_EXECUTION_NOT_ALLOWED"
+
+
 class AgentRunNotReady(AgentRuntimeError):
     code = "AGENT_RUN_NOT_READY"
 
@@ -635,6 +639,8 @@ class AgentRun:
     is_stranded: bool = False
     recovery_classification: str | None = None
     unknown_cost: Decimal = Decimal("0")
+    reconciled_actual_cost: Decimal = Decimal("0")
+    remaining_unknown_cost: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
         if not self.input_context_digest:
@@ -678,8 +684,17 @@ class AgentRun:
             self.operational_status == "recovery_required"
         ):
             raise ValueError("AgentRun operational state is inconsistent")
-        if self.unknown_cost < 0:
+        if (
+            min(
+                self.unknown_cost,
+                self.reconciled_actual_cost,
+                self.remaining_unknown_cost,
+            )
+            < 0
+        ):
             raise ValueError("AgentRun unknown cost cannot be negative")
+        if self.remaining_unknown_cost > self.unknown_cost:
+            raise ValueError("AgentRun remaining unknown cost exceeds original uncertainty")
 
 
 def parse_research_output(

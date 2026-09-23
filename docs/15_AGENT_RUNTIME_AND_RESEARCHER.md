@@ -140,6 +140,14 @@ successful model response, close with zero usage rather than unknown cost. Timeo
 unrecognized HTTP, and unexpected transport outcomes remain conservative and require operator
 recovery. Provider bodies, headers, credentials, prompts, and Product content are never persisted in
 failure details.
+
+Worker eligibility is enforced before claim. A fake Agent worker rejects the governed `live-*`
+acceptance idempotency namespace while the AgentRun is still `PENDING`; it therefore cannot create
+a ModelAttempt, record workload provenance, start provider authority, or introduce unknown cost.
+The local fake worker uses workload identity `local-fake-agent-worker` and is available only through
+the explicit Compose `fake-agent` profile. The operator-started OpenAI worker defaults to
+`local-live-agent-worker`. These identities are diagnostic provenance, not authorization to bypass
+the pre-claim policy.
 ## Multi-capability runtime
 
 AgentRun now freezes generic `agent_type` and input-context kind/version/digest/reference fields.
