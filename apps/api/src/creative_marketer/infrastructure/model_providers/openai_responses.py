@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -27,6 +28,9 @@ from creative_marketer.agent_runtime.domain import (
     ModelRefusal,
     ModelTimeout,
     ModelUsage,
+)
+from creative_marketer.infrastructure.model_providers.openai_diagnostics import (
+    safe_status_diagnostic,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
     validate_openai_strict_output_schema,
@@ -143,6 +147,23 @@ class OpenAIResponsesModelProvider:
         except APIConnectionError as error:
             raise ModelProviderConnectionFailed("OpenAI connection failed") from error
         except APIStatusError as error:
+            # No exception formatting/traceback: the SDK exception contains the raw body.
+            diagnostic = safe_status_diagnostic(error)
+            logging.getLogger(__name__).warning(
+                "openai_status_diagnostic %s",
+                json.dumps(diagnostic),
+                extra={
+                    "action": "openai_status_diagnostic",
+                    "safe_fields": {
+                        "http.response.status_code": diagnostic["http_status"],
+                        **{
+                            f"provider.{key}": value
+                            for key, value in diagnostic.items()
+                            if key != "http_status"
+                        },
+                    },
+                },
+            )
             status_code = error.status_code
             failure_type: type[ModelProviderError]
             if status_code in {400, 422}:

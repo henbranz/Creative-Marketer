@@ -7,9 +7,11 @@ Accepted
 ## Context
 
 OpenAI strict Structured Outputs accepts a documented subset of JSON Schema. A Creative Strategist
-schema used `oneOf`, so an otherwise valid governed run reached the paid provider boundary and was
-rejected with HTTP 400. That rejection produced authoritative `FAILED_NO_RESPONSE` evidence with no
-response, usage, actual cost, or unknown cost. Existing recovery supported only expired `RUNNING`
+schema used `oneOf`, which is outside the documented supported subset. A governed run reached the
+provider boundary and was rejected with HTTP 400, but the original provider error metadata was not
+retained: `oneOf` was a demonstrated compatibility defect, not a proven cause of that HTTP 400.
+A subsequent `anyOf` request was also rejected. That rejection produced `FAILED_NO_RESPONSE`
+evidence with no response, usage, actual cost, or unknown cost. Existing recovery supported only expired `RUNNING`
 runs, so the immutable failed run could not receive an exact lineage successor.
 
 ## Decision
@@ -37,7 +39,9 @@ zero-usage predecessor boundary.
 
 ## Consequences
 
-Schema incompatibility becomes a free deterministic failure before provider authority. Known
+Detected schema incompatibility becomes a free deterministic failure before provider authority.
+Passing the local validator does not establish server acceptance; it is a partial deterministic
+check, not an implementation of the complete OpenAI server validator. Known
 zero-usage request defects can be retried without resetting live-session state or misusing unknown-
 cost reconciliation. Outcome-unknown and response-recorded runs retain the conservative stranded
 recovery path, and terminal runs with any response, usage, cost, uncertainty, reconciliation, or

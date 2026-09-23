@@ -69,6 +69,26 @@ official OpenAI model fails as `PROVIDER_MODEL_NOT_AVAILABLE_TO_ACCOUNT`; there 
 
 ## 4. Intentionally activate live execution
 
+Before any proposed Researcher/Creative retry, inspect the exact frozen run without generation:
+
+```bash
+cd apps/api
+uv run dotenv -f ../../.env run --no-override -- python -m scripts.agent_request_preflight TENANT_UUID RUN_UUID
+```
+
+This local gate requires the live OpenAI configuration, verifies the frozen route and context,
+uses a read-only tenant-scoped transaction, checks local schema/token/request invariants, and
+serializes through the real SDK into a mandatory in-memory HTTP transport with a dummy credential.
+It neither claims a run nor starts a worker. It prints structural metadata only. A local PASS
+explicitly leaves provider acceptance UNVERIFIED and never authorizes a retry. Unsupported image
+inputs, other Agent types, unresolved/recursive schema references, and unknown historical routes
+fail closed in this deliberately narrow diagnostic (not in the production provider).
+
+Provider HTTP failures now emit an `openai_status_diagnostic` log containing only status, allowlisted
+type/code/parameter, bounded request ID, and SDK class. Unknown values are redacted rather than
+copied; no body, message, request content, credentials, or arbitrary headers are logged. Domain
+failure codes remain unchanged. Never enable SDK DEBUG/body logging to investigate a failure.
+
 Edit `.env`:
 
 ```dotenv
