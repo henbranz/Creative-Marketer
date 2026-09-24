@@ -50,9 +50,12 @@ jobs:
           enable-cache: true
           python-version: "3.12"
       - run: uv sync --frozen
-      - name: Start private S3-compatible storage
-        run: docker run -d --name creative-marketer-minio -p 9000:9000 -e MINIO_ROOT_USER=creative-marketer-test -e MINIO_ROOT_PASSWORD=creative-marketer-test-secret -e MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000 quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
-      - run: uv run python -m creative_marketer.infrastructure.object_storage.bootstrap
+      - name: Build pinned official-source CI object storage
+        run: docker build --platform linux/amd64 --provenance=false --iidfile "$RUNNER_TEMP/minio-image.id" -f ../../infra/ci/minio.Dockerfile ../../infra/ci
+      - name: Start private S3-compatible storage by immutable image ID
+        run: docker run -d --name creative-marketer-minio -p 127.0.0.1:9000:9000 --cap-drop ALL --security-opt no-new-privileges -e MINIO_ROOT_USER=creative-marketer-test -e MINIO_ROOT_PASSWORD=creative-marketer-test-secret -e MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3000 "$(cat "$RUNNER_TEMP/minio-image.id")" server /data
+      - name: Bootstrap private object storage
+        run: uv run python -m creative_marketer.infrastructure.object_storage.bootstrap
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f ../../infra/postgres/init/001-runtime-role.sql
       - run: uv run alembic upgrade 20260905_0001
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.users (id, external_identity_issuer, external_identity_subject, email, normalized_email, status) VALUES ('00000000-0000-0000-0000-000000000003', 'https://legacy.example', 'LegacySubject', 'legacy@example.test', 'legacy@example.test', 'active')"
