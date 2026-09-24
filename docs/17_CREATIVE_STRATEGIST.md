@@ -61,6 +61,34 @@ Product facts require deterministic ProductClaimRefs derived from the frozen Pro
 Research supports creative strategy but never grants authority for Product facts. Concepts and sets
 have semantic digests and immutable server-generated identities.
 
+### Exact claim binding and empty authority
+
+Claim identities come only from `brand_profile.allowed_claims` and `profile.allowed_claims` in the
+bound immutable snapshot. A Product description, Brief benefit, Research finding, or Asset does not
+implicitly become an approved claim. IDs are snapshot-bound `sha256:` keys, not claim text, field
+paths, array indices, or abbreviations. Matching is exact; case-folding/whitespace comparison is
+diagnostic only and never grants authority.
+
+The runtime's claim-binding task contract explicitly requires `PRODUCT_FACT` to copy an allowed key
+verbatim and every other kind to use `product_claim_ref=null`. An empty allowed list means no
+`PRODUCT_FACT` points; the model must surface this limitation and avoid unsupported assertions,
+including assertions disguised as another message kind. Each invocation narrows a copy of the
+canonical message-point schema to the frozen keys (fact/non-fact nested `anyOf`, or non-fact only
+when empty). The input budget estimator uses that same bound schema. The checked-in canonical V1
+schema and domain validator remain authoritative and unchanged in meaning; provider adherence is
+not trusted. Claim-identity validation is not a semantic proof of factual truth; human review of
+all creative text remains required.
+
+On a claim-binding failure, the entire concept set is rejected. An append-only tenant Audit record
+`creative.claim_validation.failed` commits with failure/cost settlement. It contains authoritative
+run/attempt/snapshot identifiers, mismatch categories and concept/message ordinals, up to eight
+allowed IDs and five mismatches, total counts/truncation flags, and an allowed-list digest.
+Hash-shaped offending identities can be shown exactly; arbitrary reference strings are redacted
+and represented by a digest. No full response, Product prose, prompt, or provider reasoning is
+logged. The bound snapshot supplies the full allowed-ID list for authorized investigation when
+truncated. Diagnostics remain under the 4096-byte Audit limit; Audit failure cannot permit success.
+Historical runs are not backfilled or reclassified.
+
 ## Runtime and cost
 
 The explicit `creative_strategist` capability uses the common AgentRuntime lifecycle, Agent Registry,

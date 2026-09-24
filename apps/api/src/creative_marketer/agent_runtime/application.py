@@ -18,7 +18,7 @@ from creative_marketer.agent_governance.domain import AgentVersionConfiguration,
 from creative_marketer.audit.application import AuditWriter
 from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditActorKind, AuditOutcome, AuditRecord, AuditScopeKind
-from creative_marketer.audit.safety import safe_metadata
+from creative_marketer.audit.safety import JsonValue, safe_metadata
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
 from creative_marketer.commerce.application import (
     COMMERCE_CONTRACT_KEY,
@@ -35,6 +35,7 @@ from creative_marketer.creative.application import (
     CREATIVE_CONTRACT_KEY,
     CREATIVE_CONTRACT_VERSION,
     build_creative_context,
+    creative_output_schema_for_claims,
     load_creative_output_schema,
     validate_creative_output,
 )
@@ -47,6 +48,7 @@ from creative_marketer.creative.domain import (
     CreativeResearchRefreshRequired,
     CreativeStrategyContext,
     CreativeStrategyRequest,
+    InvalidCreativeClaimReference,
     ProductClaimRef,
 )
 from creative_marketer.events.application import OutboxWriter
@@ -272,12 +274,13 @@ class CreativeStrategistCapability:
     def invocation(
         self, run: AgentRun, route: ModelRoute, context: ModelContext
     ) -> ModelInvocation:
+        self.output_schema(run.output_contract_version)
         return ModelInvocation(
             route,
             context.system_instructions,
             {},
             (),
-            self.output_schema(run.output_contract_version),
+            creative_output_schema_for_claims(_creative_claim_keys(context)),
             run.output_contract_key,
             run.output_contract_version,
             route.max_output_tokens,
@@ -1315,9 +1318,26 @@ def build_creative_model_context(
         output_task=(
             "Return only the creative.creative_concept_set.v1 structure. Produce exactly "
             f"{request.concept_count} materially different short-form vertical-video concepts."
+            " Claim binding contract v1: PRODUCT_FACT requires product_claim_ref equal to "
+            "an exact key from product_claim_refs. Copy the key verbatim, including sha256:; "
+            "never use claim text, field paths, ordinals, shortened hashes, or invented IDs. "
+            "All other message kinds require product_claim_ref=null. If product_claim_refs "
+            "is empty, emit no PRODUCT_FACT points and explain the lack of approved claims "
+            "in strategy_limitations. Do not relabel factual assertions as another kind "
+            "to bypass this rule. Product descriptions, brief text, assets, and Research "
+            "findings do not independently authorize Product claims. Use non-factual "
+            "creative hypotheses/CTAs without unsupported assertions. When using a Product "
+            "claim, include all required Product disclaimers."
         ),
     )
     return creative, model
+
+
+def _creative_claim_keys(context: ModelContext) -> tuple[str, ...]:
+    values = (context.capability_context or {}).get("product_claim_refs", ())
+    if not isinstance(values, (list, tuple)):
+        raise AgentRunNotReady("Creative claim authority is unavailable")
+    return tuple(str(item["key"]) for item in values if isinstance(item, Mapping))
 
 
 def conservative_creative_input_token_bound(context: ModelContext) -> int:
@@ -1325,7 +1345,7 @@ def conservative_creative_input_token_bound(context: ModelContext) -> int:
         "system_instructions": context.system_instructions,
         "context_sections": _plain_json(context.capability_context or {}),
         "output_task": context.output_task,
-        "output_schema": load_creative_output_schema(),
+        "output_schema": creative_output_schema_for_claims(_creative_claim_keys(context)),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -2837,6 +2857,29 @@ class AgentRunService:
                         # Atomic with failure/cost settlement; never backfill historical runs.
                         await self._append_provider_rejection(uow, run, attempt, workload, error)
                     await self._append_workload_completion(uow, failed, workload, None)
+                    if isinstance(error, InvalidCreativeClaimReference) and error.diagnostic:
+                        await uow.audit.append(
+                            AuditRecord(
+                                scope_kind=AuditScopeKind.TENANT,
+                                tenant_id=run.tenant_id,
+                                actor_kind=AuditActorKind.WORKLOAD,
+                                actor_id=workload.workload_id,
+                                action="creative.claim_validation.failed",
+                                outcome=AuditOutcome.FAILED,
+                                resource_type="agent_run",
+                                resource_id=str(run.id),
+                                agent_definition_id=run.requested_agent_definition_id,
+                                agent_version_id=run.agent_version_id,
+                                agent_run_id=run.id,
+                                attempt_id=attempt.id,
+                                correlation_id=run.correlation_id,
+                                environment=workload.environment,
+                                reason_code=error.code,
+                                safe_metadata=safe_metadata(
+                                    cast(Mapping[str, JsonValue], error.diagnostic.safe_fields())
+                                ),
+                            )
+                        )
                     await uow.commit()
                 self.telemetry.count(
                     "agent_runs",

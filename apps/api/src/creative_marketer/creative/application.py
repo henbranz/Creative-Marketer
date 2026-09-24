@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol
+from typing import Any, Protocol, cast
 from uuid import UUID
 
 from jsonschema import Draft202012Validator
@@ -25,6 +26,8 @@ from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 
 from .domain import (
     ApprovedExperimentContext,
+    CreativeClaimDiagnostic,
+    CreativeClaimMismatch,
     CreativeConcept,
     CreativeConceptDecision,
     CreativeConceptSet,
@@ -78,6 +81,72 @@ class CreativeUnitOfWorkFactory(Protocol):
 def load_creative_output_schema() -> Mapping[str, object]:
     path = Path(__file__).with_name("schemas") / "creative.creative_concept_set.v1.json"
     return json.loads(path.read_text())  # type: ignore[no-any-return]
+
+
+def creative_output_schema_for_claims(claim_keys: tuple[str, ...]) -> Mapping[str, object]:
+    """Narrow the canonical contract to this invocation's frozen claim authority.
+
+    This is generation guidance, not a replacement for canonical/domain validation.
+    No claim text, fuzzy matching, or authority inferred from Research/Brief fields.
+    """
+    schema = cast(dict[str, Any], deepcopy(load_creative_output_schema()))
+    point = schema["$defs"]["message_point"]
+    non_fact = deepcopy(point)
+    non_fact["properties"]["kind"]["enum"].remove("PRODUCT_FACT")
+    non_fact["properties"]["product_claim_ref"] = {"type": ["string", "null"], "enum": [None]}
+    if claim_keys:
+        fact = deepcopy(point)
+        fact["properties"]["kind"] = {"type": "string", "enum": ["PRODUCT_FACT"]}
+        fact["properties"]["product_claim_ref"] = {
+            "type": "string",
+            "enum": list(dict.fromkeys(claim_keys)),
+        }
+        schema["$defs"]["message_point"] = {"anyOf": [fact, non_fact]}
+    else:
+        schema["$defs"]["message_point"] = non_fact
+    return schema
+
+
+def _validate_claim_bindings(concepts: list[Any], context: CreativeStrategyContext) -> None:
+    allowed = tuple(item.key for item in context.product_claims)
+    required = _required_disclaimers(context.product_context)
+    mismatches: list[CreativeClaimMismatch] = []
+    for ordinal, concept in enumerate(concepts, 1):
+        used_claim = False
+        for index, point in enumerate(concept["message_points"], 1):
+            ref = point["product_claim_ref"]
+            category = None
+            if point["kind"] != "PRODUCT_FACT":
+                if ref is not None:
+                    category = "REFERENCE_ON_NON_FACT"
+            elif ref in allowed:
+                used_claim = True
+            elif not allowed:
+                category = "NO_ALLOWED_CLAIMS"
+            elif ref is None:
+                category = "MISSING_REFERENCE"
+            elif any(ref.strip().casefold() == key for key in allowed):
+                # Diagnosis only. Cryptographic identities must still match exactly.
+                category = "REFERENCE_FORMAT_MISMATCH"
+            elif any(ref == claim.text for claim in context.product_claims):
+                category = "CLAIM_TEXT_INSTEAD_OF_ID"
+            else:
+                category = "UNKNOWN_REFERENCE"
+            if category:
+                mismatches.append(CreativeClaimMismatch(ordinal, index, category, ref))
+        if used_claim and not required.issubset(
+            {normalized_phrase(item) for item in concept["required_disclaimers"]}
+        ):
+            mismatches.append(
+                CreativeClaimMismatch(ordinal, None, "MISSING_REQUIRED_DISCLAIMERS", None)
+            )
+    if mismatches:
+        raise InvalidCreativeClaimReference(
+            "Creative claim bindings do not match frozen Product authority",
+            diagnostic=CreativeClaimDiagnostic(
+                context.product_snapshot_id, allowed, tuple(mismatches)
+            ),
+        )
 
 
 def build_creative_context(
@@ -171,14 +240,13 @@ def validate_creative_output(
     if any(len(set(values)) != len(values) for values in (keys, titles, hooks, scenes)):
         raise InvalidCreativeOutput("concept set is not deterministically diverse")
     finding_keys = {str(item["key"]) for item in context.research_findings}
-    claim_refs = {item.key: item.text for item in context.product_claims}
+    _validate_claim_bindings(raw_concepts, context)
     assets = {
         str(item.get("asset_id")): item
         for item in context.asset_manifest
         if item.get("status") == "ready" or item.get("status") == "READY"
     }
     prohibited = _prohibited_claims(context.product_context)
-    required_disclaimers = _required_disclaimers(context.product_context)
     set_id = UUID(
         bytes=__import__("hashlib").sha256(f"{agent_run_id}:concept-set".encode()).digest()[:16],
         version=4,
@@ -210,24 +278,9 @@ def validate_creative_output(
                     raise InvalidCreativeAssetReference(
                         "existing asset is absent or lacks generation-input rights"
                     )
-        used_claims: set[str] = set()
-        for point in raw["message_points"]:
-            reference = point["product_claim_ref"]
-            if point["kind"] == "PRODUCT_FACT":
-                if reference not in claim_refs:
-                    raise InvalidCreativeClaimReference(
-                        "PRODUCT_FACT lacks frozen Product authority"
-                    )
-                used_claims.add(str(reference))
-            elif reference is not None:
-                raise InvalidCreativeClaimReference("only PRODUCT_FACT may bind a Product claim")
         normalized_text = normalized_phrase(" ".join(_strings(raw)))
         if any(phrase and phrase in normalized_text for phrase in prohibited):
             raise ProhibitedCreativeClaim("concept contains a prohibited normalized phrase")
-        if used_claims and not required_disclaimers.issubset(
-            {normalized_phrase(str(item)) for item in raw["required_disclaimers"]}
-        ):
-            raise InvalidCreativeClaimReference("required Product disclaimers are missing")
         duration = sum(int(scene["estimated_duration_seconds"]) for scene in raw["scenes"])
         if duration != int(raw["estimated_duration_seconds"]):
             raise InvalidCreativeOutput("scene durations must sum to concept duration")

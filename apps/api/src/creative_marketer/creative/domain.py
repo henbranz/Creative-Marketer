@@ -45,6 +45,10 @@ class InvalidCreativeResearchReference(InvalidCreativeOutput):
 class InvalidCreativeClaimReference(InvalidCreativeOutput):
     code = "INVALID_CREATIVE_CLAIM_REFERENCE"
 
+    def __init__(self, message: str, *, diagnostic: CreativeClaimDiagnostic | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = diagnostic
+
 
 class ProhibitedCreativeClaim(InvalidCreativeOutput):
     code = "PROHIBITED_CREATIVE_CLAIM"
@@ -101,6 +105,52 @@ class CreativeDecisionState(StrEnum):
 class ProductClaimRef:
     key: str
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeClaimMismatch:
+    concept_ordinal: int
+    message_ordinal: int | None
+    category: str
+    reference: str | None
+
+    def safe_fields(self) -> dict[str, str | int | None]:
+        # Model strings are untrusted: expose only bounded hash-shaped identities,
+        # never arbitrary text, secrets, claim prose, or concept/message keys.
+        reference = self.reference
+        visible = (
+            reference is None
+            or re.fullmatch(r"\s{0,2}(?:[sS][hH][aA]256:)?[a-fA-F0-9]{64}\s{0,2}", reference)
+            is not None
+        )
+        return {
+            "concept_ordinal": self.concept_ordinal,
+            "message_ordinal": self.message_ordinal,
+            "category": self.category,
+            "offending_reference": reference if visible else "[REDACTED_NONCANONICAL_REFERENCE]",
+            "reference_digest": canonical_digest(reference),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeClaimDiagnostic:
+    product_snapshot_id: UUID
+    allowed_refs: tuple[str, ...]
+    mismatches: tuple[CreativeClaimMismatch, ...]
+
+    def safe_fields(self) -> dict[str, object]:
+        # Fits the Audit 4096-byte ceiling even at the output contract's upper bound.
+        return {
+            "diagnostic_version": 1,
+            "product_snapshot_id": str(self.product_snapshot_id),
+            "allowed_reference_count": len(self.allowed_refs),
+            "allowed_references": list(self.allowed_refs[:8]),
+            "allowed_references_digest": canonical_digest(self.allowed_refs),
+            "allowed_references_truncated": len(self.allowed_refs) > 8,
+            "mismatch_count": len(self.mismatches),
+            "mismatches": [item.safe_fields() for item in self.mismatches[:5]],
+            "mismatches_truncated": len(self.mismatches) > 5,
+        }
 
 
 def product_claim_refs(
