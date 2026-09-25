@@ -10,6 +10,7 @@ export type BriefWrite = components["schemas"]["BriefContract"];
 export type Product = components["schemas"]["ProductResponse"];
 export type ProductCreate = components["schemas"]["ProductCreate"];
 export type Workspace = components["schemas"]["WorkspaceResponse"];
+export type ClaimsWrite = components["schemas"]["ClaimsWrite"];
 export type Snapshot =
   components["schemas"]["creative_marketer_api__catalog_routes__SnapshotResponse"];
 export type Asset = components["schemas"]["AssetResponse"];
@@ -497,6 +498,11 @@ export const catalogApi = {
     request<Workspace>(session, `/v1/products/${productId}`),
   saveBrief: (session: Session, productId: string, value: BriefWrite) =>
     request<Brief>(session, `/v1/products/${productId}/brief`, {
+      method: "PUT",
+      body: JSON.stringify(value),
+    }),
+  saveClaims: (session: Session, productId: string, value: ClaimsWrite) =>
+    request<Workspace>(session, `/v1/products/${productId}/claims`, {
       method: "PUT",
       body: JSON.stringify(value),
     }),

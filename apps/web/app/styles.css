@@ -1,3 +1,105 @@
+@font-face {
+  font-family: "Open Sans";
+  src: url("/brand/open-sans-variable.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+.product-claims {
+  font-family: "Open Sans", ui-sans-serif, sans-serif;
+  display: grid;
+  gap: 24px;
+  padding: 28px;
+  --accent: var(--brand-blue);
+  --accent-soft: #eaf3ff;
+}
+.app-shell.claims-workspace {
+  --brand-purple: #2563eb;
+  --accent: #2563eb;
+  --accent-soft: #eaf3ff;
+  --gradient-brand-main: linear-gradient(120deg, #2563eb, #0891b2);
+  --gradient-brand-cool: linear-gradient(120deg, #06b6d4, #2563eb);
+  --gradient-brand-subtle: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1),
+    rgba(6, 182, 212, 0.08)
+  );
+}
+.product-claims .eyebrow {
+  color: #1d4ed8;
+}
+.claims-intro {
+  max-width: 850px;
+}
+.claims-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(12px);
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  overflow-wrap: anywhere;
+}
+.claims-card fieldset {
+  border: 0;
+  padding: 0;
+  margin-top: 24px;
+  min-width: 0;
+}
+.claims-card legend {
+  font-weight: 600;
+  padding-bottom: 12px;
+}
+.claims-card .claim-draft,
+.claims-candidates article {
+  margin: 16px 0;
+}
+.product-claims button,
+.product-claims textarea {
+  font: inherit;
+}
+.product-claims textarea {
+  width: 100%;
+}
+.claims-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.product-claims button {
+  background: var(--surface);
+  color: var(--brand-navy);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+}
+.product-claims .claims-save {
+  background: #1d4ed8;
+  border-color: #1d4ed8;
+  color: white;
+}
+.product-claims button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.claims-candidates {
+  border-style: dashed;
+  background: rgba(240, 246, 255, 0.7);
+}
+.claims-error {
+  color: var(--danger);
+}
+@media (max-width: 600px) {
+  .product-claims {
+    padding: 16px;
+  }
+  .claims-card {
+    padding: 16px;
+  }
+}
+
 :root {
   font-family:
     Avenir Next,

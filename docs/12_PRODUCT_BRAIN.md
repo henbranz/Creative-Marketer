@@ -101,6 +101,33 @@ Ordinary edits are audited but do not create per-keystroke events.
 
 ## API and UI
 
+### Governed claim management
+
+The **Claims** tab shows Product and Brand allow-lists separately. Draft edits and
+verbatim Product/Brief candidates are never authority until a human OWNER/ADMIN
+explicitly chooses **Approve & save**. Brand claims apply to every product in the
+brand; review that scope carefully. No candidate is independently verified by AI.
+
+Claim saves use a narrow compare-and-swap endpoint and atomically advance the
+existing knowledge source revision, update the profile timestamp and append new
+immutable snapshots. They preserve Brief text and all unrelated profile fields.
+New snapshot digests produce new canonical claim IDs, invalidate old Research
+freshness for future Creative preparation, and never rewrite historical runs.
+See [ADR-044](ADR/ADR-044-human-claim-edits-rotate-product-authority.md).
+
+The Claims panel bundles Open Sans locally under its SIL Open Font License
+(`apps/web/public/brand/open-sans-LICENSE.txt`), with blue/navy controls and glass
+surfaces. It makes no third-party font request. Candidates and unsaved drafts are
+session-local UI state; only the explicit claim save persists authority.
+
+Font provenance: the official Google Fonts `ofl/opensans/OpenSans[wdth,wght].ttf`
+source (SHA-256 `36643644f318a812aab2d2ed3bb98f8cf0872527f835fe9398d95fe6b9adb878`)
+was compressed to WOFF2 using FontTools 4.60.1, preserving glyphs and the variable
+weight range. Bundled WOFF2 SHA-256:
+`08905eb711e02e842b57e72d62fae4558bedcf22071ad9f5c1213c521ef7d99c`.
+
+### Other catalog surfaces
+
 The protected API provides Brand lists/detail/mutations, Brand-scoped Product creation/listing,
 Product workspace detail/update, Brief read/save/completeness, and snapshot create/latest. Backend
 OpenAPI is generated into `packages/contracts/openapi.json`; TypeScript types are generated from

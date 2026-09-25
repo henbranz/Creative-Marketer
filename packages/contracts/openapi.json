@@ -1882,6 +1882,39 @@
         "title": "ChannelIntent",
         "type": "string"
       },
+      "ClaimsWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed_claims": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Allowed Claims",
+            "type": "array"
+          },
+          "expected_claims": {
+            "items": {
+              "maxLength": 500,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 30,
+            "title": "Expected Claims",
+            "type": "array"
+          },
+          "scope": {
+            "enum": ["product", "brand"],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": ["scope", "allowed_claims", "expected_claims"],
+        "title": "ClaimsWrite",
+        "type": "object"
+      },
       "CompletenessResponse": {
         "additionalProperties": false,
         "properties": {
@@ -12200,6 +12233,107 @@
           }
         },
         "summary": "Get Completeness",
+        "tags": ["catalog"]
+      }
+    },
+    "/v1/products/{product_id}/claims": {
+      "put": {
+        "operationId": "save_claims_v1_products__product_id__claims_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimsWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Claims",
         "tags": ["catalog"]
       }
     },

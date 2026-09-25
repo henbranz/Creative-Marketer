@@ -29,6 +29,8 @@ import {
   type Workspace,
 } from "./catalog-api";
 import { ProductWorkspaceApp } from "./product-workspace";
+import { ProductClaims } from "./product-claims";
+import { ApiError } from "./catalog-api";
 import { briefDraftKey } from "./brief-draft";
 
 const brand = {
@@ -328,6 +330,220 @@ const workspace: Workspace = {
   },
   latest_snapshot: null,
 };
+
+describe("Governed Product Claims", () => {
+  const session = { credential: "test|owner", tenantId: brand.tenant_id };
+  const approvedWorkspace = (): Workspace => ({
+    ...workspace,
+    product: {
+      ...product,
+      profile: { ...product.profile, allowed_claims: ["Product fact"] },
+    },
+    brand: {
+      ...brand,
+      profile: { ...brand.profile, allowed_claims: ["Brand fact"] },
+    },
+  });
+  beforeEach(() => vi.restoreAllMocks());
+  function mount(value = approvedWorkspace()) {
+    const saved = vi.fn();
+    const dirty = vi.fn();
+    const view = render(
+      <ProductClaims
+        workspace={value}
+        session={session}
+        onSaved={saved}
+        onDirtyChange={dirty}
+      />,
+    );
+    return { saved, dirty, ...view };
+  }
+  it("renders Product and Brand authority separately without hash inputs", () => {
+    mount();
+    expect(
+      within(screen.getByRole("region", { name: "Product Claims" })).getByText(
+        "Product fact",
+        { selector: "li" },
+      ),
+    ).toBeVisible();
+    expect(
+      within(screen.getByRole("region", { name: "Brand Claims" })).getByText(
+        "Brand fact",
+        { selector: "li" },
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByText(
+        "Approved Product Claims are factual statements that Creative agents are allowed to use as product facts.",
+      ),
+    ).toBeVisible();
+    expect(
+      document.querySelector(".product-claims")?.textContent,
+    ).not.toContain("sha256:");
+  });
+  it.each(["product", "brand"] as const)(
+    "adds, edits, removes and explicitly saves %s claims",
+    async (scope) => {
+      const value = approvedWorkspace();
+      const next = structuredClone(value);
+      next[scope].profile.allowed_claims = ["Human edited fact"];
+      const save = vi.spyOn(catalogApi, "saveClaims").mockResolvedValue(next);
+      const { saved, dirty } = mount(value);
+      fireEvent.click(
+        screen.getByRole("button", { name: `Add ${scope} claim` }),
+      );
+      const label = scope === "product" ? "Product" : "Brand";
+      fireEvent.change(screen.getByLabelText(`${label} claim 2`), {
+        target: { value: "Human edited fact" },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: `Remove ${scope} claim 1` }),
+      );
+      expect(save).not.toHaveBeenCalled();
+      expect(dirty).toHaveBeenLastCalledWith(true);
+      fireEvent.click(
+        screen.getByRole("button", { name: `Approve & save ${scope} claims` }),
+      );
+      await waitFor(() => expect(saved).toHaveBeenCalledWith(next));
+      expect(save).toHaveBeenCalledWith(session, product.id, {
+        scope,
+        allowed_claims: ["Human edited fact"],
+        expected_claims:
+          scope === "product" ? ["Product fact"] : ["Brand fact"],
+      });
+    },
+  );
+  it("keeps candidates non-authoritative until add-to-draft and explicit save", async () => {
+    const save = vi
+      .spyOn(catalogApi, "saveClaims")
+      .mockResolvedValue(approvedWorkspace());
+    mount();
+    const candidates = screen.getByRole("region", { name: "Claim candidates" });
+    expect(candidates).toHaveClass("claims-candidates");
+    expect(
+      within(candidates).getByText("Candidates · not approved"),
+    ).toBeVisible();
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Candidate 1"), {
+      target: { value: "Reviewed candidate" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Add candidate 1 to Product draft" }),
+    );
+    expect(screen.getByLabelText("Product claim 2")).toHaveValue(
+      "Reviewed candidate",
+    );
+    expect(save).not.toHaveBeenCalled();
+    const approved = screen
+      .getByRole("region", { name: "Product Claims" })
+      .querySelector("ul")!;
+    expect(approved.textContent).not.toContain("Reviewed candidate");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve & save product claims" }),
+    );
+    await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  });
+  it("dismisses candidates without saving anything", () => {
+    const save = vi.spyOn(catalogApi, "saveClaims");
+    mount();
+    const first = (screen.getByLabelText("Candidate 1") as HTMLTextAreaElement)
+      .value;
+    fireEvent.click(
+      screen.getByRole("button", { name: "Dismiss candidate 1" }),
+    );
+    expect(screen.queryAllByDisplayValue(first)).toHaveLength(0);
+    expect(save).not.toHaveBeenCalled();
+  });
+  it("keeps the original conflict guard for a Product draft when saving Brand claims", async () => {
+    const next = approvedWorkspace();
+    next.brand.profile.allowed_claims = ["Brand edit"];
+    next.product.profile.allowed_claims = ["Concurrent product fact"];
+    const save = vi.spyOn(catalogApi, "saveClaims").mockResolvedValue(next);
+    const { saved, dirty, rerender } = mount();
+    fireEvent.change(screen.getByLabelText("Product claim 1"), {
+      target: { value: "My product draft" },
+    });
+    fireEvent.change(screen.getByLabelText("Brand claim 1"), {
+      target: { value: "Brand edit" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve & save brand claims" }),
+    );
+    await waitFor(() => expect(saved).toHaveBeenCalledWith(next));
+    rerender(
+      <ProductClaims
+        workspace={next}
+        session={session}
+        onSaved={saved}
+        onDirtyChange={dirty}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve & save product claims" }),
+    );
+    await waitFor(() =>
+      expect(save).toHaveBeenLastCalledWith(session, product.id, {
+        scope: "product",
+        allowed_claims: ["My product draft"],
+        expected_claims: ["Product fact"],
+      }),
+    );
+  });
+  it.each([403, 409, 500])(
+    "preserves drafts and safely displays %s errors",
+    async (status) => {
+      vi.spyOn(catalogApi, "saveClaims").mockRejectedValue(
+        new ApiError(status, "private-server-detail"),
+      );
+      const { saved } = mount();
+      fireEvent.change(screen.getByLabelText("Product claim 1"), {
+        target: { value: "Keep my draft" },
+      });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Approve & save product claims" }),
+      );
+      expect(await screen.findByRole("alert")).not.toHaveTextContent(
+        "private-server-detail",
+      );
+      expect(screen.getByLabelText("Product claim 1")).toHaveValue(
+        "Keep my draft",
+      );
+      expect(saved).not.toHaveBeenCalled();
+    },
+  );
+  it("renders read-only claims without approval controls for members", () => {
+    const value = approvedWorkspace();
+    value.product.can_edit = false;
+    value.brand.can_edit = false;
+    mount(value);
+    expect(
+      screen.queryByRole("button", { name: /Approve & save/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Add candidate/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Candidate 1")).toBeDisabled();
+  });
+  it("permits explicit removal of all Product claims", async () => {
+    const save = vi
+      .spyOn(catalogApi, "saveClaims")
+      .mockResolvedValue(workspace);
+    mount();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Remove product claim 1" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve & save product claims" }),
+    );
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(session, product.id, {
+        scope: "product",
+        allowed_claims: [],
+        expected_claims: ["Product fact"],
+      }),
+    );
+  });
+});
 const readyAsset: Asset = {
   id: "50000000-0000-0000-0000-000000000001",
   tenant_id: brand.tenant_id,

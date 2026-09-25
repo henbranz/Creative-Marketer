@@ -70,6 +70,7 @@ import {
   Metric,
   StatusBadge,
 } from "./ui/components";
+import { ProductClaims } from "./product-claims";
 
 const navigation = [
   "Command Center",
@@ -90,6 +91,7 @@ const navigationIcons: Record<string, string> = {
 const tabs = [
   "Overview",
   "Brief",
+  "Claims",
   "Assets",
   "Research",
   "Creatives",
@@ -5403,6 +5405,7 @@ export function ProductWorkspaceApp() {
   const [dialog, setDialog] = useState<"brand" | "product" | null>(null);
   const [dialogBrandId, setDialogBrandId] = useState<string | null>(null);
   const [briefDirty, setBriefDirty] = useState(false);
+  const [claimsDirty, setClaimsDirty] = useState(false);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const selectedBrand = useMemo(
     () =>
@@ -5450,6 +5453,14 @@ export function ProductWorkspaceApp() {
   const openProduct = async (id: string) => {
     if (!session) return;
     if (
+      claimsDirty &&
+      !window.confirm(
+        "Discard unsaved claim drafts? They have not been approved or saved.",
+      )
+    )
+      return;
+    setClaimsDirty(false);
+    if (
       briefDirty &&
       !window.confirm(
         "You have unsaved Brief changes. Leave this Product? Your local draft will remain available.",
@@ -5473,7 +5484,9 @@ export function ProductWorkspaceApp() {
   if (!session)
     return <AccessScreen onConnect={(value) => void connect(value)} />;
   return (
-    <div className={`app-shell ${navigationOpen ? "navigation-open" : ""}`}>
+    <div
+      className={`app-shell ${navigationOpen ? "navigation-open" : ""} ${tab === "Claims" ? "claims-workspace" : ""}`}
+    >
       <aside className="sidebar">
         <div className="logo-row">
           <BrandLockup compact />
@@ -5502,12 +5515,30 @@ export function ProductWorkspaceApp() {
               }
               onClick={() => {
                 if (item === "Command Center" && workspace) {
+                  if (
+                    claimsDirty &&
+                    !window.confirm("Discard unsaved claim drafts?")
+                  )
+                    return;
+                  setClaimsDirty(false);
                   setTab("Command Center");
                   setNavigationOpen(false);
                 } else if (item === "Products" && workspace) {
+                  if (
+                    claimsDirty &&
+                    !window.confirm("Discard unsaved claim drafts?")
+                  )
+                    return;
+                  setClaimsDirty(false);
                   setTab("Overview");
                   setNavigationOpen(false);
                 } else if (item === "Approvals" && workspace) {
+                  if (
+                    claimsDirty &&
+                    !window.confirm("Discard unsaved claim drafts?")
+                  )
+                    return;
+                  setClaimsDirty(false);
                   sessionStorage.setItem("cm-commerce-view", "Actions");
                   setTab("Commerce");
                   setNavigationOpen(false);
@@ -5532,6 +5563,12 @@ export function ProductWorkspaceApp() {
           </div>
           <button
             onClick={() => {
+              if (
+                claimsDirty &&
+                !window.confirm("Discard unsaved claim drafts?")
+              )
+                return;
+              setClaimsDirty(false);
               sessionStorage.removeItem("cm-session");
               setSession(null);
             }}
@@ -5654,6 +5691,12 @@ export function ProductWorkspaceApp() {
                       <button
                         className="add-product"
                         onClick={() => {
+                          if (
+                            claimsDirty &&
+                            !window.confirm("Discard unsaved claim drafts?")
+                          )
+                            return;
+                          setClaimsDirty(false);
                           if (!workspace || workspace.brand.id !== brand.id)
                             setWorkspace(null);
                           setDialogBrandId(brand.id);
@@ -5684,6 +5727,15 @@ export function ProductWorkspaceApp() {
                             className={tab === name ? "active" : ""}
                             onClick={() => {
                               if (
+                                claimsDirty &&
+                                name !== "Claims" &&
+                                !window.confirm(
+                                  "Discard unsaved claim drafts? They have not been approved or saved.",
+                                )
+                              )
+                                return;
+                              if (name !== "Claims") setClaimsDirty(false);
+                              if (
                                 tab === "Brief" &&
                                 briefDirty &&
                                 name !== "Brief" &&
@@ -5713,6 +5765,14 @@ export function ProductWorkspaceApp() {
                               latest_snapshot: snapshot,
                             });
                           }}
+                        />
+                      ) : tab === "Claims" ? (
+                        <ProductClaims
+                          key={workspace.product.id}
+                          workspace={workspace}
+                          session={session}
+                          onSaved={setWorkspace}
+                          onDirtyChange={setClaimsDirty}
                         />
                       ) : tab === "Brief" ? (
                         <BriefEditor

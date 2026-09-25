@@ -224,8 +224,11 @@ class SqlAlchemyBrandRepository:
         except IntegrityError as error:
             raise CatalogConflict("brand already exists") from error
 
-    async def get(self, value_id: UUID) -> Brand | None:
-        row = (await self.session.execute(select(brands).where(brands.c.id == value_id))).first()
+    async def get(self, value_id: UUID, *, for_update: bool = False) -> Brand | None:
+        query = select(brands).where(brands.c.id == value_id)
+        if for_update:
+            query = query.with_for_update()
+        row = (await self.session.execute(query)).first()
         return None if row is None else _brand(row)
 
     async def list(self) -> tuple[Brand, ...]:

@@ -209,6 +209,14 @@ class WorkspaceResponse(Contract):
     latest_snapshot: SnapshotResponse | None
 
 
+class ClaimsWrite(Contract):
+    scope: Literal["product", "brand"]
+    allowed_claims: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(max_length=30)
+    expected_claims: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        max_length=30
+    )
+
+
 class AssetCreate(Contract):
     brand_id: UUID
     product_id: UUID | None = None
@@ -642,6 +650,26 @@ def create_catalog_router(
             raise HTTPException(status_code=404, detail="product_not_found") from error
         except CatalogPermissionDenied as error:
             raise HTTPException(status_code=403, detail="catalog_mutation_denied") from error
+
+    @router.put("/products/{product_id}/claims", response_model=WorkspaceResponse)
+    async def save_claims(product_id: UUID, value: ClaimsWrite, ctx: Context) -> WorkspaceResponse:
+        try:
+            await service.save_claims(
+                ctx,
+                product_id,
+                scope=value.scope,
+                allowed_claims=tuple(value.allowed_claims),
+                expected_claims=tuple(value.expected_claims),
+            )
+            return _workspace_response(await service.get_workspace(ctx, product_id), True)
+        except CatalogNotFound as error:
+            raise HTTPException(status_code=404, detail="product_not_found") from error
+        except CatalogPermissionDenied as error:
+            raise HTTPException(status_code=403, detail="catalog_mutation_denied") from error
+        except CatalogConflict as error:
+            raise HTTPException(status_code=409, detail="claims_changed_reload_required") from error
+        except CatalogValidationError as error:
+            raise HTTPException(status_code=422, detail="invalid_allowed_claims") from error
 
     @router.get("/products/{product_id}/brief", response_model=BriefResponse)
     async def get_brief(product_id: UUID, ctx: Context) -> BriefResponse:

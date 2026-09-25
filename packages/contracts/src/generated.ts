@@ -928,6 +928,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/claims": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /** Save Claims */
+    put: operations["save_claims_v1_products__product_id__claims_put"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/commerce": {
     parameters: {
       query?: never;
@@ -2471,6 +2488,18 @@ export interface components {
      */
     ChannelIntent:
       "ORGANIC_SHORT_FORM" | "TIKTOK" | "INSTAGRAM_REELS" | "PAID_SOCIAL";
+    /** ClaimsWrite */
+    ClaimsWrite: {
+      /** Allowed Claims */
+      allowed_claims: string[];
+      /** Expected Claims */
+      expected_claims: string[];
+      /**
+       * Scope
+       * @enum {string}
+       */
+      scope: "product" | "brand";
+    };
     /** CompletenessResponse */
     CompletenessResponse: {
       /** Missing Fields */
@@ -6559,6 +6588,45 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["CompletenessResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  save_claims_v1_products__product_id__claims_put: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ClaimsWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkspaceResponse"];
         };
       };
       /** @description Validation Error */
