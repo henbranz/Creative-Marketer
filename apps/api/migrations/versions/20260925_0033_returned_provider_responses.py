@@ -118,6 +118,44 @@ def _protect_model_attempt(*, returned_responses: bool) -> str:
     )
 
 
+def _transitional_protect_model_attempt() -> str:
+    """Permit only the deterministic 0033 metadata backfill.
+
+    The 0032 trigger rejects every same-status update, including migration-owned
+    enrichment.  Comparing the full rows with only the three new columns removed
+    proves that no pre-existing evidence changes during this temporary transition.
+    """
+
+    return (
+        "CREATE OR REPLACE FUNCTION agent_runtime.protect_model_attempt() "
+        "RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        "IF OLD.status=NEW.status AND OLD.status IN ('RESPONSE_RECORDED','SUCCEEDED') "
+        "AND OLD.provider_response_status IS NULL "
+        "AND OLD.provider_failure_reason IS NULL AND OLD.usage_available IS NULL "
+        "AND NEW.provider_response_status='completed' "
+        "AND NEW.provider_failure_reason IS NULL AND NEW.usage_available "
+        "AND (to_jsonb(NEW) - ARRAY['provider_response_status','provider_failure_reason',"
+        "'usage_available']) = (to_jsonb(OLD) - ARRAY['provider_response_status',"
+        "'provider_failure_reason','usage_available']) THEN RETURN NEW; END IF; "
+        "IF (NEW.tenant_id,NEW.agent_run_id,NEW.attempt_number,NEW.workload_id,"
+        "NEW.model_route_version,NEW.pricing_version,NEW.provider,NEW.model,NEW.claimed_at,"
+        "NEW.lease_expires_at) IS DISTINCT FROM (OLD.tenant_id,OLD.agent_run_id,"
+        "OLD.attempt_number,OLD.workload_id,OLD.model_route_version,OLD.pricing_version,"
+        "OLD.provider,OLD.model,OLD.claimed_at,OLD.lease_expires_at) THEN "
+        "RAISE EXCEPTION 'ModelAttempt identity is immutable'; END IF; "
+        "IF OLD.status=NEW.status AND NEW IS DISTINCT FROM OLD THEN "
+        "RAISE EXCEPTION 'ModelAttempt update requires a lifecycle transition'; END IF; "
+        "IF OLD.status<>NEW.status AND NOT ((OLD.status='CLAIMED' AND NEW.status IN "
+        "('PROVIDER_STARTED','FAILED_NO_RESPONSE')) OR (OLD.status='PROVIDER_STARTED' AND "
+        "NEW.status IN ('RESPONSE_RECORDED','UNKNOWN','FAILED_NO_RESPONSE')) OR "
+        "(OLD.status='RESPONSE_RECORDED' AND NEW.status='SUCCEEDED')) THEN "
+        "RAISE EXCEPTION 'invalid ModelAttempt transition'; END IF; "
+        "IF OLD.status IN ('SUCCEEDED','FAILED_NO_RESPONSE','UNKNOWN') "
+        "AND NEW IS DISTINCT FROM OLD THEN "
+        "RAISE EXCEPTION 'terminal ModelAttempt is immutable'; END IF; RETURN NEW; END; $$"
+    )
+
+
 def upgrade() -> None:
     op.add_column(
         "model_attempts",
@@ -134,6 +172,10 @@ def upgrade() -> None:
         sa.Column("usage_available", sa.Boolean()),
         schema="agent_runtime",
     )
+    # Replace the 0032 guard before touching immutable historical rows.  This guard allows
+    # exactly the three-column enrichment below and keeps every pre-existing field protected.
+    op.execute(_transitional_protect_model_attempt())
+    op.execute("REVOKE ALL ON FUNCTION agent_runtime.protect_model_attempt() FROM PUBLIC")
     op.execute(
         "UPDATE agent_runtime.model_attempts SET provider_response_status='completed', "
         "usage_available=TRUE WHERE status IN ('RESPONSE_RECORDED','SUCCEEDED')"

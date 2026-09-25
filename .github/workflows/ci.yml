@@ -57,6 +57,26 @@ jobs:
       - name: Bootstrap private object storage
         run: uv run python -m creative_marketer.infrastructure.object_storage.bootstrap
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f ../../infra/postgres/init/001-runtime-role.sql
+      - name: Create isolated 0033 existing-data migration database
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d postgres -c "CREATE DATABASE creative_marketer_0033_upgrade OWNER creative_marketer_migrator"
+      - name: Migrate isolated 0033 regression database to 0032
+        run: MIGRATION_DATABASE_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer_0033_upgrade uv run alembic upgrade 20260923_0032
+      - name: Prepare protected historical ModelAttempts at 0032
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer_0033_upgrade -f tests/migration/prepare_returned_response_upgrade.sql
+      - name: Upgrade protected historical ModelAttempts to 0033
+        run: MIGRATION_DATABASE_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer_0033_upgrade uv run alembic upgrade 20260925_0033
+      - name: Verify 0033 historical evidence and final trigger
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer_0033_upgrade -f tests/migration/verify_returned_response_upgrade.sql
+      - name: Downgrade isolated 0033 regression database to 0032
+        run: MIGRATION_DATABASE_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer_0033_upgrade uv run alembic downgrade 20260923_0032
+      - name: Verify 0033 rollback preserves evidence and restores guard
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer_0033_upgrade -f tests/migration/verify_returned_response_downgrade.sql
+      - name: Retry 0033 upgrade with the same historical data
+        run: MIGRATION_DATABASE_URL=postgresql+psycopg://creative_marketer_migrator:creative_marketer_migrator@localhost:5432/creative_marketer_0033_upgrade uv run alembic upgrade 20260925_0033
+      - name: Reverify 0033 after retry
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer_0033_upgrade -f tests/migration/verify_returned_response_upgrade.sql
+      - name: Drop isolated 0033 regression database
+        run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d postgres -c "DROP DATABASE creative_marketer_0033_upgrade WITH (FORCE)"
       - run: uv run alembic upgrade 20260905_0001
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -c "INSERT INTO identity.users (id, external_identity_issuer, external_identity_subject, email, normalized_email, status) VALUES ('00000000-0000-0000-0000-000000000003', 'https://legacy.example', 'LegacySubject', 'legacy@example.test', 'legacy@example.test', 'active')"
       - run: uv run alembic upgrade head

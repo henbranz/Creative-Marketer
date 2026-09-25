@@ -37,7 +37,12 @@ outcome ambiguity and does not make the run eligible for autonomous retry or rec
 
 Database constraints and the immutable lifecycle trigger enforce these distinctions. Existing rows
 are not reclassified: historical attempts require separate authoritative evidence and operator
-action.
+action. Migration `20260925_0033` enriches only historical `RESPONSE_RECORDED` and `SUCCEEDED` rows
+with `completed` and `usage_available=true`, because the pre-0033 runtime could create those states
+only after a successful `ModelInvocationResult`. A strict temporary trigger allows exactly that
+three-column enrichment while comparing every pre-existing row field for equality; the final guard
+is installed before the migration commits. Historical `UNKNOWN`, `FAILED_NO_RESPONSE`,
+`PROVIDER_STARTED`, and `CLAIMED` rows retain null response metadata.
 
 ## Consequences
 
