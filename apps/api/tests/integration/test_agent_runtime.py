@@ -27,7 +27,7 @@ from creative_marketer.agent_runtime.application import (
     build_context,
     build_creative_model_context,
     build_producer_model_context,
-    initial_creative_strategist_route,
+    historical_creative_strategist_route,
     initial_researcher_route,
     select_evidence_blocks,
 )
@@ -745,7 +745,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         ModelRouter(
             (
                 initial_researcher_route(),
-                initial_creative_strategist_route(),
+                historical_creative_strategist_route(),
                 initial_producer_route(),
             )
         ),
