@@ -1920,6 +1920,121 @@ async def test_output_limited_creative_replacement_is_fresh_and_idempotent() -> 
 
 
 @pytest.mark.asyncio
+async def test_creative_replacement_fails_closed_for_authority_and_missing_evidence() -> None:
+    (
+        runtime,
+        repository,
+        execution_context,
+        failed,
+        attempt,
+    ) = await _output_limited_creative_fixture()
+    with pytest.raises(AgentRunDenied):
+        await runtime.request_creative_replacement(
+            context(failed.tenant_id, role=MembershipRole.MEMBER),
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+    repository.attempts.pop(attempt.id)
+    with pytest.raises(AgentRunNotReady, match="exactly one authoritative model attempt"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+    repository.attempts[attempt.id] = attempt
+    repository.creative_prepared = None
+    with pytest.raises(AgentRunNotReady, match="preparation is unavailable"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_creative_replacement_fails_closed_for_invalid_request_provenance() -> None:
+    (
+        runtime,
+        repository,
+        execution_context,
+        failed,
+        _attempt,
+    ) = await _output_limited_creative_fixture()
+    current_preparation = repository.creative_prepared
+    repository.creative_prepared = replace(
+        current_preparation,
+        strategist=replace(current_preparation.strategist, version_id=failed.agent_version_id),
+    )
+    with pytest.raises(AgentRunNotReady, match="larger compatible route"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+    repository.creative_prepared = current_preparation
+    active = replace(
+        failed,
+        id=uuid4(),
+        status=AgentRunStatus.PENDING,
+        idempotency_key="unrelated-active-creative",
+    )
+    repository.runs[active.id] = active
+    with pytest.raises(AgentRunNotReady, match="already active"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+    repository.runs.pop(active.id)
+
+    repository.runs[failed.id] = replace(failed, model_profile_key="unregistered")
+    with pytest.raises(AgentRunNotReady, match="no longer resolvable"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+    repository.runs[failed.id] = replace(
+        failed,
+        input_context_refs=tuple(
+            item for item in failed.input_context_refs if item.get("kind") != "strategy_request"
+        ),
+    )
+    with pytest.raises(AgentRunNotReady, match="request provenance is missing"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+    repository.runs[failed.id] = replace(
+        failed,
+        input_context_refs=tuple(
+            {**item, "concept_count": True} if item.get("kind") == "strategy_request" else item
+            for item in failed.input_context_refs
+        ),
+    )
+    with pytest.raises(AgentRunNotReady, match="request provenance is invalid"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("run_status", "attempt_status", "response_status", "failure_reason"),
     (
