@@ -40,6 +40,7 @@ class ModelAttemptStatus(StrEnum):
     PROVIDER_STARTED = "PROVIDER_STARTED"
     RESPONSE_RECORDED = "RESPONSE_RECORDED"
     SUCCEEDED = "SUCCEEDED"
+    FAILED_RESPONSE = "FAILED_RESPONSE"
     FAILED_NO_RESPONSE = "FAILED_NO_RESPONSE"
     UNKNOWN = "UNKNOWN"
 
@@ -53,6 +54,23 @@ class RecoveryClassification(StrEnum):
 class ModelFailureDisposition(StrEnum):
     KNOWN_NO_RESPONSE = "KNOWN_NO_RESPONSE"
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+
+
+class ProviderResponseStatus(StrEnum):
+    COMPLETED = "completed"
+    INCOMPLETE = "incomplete"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ProviderFailureReason(StrEnum):
+    MAX_OUTPUT_TOKENS = "MAX_OUTPUT_TOKENS"
+    SAFETY = "SAFETY"
+    PROVIDER_FAILED = "PROVIDER_FAILED"
+    PROVIDER_CANCELLED = "PROVIDER_CANCELLED"
+    INVALID_OUTPUT = "INVALID_OUTPUT"
+    USAGE_UNAVAILABLE = "USAGE_UNAVAILABLE"
+    OTHER = "OTHER"
 
 
 class FindingCategory(StrEnum):
@@ -72,14 +90,58 @@ class Confidence(StrEnum):
     HIGH = "HIGH"
 
 
+@dataclass(frozen=True, slots=True)
+class ReturnedProviderResponse:
+    """Safe provider-neutral metadata proving that a provider returned a response."""
+
+    provider: str
+    model: str
+    status: ProviderResponseStatus
+    failure_reason: ProviderFailureReason
+    provider_response_id: str | None = None
+    usage: ModelUsage | None = None
+
+    def __post_init__(self) -> None:
+        valid_reasons = {
+            ProviderResponseStatus.COMPLETED: {
+                ProviderFailureReason.SAFETY,
+                ProviderFailureReason.INVALID_OUTPUT,
+                ProviderFailureReason.USAGE_UNAVAILABLE,
+            },
+            ProviderResponseStatus.INCOMPLETE: {
+                ProviderFailureReason.MAX_OUTPUT_TOKENS,
+                ProviderFailureReason.SAFETY,
+                ProviderFailureReason.OTHER,
+            },
+            ProviderResponseStatus.FAILED: {ProviderFailureReason.PROVIDER_FAILED},
+            ProviderResponseStatus.CANCELLED: {ProviderFailureReason.PROVIDER_CANCELLED},
+        }
+        if (
+            not self.provider.strip()
+            or len(self.provider) > 64
+            or not self.model.strip()
+            or len(self.model) > 128
+            or (self.provider_response_id is not None and len(self.provider_response_id) > 256)
+            or self.failure_reason not in valid_reasons[self.status]
+        ):
+            raise ValueError("returned provider response metadata is invalid")
+
+
 class ModelProviderError(Exception):
     code = "MODEL_PROVIDER_UNAVAILABLE"
     retryable = True
     disposition = ModelFailureDisposition.OUTCOME_UNKNOWN
 
-    def __init__(self, message: str, *, rejection: ProviderRejection | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        rejection: ProviderRejection | None = None,
+        returned_response: ReturnedProviderResponse | None = None,
+    ) -> None:
         super().__init__(message)
         self.rejection = rejection
+        self.returned_response = returned_response
 
 
 class ModelProviderBadRequest(ModelProviderError):
@@ -148,6 +210,21 @@ class ModelRefusal(ModelProviderError):
 
 class ModelIncompleteResponse(ModelProviderError):
     code = "MODEL_PROVIDER_INCOMPLETE_RESPONSE"
+    retryable = False
+
+
+class ModelProviderFailedResponse(ModelProviderError):
+    code = "MODEL_PROVIDER_FAILED_RESPONSE"
+    retryable = False
+
+
+class ModelProviderCancelledResponse(ModelProviderError):
+    code = "MODEL_PROVIDER_CANCELLED_RESPONSE"
+    retryable = False
+
+
+class ModelProviderInvalidResponse(ModelProviderError):
+    code = "MODEL_PROVIDER_INVALID_RESPONSE"
     retryable = False
 
 
@@ -238,6 +315,12 @@ class ModelCapabilityUnavailable(AgentRuntimeError):
 
 class InvalidModelOutput(AgentRuntimeError):
     code = "MODEL_INVALID_OUTPUT"
+
+    def __init__(
+        self, message: str, *, returned_response: ReturnedProviderResponse | None = None
+    ) -> None:
+        super().__init__(message)
+        self.returned_response = returned_response
 
 
 class InvalidResearchCitation(InvalidModelOutput):
@@ -407,6 +490,9 @@ class ModelAttempt:
     estimated_cost: Decimal = Decimal("0")
     unknown_cost: Decimal = Decimal("0")
     failure_code: str | None = None
+    provider_response_status: ProviderResponseStatus | None = None
+    provider_failure_reason: ProviderFailureReason | None = None
+    usage_available: bool | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -429,6 +515,7 @@ class ModelAttempt:
         provider_active = self.status is ModelAttemptStatus.PROVIDER_STARTED
         response_recorded = self.status is ModelAttemptStatus.RESPONSE_RECORDED
         succeeded = self.status is ModelAttemptStatus.SUCCEEDED
+        failed_response = self.status is ModelAttemptStatus.FAILED_RESPONSE
         failed_no_response = self.status is ModelAttemptStatus.FAILED_NO_RESPONSE
         unknown = self.status is ModelAttemptStatus.UNKNOWN
         valid_lifecycle = (
@@ -457,6 +544,12 @@ class ModelAttempt:
                 and self.finished_at is not None
             )
             or (
+                failed_response
+                and self.provider_started_at is not None
+                and self.response_recorded_at is not None
+                and self.finished_at is not None
+            )
+            or (
                 failed_no_response
                 and self.response_recorded_at is None
                 and self.finished_at is not None
@@ -470,6 +563,74 @@ class ModelAttempt:
         )
         if not valid_lifecycle:
             raise ValueError("model attempt lifecycle timestamps are inconsistent")
+        has_response = response_recorded or succeeded or failed_response
+        if not has_response and any(
+            value is not None
+            for value in (
+                self.provider_response_status,
+                self.provider_failure_reason,
+                self.usage_available,
+            )
+        ):
+            raise ValueError("pre-response attempt cannot contain response metadata")
+        if has_response and (self.provider_response_status is None or self.usage_available is None):
+            raise ValueError("recorded response requires bounded status and usage availability")
+        if (
+            self.provider_response_status is not ProviderResponseStatus.COMPLETED
+            and has_response
+            and self.provider_failure_reason is None
+        ):
+            raise ValueError("non-completed provider response requires a bounded failure reason")
+        if succeeded and (
+            self.provider_response_status is not ProviderResponseStatus.COMPLETED
+            or self.provider_failure_reason is not None
+            or self.usage_available is not True
+        ):
+            raise ValueError("succeeded attempt requires a completed provider response")
+        if (
+            has_response
+            and self.provider_response_status is ProviderResponseStatus.COMPLETED
+            and self.provider_failure_reason is None
+            and self.usage_available is not True
+        ):
+            raise ValueError("completed response requires authoritative usage")
+        if failed_response and self.provider_failure_reason is None:
+            raise ValueError("failed-response attempt requires a bounded failure reason")
+        if has_response and self.provider_failure_reason is not None:
+            assert self.provider_response_status is not None
+            ReturnedProviderResponse(
+                provider=self.provider,
+                model=self.model,
+                status=self.provider_response_status,
+                failure_reason=self.provider_failure_reason,
+                provider_response_id=self.provider_response_id,
+                usage=(
+                    ModelUsage(self.input_tokens, self.output_tokens, self.total_tokens)
+                    if self.usage_available
+                    else None
+                ),
+            )
+        if (
+            failed_response
+            and self.provider_response_status is ProviderResponseStatus.COMPLETED
+            and self.provider_failure_reason
+            not in {
+                ProviderFailureReason.SAFETY,
+                ProviderFailureReason.INVALID_OUTPUT,
+                ProviderFailureReason.USAGE_UNAVAILABLE,
+            }
+        ):
+            raise ValueError("completed failed-response reason is invalid")
+        if self.usage_available is False and any(
+            (self.input_tokens, self.output_tokens, self.total_tokens, self.estimated_cost)
+        ):
+            raise ValueError("unavailable usage cannot be represented as measured usage or cost")
+        if failed_response and self.usage_available is False and self.unknown_cost <= 0:
+            raise ValueError(
+                "unavailable returned-response usage requires conservative unknown cost"
+            )
+        if failed_response and self.usage_available is True and self.unknown_cost != 0:
+            raise ValueError("authoritative returned-response usage cannot retain unknown cost")
 
 
 @dataclass(frozen=True, slots=True)
@@ -490,7 +651,10 @@ class KnownFailedAgentRun:
 def classify_stranded_attempt(attempt: ModelAttempt) -> RecoveryClassification:
     if attempt.status is ModelAttemptStatus.CLAIMED:
         return RecoveryClassification.SAFE_BEFORE_PROVIDER
-    if attempt.status is ModelAttemptStatus.RESPONSE_RECORDED:
+    if attempt.status in {
+        ModelAttemptStatus.RESPONSE_RECORDED,
+        ModelAttemptStatus.FAILED_RESPONSE,
+    }:
         return RecoveryClassification.RESPONSE_RECORDED
     return RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN
 

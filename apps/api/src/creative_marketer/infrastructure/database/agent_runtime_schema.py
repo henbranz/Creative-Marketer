@@ -1,4 +1,14 @@
-from sqlalchemy import BigInteger, Column, DateTime, Integer, MetaData, Numeric, String, Table
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Integer,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from creative_marketer.infrastructure.database.schema import NAMING_CONVENTION
@@ -102,6 +112,9 @@ model_attempts = Table(
     Column("estimated_cost", Numeric(19, 6), nullable=False),
     Column("unknown_cost", Numeric(19, 6), nullable=False),
     Column("failure_code", String(100)),
+    Column("provider_response_status", String(32)),
+    Column("provider_failure_reason", String(64)),
+    Column("usage_available", Boolean),
     schema="agent_runtime",
 )
 

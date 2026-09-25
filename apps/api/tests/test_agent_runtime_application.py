@@ -61,6 +61,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelAttempt,
     ModelAttemptStatus,
     ModelContext,
+    ModelIncompleteResponse,
     ModelInvocationResult,
     ModelProviderBadRequest,
     ModelProviderSchemaUnsupported,
@@ -70,9 +71,12 @@ from creative_marketer.agent_runtime.domain import (
     ModelRouteUnavailable,
     ModelTimeout,
     ModelUsage,
+    ProviderFailureReason,
+    ProviderResponseStatus,
     RecoveryAgentUnavailable,
     RecoveryBlockedBudget,
     ResearchSnapshot,
+    ReturnedProviderResponse,
     StrandedAgentRun,
     UnknownCostReconciliationConflict,
     canonical_digest,
@@ -534,6 +538,30 @@ class MemoryRepository:
             output_tokens=result.usage.output_tokens,
             total_tokens=result.usage.total_tokens,
             estimated_cost=cost,
+            provider_response_status=ProviderResponseStatus.COMPLETED,
+            usage_available=True,
+        )
+        self.attempts[attempt_id] = value
+        return value
+
+    async def record_returned_provider_response(
+        self, run_id, attempt_id, workload_id, response, cost
+    ):
+        attempt = self.attempts[attempt_id]
+        assert attempt.agent_run_id == run_id and attempt.workload_id == workload_id
+        usage = response.usage
+        value = replace(
+            attempt,
+            status=ModelAttemptStatus.RESPONSE_RECORDED,
+            response_recorded_at=datetime.now(UTC),
+            provider_response_id=response.provider_response_id,
+            input_tokens=usage.input_tokens if usage else 0,
+            output_tokens=usage.output_tokens if usage else 0,
+            total_tokens=usage.total_tokens if usage else 0,
+            estimated_cost=cost if usage else Decimal("0"),
+            provider_response_status=response.status,
+            provider_failure_reason=response.failure_reason,
+            usage_available=usage is not None,
         )
         self.attempts[attempt_id] = value
         return value
@@ -617,23 +645,38 @@ class MemoryRepository:
         *,
         failure_code,
         result=None,
+        returned_response=None,
         cost=Decimal("0"),
         attempt_id,
         workload_id,
     ):
         attempt = self.attempts[attempt_id]
         assert attempt.workload_id == workload_id
+        unknown_cost = (
+            run.reserved_cost
+            if returned_response is not None and returned_response.usage is None
+            else Decimal("0")
+        )
         self.attempts[attempt_id] = replace(
             attempt,
             status=(
                 ModelAttemptStatus.SUCCEEDED
                 if result is not None
+                else ModelAttemptStatus.FAILED_RESPONSE
+                if returned_response is not None
                 else ModelAttemptStatus.FAILED_NO_RESPONSE
             ),
             finished_at=datetime.now(UTC),
             failure_code=failure_code,
+            unknown_cost=unknown_cost,
         )
-        usage = result.usage if result else ModelUsage(0, 0, 0)
+        usage = (
+            result.usage
+            if result
+            else returned_response.usage
+            if returned_response and returned_response.usage
+            else ModelUsage(0, 0, 0)
+        )
         value = replace(
             run,
             status=AgentRunStatus.FAILED,
@@ -643,6 +686,13 @@ class MemoryRepository:
             output_tokens=usage.output_tokens,
             total_tokens=usage.total_tokens,
             estimated_cost=cost,
+            provider_response_id=(
+                result.provider_response_id
+                if result
+                else returned_response.provider_response_id
+                if returned_response
+                else None
+            ),
         )
         self.runs[run.id] = value
         return value
@@ -661,12 +711,16 @@ class MemoryRepository:
             (item for item in self.attempts.values() if item.agent_run_id == run.id), None
         )
         if attempt is None or not (
-            attempt.status is ModelAttemptStatus.UNKNOWN or attempt.lease_expires_at <= now
+            attempt.status is ModelAttemptStatus.UNKNOWN
+            or (attempt.status is ModelAttemptStatus.FAILED_RESPONSE and attempt.unknown_cost > 0)
+            or attempt.lease_expires_at <= now
         ):
             return run
         classification = classify_stranded_attempt(attempt).value
         original_unknown = (
-            attempt.unknown_cost or run.reserved_cost
+            attempt.unknown_cost
+            if attempt.status is ModelAttemptStatus.FAILED_RESPONSE
+            else attempt.unknown_cost or run.reserved_cost
             if classification == "PROVIDER_OUTCOME_UNKNOWN"
             else Decimal("0")
         )
@@ -782,7 +836,14 @@ class MemoryRepository:
         if self.reconciliations:
             raise UnknownCostReconciliationConflict("already reconciled")
         attempt = next(item for item in self.attempts.values() if item.agent_run_id == run.id)
-        if attempt.status is not ModelAttemptStatus.UNKNOWN or attempt.unknown_cost <= 0:
+        if (
+            attempt.status
+            not in {
+                ModelAttemptStatus.UNKNOWN,
+                ModelAttemptStatus.FAILED_RESPONSE,
+            }
+            or attempt.unknown_cost <= 0
+        ):
             raise UnknownCostReconciliationConflict("no unknown cost")
         self.reconciliations.append((run.id, actual_cost, workload_id))
 
@@ -1848,6 +1909,106 @@ async def test_provider_failures_are_bounded_and_become_ambiguous_after_start(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("error_type", "failure_code", "reason"),
+    [
+        (
+            ModelIncompleteResponse,
+            "MODEL_PROVIDER_INCOMPLETE_RESPONSE",
+            ProviderFailureReason.MAX_OUTPUT_TOKENS,
+        ),
+        (ModelRefusal, "MODEL_REFUSAL", ProviderFailureReason.SAFETY),
+    ],
+)
+async def test_returned_provider_failure_is_recorded_and_settled_without_recovery(
+    error_type, failure_code, reason
+) -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    returned = ReturnedProviderResponse(
+        provider="openai",
+        model="gpt-5.6-sol",
+        status=ProviderResponseStatus.INCOMPLETE,
+        failure_reason=reason,
+        provider_response_id="resp_returned_failure",
+        usage=ModelUsage(100, 50, 150),
+    )
+
+    class ReturnedFailureProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise error_type("returned response", returned_response=returned)
+
+    provider = ReturnedFailureProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key=failure_code
+    )
+
+    failed = await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == failure_code
+    assert failed.provider_response_id == "resp_returned_failure"
+    assert failed.input_tokens == 100 and failed.output_tokens == 50
+    assert failed.estimated_cost == Decimal("0.001400")
+    assert attempt.status is ModelAttemptStatus.FAILED_RESPONSE
+    assert attempt.provider_response_id == "resp_returned_failure"
+    assert attempt.provider_response_status is ProviderResponseStatus.INCOMPLETE
+    assert attempt.provider_failure_reason is reason
+    assert attempt.usage_available is True
+    assert attempt.unknown_cost == 0
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_returned_response_without_usage_preserves_bounded_cost_uncertainty() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    returned = ReturnedProviderResponse(
+        provider="openai",
+        model="gpt-5.6-sol",
+        status=ProviderResponseStatus.FAILED,
+        failure_reason=ProviderFailureReason.PROVIDER_FAILED,
+        provider_response_id="resp_usage_unavailable",
+    )
+
+    class ReturnedFailureProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelIncompleteResponse("returned response", returned_response=returned)
+
+    provider = ReturnedFailureProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="returned-no-usage"
+    )
+
+    failed = await runtime.execute(tenant_id, requested.id)
+    operational = await runtime.get_run(context(tenant_id), failed.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.estimated_cost == 0
+    assert attempt.status is ModelAttemptStatus.FAILED_RESPONSE
+    assert attempt.usage_available is False
+    assert attempt.unknown_cost == failed.reserved_cost
+    assert operational.operational_status == "normal"
+    assert operational.is_stranded is False
+    assert operational.remaining_unknown_cost == failed.reserved_cost
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("error", "failure_code", "expected_calls"),
     [
         (ModelProviderBadRequest("bad request"), "MODEL_PROVIDER_BAD_REQUEST", 1),
@@ -2075,6 +2236,12 @@ async def _stranded(
         estimated_cost=(
             Decimal("0.000800") if status is ModelAttemptStatus.RESPONSE_RECORDED else Decimal("0")
         ),
+        provider_response_status=(
+            ProviderResponseStatus.COMPLETED
+            if status is ModelAttemptStatus.RESPONSE_RECORDED
+            else None
+        ),
+        usage_available=True if status is ModelAttemptStatus.RESPONSE_RECORDED else None,
     )
     repository.attempts[attempt.id] = attempt
     return StrandedAgentRun(run, attempt, classify_stranded_attempt(attempt))
@@ -2432,6 +2599,8 @@ async def test_known_failure_retry_rejects_uncertain_response_and_nonzero_usage(
             input_tokens=1,
             total_tokens=1,
             estimated_cost=Decimal("0.000004"),
+            provider_response_status=ProviderResponseStatus.COMPLETED,
+            usage_available=True,
         ),
         replace(
             attempt,

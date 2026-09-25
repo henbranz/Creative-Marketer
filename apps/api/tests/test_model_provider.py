@@ -22,9 +22,12 @@ from creative_marketer.agent_runtime.domain import (
     ModelInvocation,
     ModelProviderAuthenticationFailed,
     ModelProviderBadRequest,
+    ModelProviderCancelledResponse,
     ModelProviderConflict,
     ModelProviderConnectionFailed,
     ModelProviderError,
+    ModelProviderFailedResponse,
+    ModelProviderInvalidResponse,
     ModelProviderModelUnavailable,
     ModelProviderPermissionDenied,
     ModelProviderSchemaUnsupported,
@@ -32,6 +35,8 @@ from creative_marketer.agent_runtime.domain import (
     ModelRateLimited,
     ModelRefusal,
     ModelTimeout,
+    ProviderFailureReason,
+    ProviderResponseStatus,
 )
 from creative_marketer.infrastructure.model_providers.asset_images import (
     DatabaseObjectStoreImageMaterializer,
@@ -287,13 +292,20 @@ async def test_openai_adapter_classifies_http_failures_without_leaking_payload(
 @pytest.mark.asyncio
 async def test_openai_adapter_rejects_refusal_and_invalid_json() -> None:
     refused = SimpleNamespace(
-        status="incomplete", incomplete_details=SimpleNamespace(reason="content_filter")
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="content_filter"),
+        id="resp_safety",
+        model="gpt-5.6-sol",
+        usage=SimpleNamespace(input_tokens=30, output_tokens=4, total_tokens=34),
     )
     client, _ = client_with(refused)
-    with pytest.raises(ModelRefusal):
+    with pytest.raises(ModelRefusal) as refusal:
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+    assert refusal.value.returned_response is not None
+    assert refusal.value.returned_response.failure_reason is ProviderFailureReason.SAFETY
+    assert refusal.value.returned_response.provider_response_id == "resp_safety"
     invalid = SimpleNamespace(
         status="completed",
         output_text="not-json",
@@ -302,22 +314,37 @@ async def test_openai_adapter_rejects_refusal_and_invalid_json() -> None:
         model="gpt-5.6-sol",
     )
     client, _ = client_with(invalid)
-    with pytest.raises(InvalidModelOutput):
+    with pytest.raises(InvalidModelOutput) as invalid_output:
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+    assert invalid_output.value.returned_response is not None
+    assert (
+        invalid_output.value.returned_response.failure_reason
+        is ProviderFailureReason.INVALID_OUTPUT
+    )
 
 
 @pytest.mark.asyncio
 async def test_openai_adapter_rejects_incomplete_output_blocks_and_missing_text() -> None:
     incomplete = SimpleNamespace(
-        status="incomplete", incomplete_details=SimpleNamespace(reason="max_output_tokens")
+        status="incomplete",
+        incomplete_details=SimpleNamespace(reason="max_output_tokens"),
+        id="resp_incomplete",
+        model="gpt-5.6-sol",
+        usage=SimpleNamespace(input_tokens=100, output_tokens=8_000, total_tokens=8_100),
     )
     client, _ = client_with(incomplete)
-    with pytest.raises(ModelIncompleteResponse):
+    with pytest.raises(ModelIncompleteResponse) as caught:
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+    returned = caught.value.returned_response
+    assert returned is not None
+    assert returned.provider_response_id == "resp_incomplete"
+    assert returned.status is ProviderResponseStatus.INCOMPLETE
+    assert returned.failure_reason is ProviderFailureReason.MAX_OUTPUT_TOKENS
+    assert returned.usage is not None and returned.usage.total_tokens == 8_100
 
     refusal = SimpleNamespace(
         status="completed",
@@ -335,6 +362,62 @@ async def test_openai_adapter_rejects_incomplete_output_blocks_and_missing_text(
         await OpenAIResponsesModelProvider(
             "unit-live-credential", client=client
         ).generate_structured(invocation())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "error_type", "reason"),
+    [
+        ("failed", ModelProviderFailedResponse, ProviderFailureReason.PROVIDER_FAILED),
+        (
+            "cancelled",
+            ModelProviderCancelledResponse,
+            ProviderFailureReason.PROVIDER_CANCELLED,
+        ),
+    ],
+)
+async def test_openai_adapter_preserves_returned_failed_and_cancelled_metadata(
+    status, error_type, reason
+) -> None:
+    response = SimpleNamespace(
+        status=status,
+        incomplete_details=None,
+        id=f"resp_{status}",
+        model="gpt-5.6-sol",
+        usage=None,
+    )
+    client, _ = client_with(response)
+    with pytest.raises(error_type) as caught:
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+    returned = caught.value.returned_response
+    assert returned is not None
+    assert returned.provider_response_id == f"resp_{status}"
+    assert returned.failure_reason is reason
+    assert returned.usage is None
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_preserves_completed_response_with_unavailable_usage() -> None:
+    response = SimpleNamespace(
+        status="completed",
+        output=(),
+        output_text="{}",
+        id="resp_completed_no_usage",
+        model="gpt-5.6-sol",
+        usage=None,
+    )
+    client, _ = client_with(response)
+    with pytest.raises(ModelProviderInvalidResponse) as caught:
+        await OpenAIResponsesModelProvider(
+            "unit-live-credential", client=client
+        ).generate_structured(invocation())
+    returned = caught.value.returned_response
+    assert returned is not None
+    assert returned.status is ProviderResponseStatus.COMPLETED
+    assert returned.failure_reason is ProviderFailureReason.USAGE_UNAVAILABLE
+    assert returned.usage is None
 
 
 @pytest.mark.asyncio

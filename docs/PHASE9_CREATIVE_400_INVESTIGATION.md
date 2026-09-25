@@ -346,3 +346,67 @@ Testing uses mock providers and isolated test infrastructure only. Commit/push i
 the final SHA and CI outcome are reported in the task handoff. This does not authorize live inference.
 
 EXACT SCHEMA ROOT CAUSE CONFIRMED — READY FOR CONTROLLED LIVE RETRY
+
+## 9. Returned incomplete-response semantics (2026-09-25)
+
+This incident is separate from the historical HTTP 400 schema rejection above. The schema A/B/A
+finding remains resolved and the normalized Creative schema still passes the deterministic local
+compatibility gate. Two later live Creative attempts entered
+`MODEL_PROVIDER_INCOMPLETE_RESPONSE`; no new generation was used to investigate them.
+
+The exact control-flow defect was confirmed offline. `OpenAIResponsesModelProvider` obtained an
+authoritative Response, raised before constructing `ModelInvocationResult`, and discarded response
+ID/status/usage/reason. `ModelIncompleteResponse` then used the outcome-unknown disposition.
+`AgentRunService`, seeing `PROVIDER_STARTED`, `result=None`, and no known-no-response disposition,
+persisted `UNKNOWN`. Thus a potentially known returned response was represented as transport
+ambiguity. Mock Responses and runtime regressions reproduce the old boundary without network I/O.
+
+ADR-046 introduces finite provider-neutral returned-response metadata and `FAILED_RESPONSE`.
+Future returned `incomplete`, `failed`, `cancelled`, completed refusal, and completed invalid-output
+responses are checkpointed before terminal failure. Available usage settles through frozen pricing;
+missing usage is explicitly marked unavailable and keeps a conservative unknown-cost amount without
+claiming provider-outcome ambiguity. True timeout/connection ambiguity remains `UNKNOWN`. No existing
+row is rewritten.
+
+The exact successor reconstruction for run `eb1a4920-3461-4e47-a86b-2b936959c090` used the normal
+repository, capability, schema normalization, adapter, and SDK serialization paths inside a read-only
+transaction and in-memory mock HTTP transport:
+
+| Field | Bounded reconstruction |
+| --- | --- |
+| Provider / model | `openai` / `gpt-5.6-sol` |
+| Route / pricing | `openai-gpt-5.6-sol-creative-2026-09-13` / `openai-gpt-5.6-sol-2026-09-13` |
+| Reasoning / output / total cap | `high` / 8,000 / 32,000 |
+| Output contract | `creative_creative_concept_set_v1` |
+| Context | `creative_strategy.v1` |
+| Normalized schema | digest `sha256:fdd66e5b82b66859a82ef2560b7a19f827e67750a408e4866c4820ea4f5414bf`; 5,430 bytes |
+| Input bound | 21,324 (current configured input allowance: 24,000) |
+| Product snapshot | `4117ec57-cfdc-4158-8104-cc80de810f43` / `sha256:f5985c2a52e8a617a14fd811072ea373671d1a36c2f499f634509a229b0df138` |
+| Research snapshot | `b8db7514-7b8e-4709-8e86-567472ef337a` / `sha256:92a84590ab5289554438262989369b5a431724cd2c9d5ba7092812884b555d9f` |
+| Request | 5 concepts / `ORGANIC_SHORT_FORM` |
+| Gate | PASS locally; provider acceptance unverified; retry not authorized |
+
+The historical reason is not recoverable from durable state. `max_output_tokens` is the leading
+offline hypothesis because both attempts reached the returned-incomplete path, the route combines
+high reasoning with a five-concept strict output, and OpenAI counts reasoning plus visible output
+inside the 8,000-token cap. Safety filtering, provider-reported failure/cancellation, or another
+allowlisted incomplete reason remain plausible. Repetition strengthens the headroom hypothesis but
+does not prove the historical `incomplete_details.reason`.
+
+Architecture-safe route options preserve the existing 24,000-token input admission allowance. At
+the frozen USD 4/M input and USD 20/M output pricing, higher caps require both larger per-run and
+daily budgets; none is applied here.
+
+| Output cap | Total envelope | Worst USD/run | 20-run daily budget | Existing USD 5.12/day fits? |
+| ---: | ---: | ---: | ---: | --- |
+| 8,000 | 32,000 | 0.256 | 5.12 | Yes (current) |
+| 12,000 | 36,000 | 0.336 | 6.72 | No |
+| 16,000 | 40,000 | 0.416 | 8.32 | No |
+| 25,000 | 49,000 | 0.596 | 11.92 | No |
+
+The predecessor `71249591-d9ac-4f57-9235-cb234f5a20d1` / attempt
+`c191b140-56d2-4184-8537-6e8037c7e436` remains `FAILED` / `UNKNOWN` with USD 0.256000 unknown cost.
+The successor `eb1a4920-3461-4e47-a86b-2b936959c090` / attempt
+`d50fa520-6b10-4cad-98f9-04dfc7eb05e7` remains `RUNNING` / `UNKNOWN`, operationally recovery-required,
+with USD 0.256000 unknown cost. Their response IDs, usage, exact statuses, and reasons remain
+unknowable from stored evidence. No reconciliation or successor was created.

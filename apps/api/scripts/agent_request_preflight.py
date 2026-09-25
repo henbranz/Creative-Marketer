@@ -20,7 +20,7 @@ from creative_marketer.agent_runtime.application import (
     default_capability_registry,
     initial_agent_model_routes,
 )
-from creative_marketer.agent_runtime.domain import ModelInvocation
+from creative_marketer.agent_runtime.domain import ModelInvocation, canonical_digest
 from creative_marketer.infrastructure.database.agent_runtime_repositories import (
     SqlAlchemyAgentRunRepository,
 )
@@ -200,6 +200,7 @@ async def inspect_invocation(
     return {
         **metadata,
         **captured,
+        "normalized_schema_digest": canonical_digest(provider_schema),
         "estimated_input_bound": input_bound,
         "max_total_tokens": total_limit,
         "local_checks": "PASS",
@@ -268,6 +269,26 @@ async def inspect_run(settings: Settings, tenant_id: UUID, run_id: UUID) -> dict
             else conservative_creative_input_token_bound(context)
         )
         result = await inspect_invocation(invocation, bound, run.max_total_tokens)
+        frozen_context: dict[str, Any] = {
+            "product_snapshot_id": str(run.product_snapshot_id),
+            "product_snapshot_digest": run.product_snapshot_digest,
+        }
+        if run.agent_type == "creative_strategist":
+            safe_refs = {
+                str(item.get("kind")): item
+                for item in run.input_context_refs
+                if item.get("kind") in {"research_snapshot", "strategy_request"}
+            }
+            research = safe_refs.get("research_snapshot", {})
+            request = safe_refs.get("strategy_request", {})
+            frozen_context.update(
+                {
+                    "research_snapshot_id": research.get("id"),
+                    "research_snapshot_digest": research.get("digest"),
+                    "concept_count": request.get("concept_count"),
+                    "channel_intent": request.get("channel_intent"),
+                }
+            )
         await session.rollback()
         return {
             "run_id": str(run_id),
@@ -275,6 +296,7 @@ async def inspect_run(settings: Settings, tenant_id: UUID, run_id: UUID) -> dict
             "route": route.route_version,
             "pricing": route.pricing.version,
             "context_kind": run.input_context_kind,
+            "frozen_context": frozen_context,
             **result,
         }
 

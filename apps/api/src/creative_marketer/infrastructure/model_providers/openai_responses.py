@@ -17,10 +17,13 @@ from creative_marketer.agent_runtime.domain import (
     ModelInvocationResult,
     ModelProviderAuthenticationFailed,
     ModelProviderBadRequest,
+    ModelProviderCancelledResponse,
     ModelProviderConflict,
     ModelProviderConnectionFailed,
     ModelProviderError,
+    ModelProviderFailedResponse,
     ModelProviderHttpError,
+    ModelProviderInvalidResponse,
     ModelProviderModelUnavailable,
     ModelProviderPermissionDenied,
     ModelProviderServerError,
@@ -28,6 +31,9 @@ from creative_marketer.agent_runtime.domain import (
     ModelRefusal,
     ModelTimeout,
     ModelUsage,
+    ProviderFailureReason,
+    ProviderResponseStatus,
+    ReturnedProviderResponse,
 )
 from creative_marketer.infrastructure.model_providers.openai_diagnostics import (
     provider_rejection,
@@ -191,25 +197,54 @@ class OpenAIResponsesModelProvider:
         if response.status in {"failed", "cancelled", "incomplete"}:
             details = getattr(response, "incomplete_details", None)
             reason = getattr(details, "reason", None)
+            returned = _returned_response(response, invocation.route.model)
             if reason in {"content_filter", "safety"}:
-                raise ModelRefusal("model refused the request")
-            raise ModelIncompleteResponse("OpenAI did not complete the response")
+                raise ModelRefusal("model refused the request", returned_response=returned)
+            if response.status == "failed":
+                raise ModelProviderFailedResponse(
+                    "OpenAI returned a failed response", returned_response=returned
+                )
+            if response.status == "cancelled":
+                raise ModelProviderCancelledResponse(
+                    "OpenAI returned a cancelled response", returned_response=returned
+                )
+            raise ModelIncompleteResponse(
+                "OpenAI did not complete the response", returned_response=returned
+            )
         if any(
             getattr(content, "type", None) == "refusal"
             for item in getattr(response, "output", ())
             for content in getattr(item, "content", ())
         ):
-            raise ModelRefusal("model refused the request")
+            raise ModelRefusal(
+                "model refused the request",
+                returned_response=_returned_response(
+                    response,
+                    invocation.route.model,
+                    forced_reason=ProviderFailureReason.SAFETY,
+                ),
+            )
         try:
             output = json.loads(response.output_text)
         except (TypeError, json.JSONDecodeError) as error:
-            raise InvalidModelOutput("OpenAI returned invalid structured output") from error
-        usage = response.usage
-        normalized = ModelUsage(
-            input_tokens=int(usage.input_tokens),
-            output_tokens=int(usage.output_tokens),
-            total_tokens=int(usage.total_tokens),
-        )
+            raise InvalidModelOutput(
+                "OpenAI returned invalid structured output",
+                returned_response=_returned_response(
+                    response,
+                    invocation.route.model,
+                    forced_reason=ProviderFailureReason.INVALID_OUTPUT,
+                ),
+            ) from error
+        normalized = _response_usage(response)
+        if normalized is None:
+            raise ModelProviderInvalidResponse(
+                "OpenAI returned a completed response without valid usage",
+                returned_response=_returned_response(
+                    response,
+                    invocation.route.model,
+                    forced_reason=ProviderFailureReason.USAGE_UNAVAILABLE,
+                ),
+            )
         return ModelInvocationResult(
             output=output,
             provider_response_id=str(response.id),
@@ -218,3 +253,61 @@ class OpenAIResponsesModelProvider:
             model=str(response.model),
             status=str(response.status),
         )
+
+
+def _returned_response(
+    response: Any,
+    frozen_model: str,
+    *,
+    forced_reason: ProviderFailureReason | None = None,
+) -> ReturnedProviderResponse:
+    """Map an SDK response to finite safe metadata; never retain arbitrary provider text."""
+
+    status = ProviderResponseStatus(str(response.status))
+    details = getattr(response, "incomplete_details", None)
+    raw_reason = getattr(details, "reason", None)
+    if forced_reason is not None:
+        reason = forced_reason
+    elif raw_reason == "max_output_tokens":
+        reason = ProviderFailureReason.MAX_OUTPUT_TOKENS
+    elif raw_reason in {"content_filter", "safety"}:
+        reason = ProviderFailureReason.SAFETY
+    elif status is ProviderResponseStatus.FAILED:
+        reason = ProviderFailureReason.PROVIDER_FAILED
+    elif status is ProviderResponseStatus.CANCELLED:
+        reason = ProviderFailureReason.PROVIDER_CANCELLED
+    else:
+        reason = ProviderFailureReason.OTHER
+
+    usage = _response_usage(response)
+
+    raw_id = getattr(response, "id", None)
+    response_id = str(raw_id) if raw_id is not None else None
+    if response_id is not None and len(response_id) > 256:
+        response_id = None
+    raw_model = getattr(response, "model", None)
+    model = str(raw_model) if raw_model is not None else frozen_model
+    if not model.strip() or len(model) > 128:
+        model = frozen_model
+    return ReturnedProviderResponse(
+        provider="openai",
+        model=model,
+        status=status,
+        failure_reason=reason,
+        provider_response_id=response_id,
+        usage=usage,
+    )
+
+
+def _response_usage(response: Any) -> ModelUsage | None:
+    raw_usage = getattr(response, "usage", None)
+    if raw_usage is None:
+        return None
+    try:
+        return ModelUsage(
+            input_tokens=int(raw_usage.input_tokens),
+            output_tokens=int(raw_usage.output_tokens),
+            total_tokens=int(raw_usage.total_tokens),
+        )
+    except (AttributeError, TypeError, ValueError):
+        return None

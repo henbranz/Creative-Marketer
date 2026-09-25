@@ -38,12 +38,16 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunStatus,
     BudgetExceeded,
     ModelAttemptStatus,
+    ModelIncompleteResponse,
     ModelInvocationResult,
     ModelProviderBadRequest,
     ModelUsage,
+    ProviderFailureReason,
+    ProviderResponseStatus,
     RecoveryAgentUnavailable,
     RecoveryBlockedBudget,
     RecoveryClassification,
+    ReturnedProviderResponse,
     UnknownCostReconciliationConflict,
 )
 from creative_marketer.catalog.application import CatalogService
@@ -309,6 +313,149 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
     assert attempt.unknown_cost == 0
     assert attempt.input_tokens == attempt.output_tokens == 0
     assert attempt.failure_code == "MODEL_PROVIDER_BAD_REQUEST"
+
+    class ReturnedIncompleteProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelIncompleteResponse(
+                "bounded returned response",
+                returned_response=ReturnedProviderResponse(
+                    provider="openai",
+                    model="gpt-5.6-sol",
+                    status=ProviderResponseStatus.INCOMPLETE,
+                    failure_reason=ProviderFailureReason.MAX_OUTPUT_TOKENS,
+                    provider_response_id="resp_integration_incomplete",
+                    usage=ModelUsage(100, 50, 150),
+                ),
+            )
+
+    returned_provider = ReturnedIncompleteProvider()
+    returned_service = AgentRunService(
+        uows,
+        ModelRouter((initial_researcher_route(),)),
+        ModelProviderRegistry({"openai": returned_provider}),
+        IdentityProvider(),
+    )
+    returned_run = await returned_service.request_researcher(
+        context, product_id=product.id, idempotency_key="returned-incomplete-response"
+    )
+    returned_failed = await returned_service.execute(context.tenant_id, returned_run.id)
+    assert returned_failed.status is AgentRunStatus.FAILED
+    assert returned_failed.failure_code == "MODEL_PROVIDER_INCOMPLETE_RESPONSE"
+    assert returned_failed.provider_response_id == "resp_integration_incomplete"
+    assert returned_failed.estimated_cost == Decimal("0.001400")
+    assert returned_provider.calls == 1
+    async with admin_engine.connect() as connection:
+        returned_attempt = (
+            await connection.execute(
+                text(
+                    "SELECT status, provider_response_id, provider_response_status, "
+                    "provider_failure_reason, usage_available, input_tokens, output_tokens, "
+                    "estimated_cost, unknown_cost FROM agent_runtime.model_attempts "
+                    "WHERE agent_run_id=:run"
+                ),
+                {"run": returned_run.id},
+            )
+        ).one()
+        budget = (
+            await connection.execute(
+                text(
+                    "SELECT reserved_cost, actual_cost, unknown_cost FROM "
+                    "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
+                    "AND agent_definition_id=:definition AND period_start=:period"
+                ),
+                {
+                    "tenant": context.tenant_id,
+                    "definition": definition.id,
+                    "period": returned_run.period_start,
+                },
+            )
+        ).one()
+    assert returned_attempt.status == ModelAttemptStatus.FAILED_RESPONSE.value
+    assert returned_attempt.provider_response_id == "resp_integration_incomplete"
+    assert returned_attempt.provider_response_status == ProviderResponseStatus.INCOMPLETE.value
+    assert returned_attempt.provider_failure_reason == ProviderFailureReason.MAX_OUTPUT_TOKENS.value
+    assert returned_attempt.usage_available is True
+    assert returned_attempt.input_tokens == 100 and returned_attempt.output_tokens == 50
+    assert returned_attempt.estimated_cost == Decimal("0.001400")
+    assert returned_attempt.unknown_cost == 0
+    assert budget.reserved_cost == 0
+    assert budget.actual_cost == Decimal("0.015400")
+    assert budget.unknown_cost == 0
+
+    class ReturnedWithoutUsageProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise ModelIncompleteResponse(
+                "bounded returned response without usage",
+                returned_response=ReturnedProviderResponse(
+                    provider="openai",
+                    model="gpt-5.6-sol",
+                    status=ProviderResponseStatus.FAILED,
+                    failure_reason=ProviderFailureReason.PROVIDER_FAILED,
+                    provider_response_id="resp_integration_usage_unavailable",
+                ),
+            )
+
+    no_usage_provider = ReturnedWithoutUsageProvider()
+    no_usage_service = AgentRunService(
+        uows,
+        ModelRouter((initial_researcher_route(),)),
+        ModelProviderRegistry({"openai": no_usage_provider}),
+        IdentityProvider(),
+    )
+    no_usage_run = await no_usage_service.request_researcher(
+        context, product_id=product.id, idempotency_key="returned-response-no-usage"
+    )
+    no_usage_failed = await no_usage_service.execute(context.tenant_id, no_usage_run.id)
+    no_usage_operational = await no_usage_service.get_run(context, no_usage_run.id)
+    assert no_usage_failed.status is AgentRunStatus.FAILED
+    assert no_usage_failed.estimated_cost == 0
+    assert no_usage_operational.operational_status == "normal"
+    assert no_usage_operational.is_stranded is False
+    assert no_usage_operational.remaining_unknown_cost == no_usage_run.reserved_cost
+    assert no_usage_provider.calls == 1
+    async with admin_engine.connect() as connection:
+        no_usage_attempt = (
+            await connection.execute(
+                text(
+                    "SELECT status, usage_available, estimated_cost, unknown_cost "
+                    "FROM agent_runtime.model_attempts WHERE agent_run_id=:run"
+                ),
+                {"run": no_usage_run.id},
+            )
+        ).one()
+        uncertain_budget = (
+            await connection.execute(
+                text(
+                    "SELECT reserved_cost, actual_cost, unknown_cost FROM "
+                    "agent_runtime.agent_budget_usage WHERE tenant_id=:tenant "
+                    "AND agent_definition_id=:definition AND period_start=:period"
+                ),
+                {
+                    "tenant": context.tenant_id,
+                    "definition": definition.id,
+                    "period": no_usage_run.period_start,
+                },
+            )
+        ).one()
+    assert no_usage_attempt.status == ModelAttemptStatus.FAILED_RESPONSE.value
+    assert no_usage_attempt.usage_available is False
+    assert no_usage_attempt.estimated_cost == 0
+    assert no_usage_attempt.unknown_cost == no_usage_run.reserved_cost
+    assert uncertain_budget.reserved_cost == 0
+    assert uncertain_budget.actual_cost == Decimal("0.015400")
+    assert uncertain_budget.unknown_cost == no_usage_run.reserved_cost
 
     recovery = AgentRunRecoveryService(
         uows,

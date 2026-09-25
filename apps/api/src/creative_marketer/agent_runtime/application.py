@@ -110,6 +110,7 @@ from .domain import (
     AgentRuntimeError,
     BudgetExceeded,
     EvidenceBlockRef,
+    InvalidModelOutput,
     KnownFailedAgentRun,
     ModelAttempt,
     ModelCapabilityUnavailable,
@@ -126,6 +127,7 @@ from .domain import (
     RecoveryBlockedBudget,
     RecoveryClassification,
     ResearchSnapshot,
+    ReturnedProviderResponse,
     StrandedAgentRun,
     UnknownCostReconciliationConflict,
     canonical_digest,
@@ -1019,6 +1021,14 @@ class AgentRunRepository(Protocol):
         result: ModelInvocationResult,
         cost: Decimal,
     ) -> ModelAttempt: ...
+    async def record_returned_provider_response(
+        self,
+        run_id: UUID,
+        attempt_id: UUID,
+        workload_id: str,
+        response: ReturnedProviderResponse,
+        cost: Decimal,
+    ) -> ModelAttempt: ...
     async def mark_attempt_unknown(
         self, run_id: UUID, attempt_id: UUID, workload_id: str, failure_code: str
     ) -> ModelAttempt: ...
@@ -1039,6 +1049,7 @@ class AgentRunRepository(Protocol):
         *,
         failure_code: str,
         result: ModelInvocationResult | None = None,
+        returned_response: ReturnedProviderResponse | None = None,
         cost: Decimal = Decimal("0"),
         attempt_id: UUID,
         workload_id: str,
@@ -2732,6 +2743,7 @@ class AgentRunService:
         timer = monotonic()
         run: AgentRun | None = None
         result: ModelInvocationResult | None = None
+        returned_response: ReturnedProviderResponse | None = None
         attempt: ModelAttempt | None = None
         actual_cost = Decimal("0")
         claim_committed = False
@@ -2808,6 +2820,26 @@ class AgentRunService:
                                 "result": error.code.lower(),
                             },
                         )
+                        if error.returned_response is not None:
+                            returned_response = error.returned_response
+                            actual_cost = (
+                                route.pricing.cost(
+                                    returned_response.usage.input_tokens,
+                                    returned_response.usage.output_tokens,
+                                )
+                                if returned_response.usage is not None
+                                else Decimal("0")
+                            )
+                            async with self.uow_factory(tenant_id) as uow:
+                                attempt = await uow.runs.record_returned_provider_response(
+                                    run.id,
+                                    attempt.id,
+                                    workload.workload_id,
+                                    returned_response,
+                                    actual_cost,
+                                )
+                                await uow.commit()
+                            raise
                         if (
                             not error.retryable
                             or transport_attempt == MAX_PROVIDER_TRANSPORT_ATTEMPTS
@@ -2823,6 +2855,29 @@ class AgentRunService:
                         # Only transport outcomes with no response usage are retried. These are
                         # attempts within one bounded logical model call, not an autonomous loop.
                         await asyncio.sleep(0.25 * transport_attempt)
+                    except InvalidModelOutput as error:
+                        span.record_error(error.code)
+                        if error.returned_response is None:
+                            raise
+                        returned_response = error.returned_response
+                        actual_cost = (
+                            route.pricing.cost(
+                                returned_response.usage.input_tokens,
+                                returned_response.usage.output_tokens,
+                            )
+                            if returned_response.usage is not None
+                            else Decimal("0")
+                        )
+                        async with self.uow_factory(tenant_id) as uow:
+                            attempt = await uow.runs.record_returned_provider_response(
+                                run.id,
+                                attempt.id,
+                                workload.workload_id,
+                                returned_response,
+                                actual_cost,
+                            )
+                            await uow.commit()
+                        raise
                     except Exception as error:
                         span.record_error("MODEL_PROVIDER_UNAVAILABLE")
                         raise ModelProviderError("model provider failed") from error
@@ -2899,7 +2954,12 @@ class AgentRunService:
                     isinstance(error, ModelProviderError)
                     and error.disposition is ModelFailureDisposition.KNOWN_NO_RESPONSE
                 )
-                if result is None and provider_started_committed and not known_no_response:
+                if (
+                    result is None
+                    and returned_response is None
+                    and provider_started_committed
+                    and not known_no_response
+                ):
                     async with self.uow_factory(tenant_id) as uow:
                         await uow.runs.mark_attempt_unknown(
                             run.id, attempt.id, workload.workload_id, code
@@ -2918,6 +2978,7 @@ class AgentRunService:
                         run,
                         failure_code=code,
                         result=result,
+                        returned_response=returned_response,
                         cost=actual_cost,
                         attempt_id=attempt.id,
                         workload_id=workload.workload_id,

@@ -502,6 +502,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20260923_0032"]
+    assert script.get_heads() == ["20260925_0033"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

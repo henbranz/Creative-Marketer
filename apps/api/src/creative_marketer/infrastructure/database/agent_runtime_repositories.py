@@ -47,9 +47,12 @@ from creative_marketer.agent_runtime.domain import (
     ModelContext,
     ModelInvocationResult,
     ModelRoute,
+    ProviderFailureReason,
+    ProviderResponseStatus,
     RecommendedSource,
     RecoveryClassification,
     ResearchSnapshot,
+    ReturnedProviderResponse,
     StrandedAgentRun,
     UnknownCostReconciliationConflict,
     canonical_digest,
@@ -384,6 +387,17 @@ def _attempt(row: object) -> ModelAttempt:
         estimated_cost=d["estimated_cost"],
         unknown_cost=d["unknown_cost"],
         failure_code=d["failure_code"],
+        provider_response_status=(
+            ProviderResponseStatus(d["provider_response_status"])
+            if d["provider_response_status"] is not None
+            else None
+        ),
+        provider_failure_reason=(
+            ProviderFailureReason(d["provider_failure_reason"])
+            if d["provider_failure_reason"] is not None
+            else None
+        ),
+        usage_available=d["usage_available"],
     )
 
 
@@ -2033,12 +2047,55 @@ class SqlAlchemyAgentRunRepository:
                     output_tokens=result.usage.output_tokens,
                     total_tokens=result.usage.total_tokens,
                     estimated_cost=cost,
+                    provider_response_status=ProviderResponseStatus.COMPLETED.value,
+                    provider_failure_reason=None,
+                    usage_available=True,
                 )
                 .returning(model_attempts)
             )
         ).first()
         if row is None:
             raise AgentRunRecoveryConflict("late provider response cannot be recorded")
+        return _attempt(row)
+
+    async def record_returned_provider_response(
+        self,
+        run_id: UUID,
+        attempt_id: UUID,
+        workload_id: str,
+        response: ReturnedProviderResponse,
+        cost: Decimal,
+    ) -> ModelAttempt:
+        now = datetime.now(UTC)
+        usage = response.usage
+        row = (
+            await self._session.execute(
+                update(model_attempts)
+                .where(
+                    model_attempts.c.id == attempt_id,
+                    model_attempts.c.agent_run_id == run_id,
+                    model_attempts.c.workload_id == workload_id,
+                    model_attempts.c.status == ModelAttemptStatus.PROVIDER_STARTED.value,
+                    select(agent_runs.c.status).where(agent_runs.c.id == run_id).scalar_subquery()
+                    == AgentRunStatus.RUNNING.value,
+                )
+                .values(
+                    status=ModelAttemptStatus.RESPONSE_RECORDED.value,
+                    response_recorded_at=now,
+                    provider_response_id=response.provider_response_id,
+                    input_tokens=usage.input_tokens if usage is not None else 0,
+                    output_tokens=usage.output_tokens if usage is not None else 0,
+                    total_tokens=usage.total_tokens if usage is not None else 0,
+                    estimated_cost=cost if usage is not None else Decimal("0"),
+                    provider_response_status=response.status.value,
+                    provider_failure_reason=response.failure_reason.value,
+                    usage_available=usage is not None,
+                )
+                .returning(model_attempts)
+            )
+        ).first()
+        if row is None:
+            raise AgentRunRecoveryConflict("returned provider response cannot be recorded")
         return _attempt(row)
 
     async def mark_attempt_unknown(
@@ -3381,11 +3438,14 @@ class SqlAlchemyAgentRunRepository:
         *,
         failure_code: str,
         result: ModelInvocationResult | None = None,
+        returned_response: ReturnedProviderResponse | None = None,
         cost: Decimal = Decimal("0"),
         attempt_id: UUID,
         workload_id: str,
     ) -> AgentRun:
-        usage = result.usage if result else None
+        if result is not None and returned_response is not None:
+            raise ValueError("failure cannot contain two provider response representations")
+        usage = result.usage if result else returned_response.usage if returned_response else None
         now = datetime.now(UTC)
         owned_run = await self._session.scalar(
             select(agent_runs.c.id)
@@ -3400,7 +3460,7 @@ class SqlAlchemyAgentRunRepository:
             raise AgentRunRecoveryConflict("late worker cannot persist AgentRun failure")
         expected_statuses = (
             (ModelAttemptStatus.RESPONSE_RECORDED.value,)
-            if result is not None
+            if result is not None or returned_response is not None
             else (
                 ModelAttemptStatus.CLAIMED.value,
                 ModelAttemptStatus.PROVIDER_STARTED.value,
@@ -3409,7 +3469,14 @@ class SqlAlchemyAgentRunRepository:
         terminal_status = (
             ModelAttemptStatus.SUCCEEDED
             if result is not None
+            else ModelAttemptStatus.FAILED_RESPONSE
+            if returned_response is not None
             else ModelAttemptStatus.FAILED_NO_RESPONSE
+        )
+        unknown_cost = (
+            run.reserved_cost
+            if returned_response is not None and returned_response.usage is None
+            else Decimal("0")
         )
         attempt_row = (
             await self._session.execute(
@@ -3424,6 +3491,7 @@ class SqlAlchemyAgentRunRepository:
                     status=terminal_status.value,
                     finished_at=now,
                     failure_code=failure_code,
+                    unknown_cost=unknown_cost,
                 )
                 .returning(model_attempts.c.id)
             )
@@ -3446,17 +3514,25 @@ class SqlAlchemyAgentRunRepository:
                     output_tokens=usage.output_tokens if usage else 0,
                     total_tokens=usage.total_tokens if usage else 0,
                     estimated_cost=cost,
-                    provider_response_id=result.provider_response_id if result else None,
+                    provider_response_id=(
+                        result.provider_response_id
+                        if result is not None
+                        else returned_response.provider_response_id
+                        if returned_response is not None
+                        else None
+                    ),
                 )
                 .returning(agent_runs)
             )
         ).first()
         if row is None:  # pragma: no cover - protected by the row lock above
             raise AgentRunRecoveryConflict("AgentRun failure transition was lost")
-        await self._settle_budget(run, cost)
+        await self._settle_budget(run, cost, unknown_cost=unknown_cost)
         return _run(row)
 
-    async def _settle_budget(self, run: AgentRun, cost: Decimal) -> None:
+    async def _settle_budget(
+        self, run: AgentRun, cost: Decimal, *, unknown_cost: Decimal = Decimal("0")
+    ) -> None:
         await self._session.execute(
             update(agent_budget_usage)
             .where(
@@ -3466,6 +3542,7 @@ class SqlAlchemyAgentRunRepository:
             .values(
                 reserved_cost=agent_budget_usage.c.reserved_cost - run.reserved_cost,
                 actual_cost=agent_budget_usage.c.actual_cost + cost,
+                unknown_cost=agent_budget_usage.c.unknown_cost + unknown_cost,
                 updated_at=datetime.now(UTC),
             )
         )
@@ -3477,6 +3554,10 @@ class SqlAlchemyAgentRunRepository:
                     model_attempts.c.agent_run_id == run.id,
                     (
                         (model_attempts.c.status == ModelAttemptStatus.UNKNOWN.value)
+                        | (
+                            (model_attempts.c.status == ModelAttemptStatus.FAILED_RESPONSE.value)
+                            & (model_attempts.c.unknown_cost > 0)
+                        )
                         | (
                             (model_attempts.c.lease_expires_at <= now)
                             & model_attempts.c.status.in_(
@@ -3496,7 +3577,9 @@ class SqlAlchemyAgentRunRepository:
         value = _attempt(attempt)
         classification = classify_stranded_attempt(value)
         unknown_cost = (
-            value.unknown_cost or run.reserved_cost
+            value.unknown_cost
+            if value.status is ModelAttemptStatus.FAILED_RESPONSE
+            else value.unknown_cost or run.reserved_cost
             if classification is RecoveryClassification.PROVIDER_OUTCOME_UNKNOWN
             else Decimal("0")
         )
@@ -3758,17 +3841,19 @@ class SqlAlchemyAgentRunRepository:
         actual_cost: Decimal,
         workload_id: str,
     ) -> None:
-        if (
-            stranded_run.status is not AgentRunStatus.FAILED
-            or stranded_run.failure_code != "STRANDED_PROVIDER_OUTCOME_UNKNOWN"
-        ):
+        if stranded_run.status is not AgentRunStatus.FAILED:
             raise UnknownCostReconciliationConflict("run has no reconcilable unknown cost")
         attempt_row = (
             await self._session.execute(
                 select(model_attempts)
                 .where(
                     model_attempts.c.agent_run_id == stranded_run.id,
-                    model_attempts.c.status == ModelAttemptStatus.UNKNOWN.value,
+                    model_attempts.c.status.in_(
+                        [
+                            ModelAttemptStatus.UNKNOWN.value,
+                            ModelAttemptStatus.FAILED_RESPONSE.value,
+                        ]
+                    ),
                     model_attempts.c.unknown_cost > 0,
                 )
                 .with_for_update()
@@ -3777,6 +3862,11 @@ class SqlAlchemyAgentRunRepository:
         if attempt_row is None:
             raise UnknownCostReconciliationConflict("run has no reconcilable unknown cost")
         attempt = _attempt(attempt_row)
+        if (
+            attempt.status is ModelAttemptStatus.UNKNOWN
+            and stranded_run.failure_code != "STRANDED_PROVIDER_OUTCOME_UNKNOWN"
+        ):
+            raise UnknownCostReconciliationConflict("run has no reconcilable unknown cost")
         inserted = (
             await self._session.execute(
                 pg_insert(model_cost_reconciliations)

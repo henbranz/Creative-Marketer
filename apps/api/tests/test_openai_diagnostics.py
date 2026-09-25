@@ -256,6 +256,20 @@ async def test_gate_reads_in_read_only_tenant_transaction_without_claim(monkeypa
         max_output_tokens=8000,
         max_total_tokens=32000,
         input_context_kind="creative_strategy.v1",
+        product_snapshot_id=uuid4(),
+        product_snapshot_digest="sha256:" + "a" * 64,
+        input_context_refs=(
+            {
+                "kind": "research_snapshot",
+                "id": str(uuid4()),
+                "digest": "sha256:" + "b" * 64,
+            },
+            {
+                "kind": "strategy_request",
+                "concept_count": 5,
+                "channel_intent": "ORGANIC_SHORT_FORM",
+            },
+        ),
     )
     session = AsyncMock()
     session.__aenter__.return_value = session
@@ -284,3 +298,6 @@ async def test_gate_reads_in_read_only_tenant_transaction_without_claim(monkeypa
     session.commit.assert_not_called()
     session.rollback.assert_awaited_once()
     assert result["retry_authorized"] is False
+    assert result["normalized_schema_digest"].startswith("sha256:")
+    assert result["frozen_context"]["product_snapshot_id"] == str(run.product_snapshot_id)
+    assert result["frozen_context"]["concept_count"] == 5
