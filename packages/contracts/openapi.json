@@ -2263,6 +2263,19 @@
         "title": "CreativeDecisionState",
         "type": "string"
       },
+      "CreativeReplacementStart": {
+        "additionalProperties": false,
+        "properties": {
+          "transition_id": {
+            "format": "uuid",
+            "title": "Transition Id",
+            "type": "string"
+          }
+        },
+        "required": ["transition_id"],
+        "title": "CreativeReplacementStart",
+        "type": "object"
+      },
       "CreativeRunStart": {
         "additionalProperties": false,
         "properties": {
@@ -13103,6 +13116,117 @@
           }
         },
         "summary": "Start Run",
+        "tags": ["creative"]
+      }
+    },
+    "/v1/products/{product_id}/creative/runs/{failed_run_id}/replacement": {
+      "post": {
+        "operationId": "replace_output_limited_run_v1_products__product_id__creative_runs__failed_run_id__replacement_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "failed_run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Failed Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreativeReplacementStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Output Limited Run",
         "tags": ["creative"]
       }
     },
