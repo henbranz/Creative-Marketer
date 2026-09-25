@@ -140,6 +140,21 @@ run IDs and does not create duplicates. `MODEL_PROVIDER_BACKEND=openai` is requi
 be created or accepted. The approved Concept must belong to the exact session Creative run, and the
 Production Plan must belong to the exact session Producer run.
 
+If the session-bound Creative run has an authoritative incomplete response whose bounded reason is
+`MAX_OUTPUT_TOKENS`, first deploy and run `make creative-strategist-bootstrap` to create/activate the
+newer compatible immutable AgentVersion, then use the explicit operator transition:
+
+```bash
+make live-creative-replace
+```
+
+This command does not invoke a provider or rerun Researcher. The API verifies the failed run and its
+single immutable attempt, confirms a different compatible active route with a larger output limit,
+and admits a fresh normal Creative run through the standard budget and context boundary. The local
+session checkpoint records the prior Creative run only after tenant, Product, stage, and new-run
+provenance pass. Its deterministic transition identity makes repeated commands idempotent. Use
+`make live-e2e-status` to see both the current run and historical Creative/recovery cost lineage.
+
 Review the exact Production Plan and cost in the UI. Human approval creates route-bound
 GenerationJobs. These commands inspect and continue that governed path; they never call a provider
 SDK directly:

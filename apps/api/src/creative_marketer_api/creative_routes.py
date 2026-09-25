@@ -47,6 +47,10 @@ class CreativeRunStart(Contract):
     approved_experiment_proposal_id: UUID | None = None
 
 
+class CreativeReplacementStart(Contract):
+    transition_id: UUID
+
+
 class CreativeConceptResponse(Contract):
     id: UUID
     concept_set_id: UUID
@@ -179,6 +183,31 @@ def create_creative_router(
                 request=CreativeStrategyRequest(value.concept_count, value.channel_intent),
                 idempotency_key=value.idempotency_key,
                 approved_experiment_proposal_id=value.approved_experiment_proposal_id,
+            )
+            return _agent_run(run)
+        except (AgentRuntimeError, CreativeError, ValueError) as error:
+            code = getattr(error, "code", "CREATIVE_INVALID_REQUEST")
+            raise HTTPException(
+                status_code=403 if "DENIED" in code else 409, detail=code.lower()
+            ) from error
+
+    @router.post(
+        "/products/{product_id}/creative/runs/{failed_run_id}/replacement",
+        response_model=AgentRunResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def replace_output_limited_run(
+        product_id: UUID,
+        failed_run_id: UUID,
+        value: CreativeReplacementStart,
+        ctx: Context,
+    ) -> AgentRunResponse:
+        try:
+            run = await agent_service.request_creative_replacement(
+                ctx,
+                product_id=product_id,
+                failed_run_id=failed_run_id,
+                transition_id=value.transition_id,
             )
             return _agent_run(run)
         except (AgentRuntimeError, CreativeError, ValueError) as error:

@@ -41,3 +41,7 @@ reasoning effort and budgets remain explicit. Route, pricing, prompt, bootstrap,
 tests must evolve together. Historical UI and Obsidian projections display the model frozen on each
 run, so old Terra/Astra records remain accurate. This ADR supersedes only the current reasoning-route
 parts of ADR-026 and ADR-033; their other boundaries remain in force.
+
+ADR-047 supersedes this ADR only for the current Creative Strategist profile, output/total-token
+limits, and run/daily budget ceilings. The route specified here remains installed as historical
+policy and is not mutated in place.

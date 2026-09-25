@@ -1831,6 +1831,16 @@ class SqlAlchemyAgentRunRepository:
         row = (await self._session.execute(query)).first()
         return _run(row) if row else None
 
+    async def list_attempts(self, run_id: UUID) -> tuple[ModelAttempt, ...]:
+        rows = (
+            await self._session.execute(
+                select(model_attempts)
+                .where(model_attempts.c.agent_run_id == run_id)
+                .order_by(model_attempts.c.attempt_number)
+            )
+        ).all()
+        return tuple(_attempt(row) for row in rows)
+
     async def list_for_product(self, product_id: UUID) -> tuple[AgentRun, ...]:
         rows = (
             await self._session.execute(

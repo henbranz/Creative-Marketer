@@ -309,11 +309,14 @@ Agent Registry remains provider-neutral in Phase 2. A version selects a logical 
 required capabilities, budgets, scopes, and an output contract—not a provider, model name, API key,
 or SDK. AgentRuntime freezes the resolved version and configuration digest into AgentRun, then maps
 the logical profile through independently versioned operational routing.
-## Creative Strategist V1
+## Creative Strategist
 
-The development bootstrap registers `creative_strategist` with the `creative_balanced` logical
-profile, strict `creative.creative_concept_set` V1 output, one turn/model call, zero Tools, no memory,
-and Product/Research/Asset-manifest read scopes only.
+The development bootstrap registers `creative_strategist` with the current
+`creative_balanced_v2` logical profile, strict `creative.creative_concept_set` V1 output, one
+turn/model call, zero Tools, no memory, and Product/Research/Asset-manifest read scopes only. The
+prior `creative_balanced` profile remains installed for immutable historical route resolution; a
+new bootstrap configuration digest creates and activates a new AgentVersion rather than changing
+the earlier version.
 
 ## Producer V1
 

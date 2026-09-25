@@ -105,6 +105,7 @@ def succeeded(identifier, route):
     return {
         "id": identifier,
         "tenant_id": TENANT,
+        "product_id": PRODUCT,
         "status": "SUCCEEDED",
         "resolved_provider": "openai",
         "resolved_model": route.model,
@@ -520,6 +521,152 @@ def test_live_session_adopts_exactly_one_valid_recovery_successor(tmp_path, caps
     assert store.load().creative_run_id == SUCCESSOR
     output = capsys.readouterr().out
     assert SUCCESSOR in output and CREATIVE in output
+
+
+def test_live_creative_replacement_is_explicit_idempotent_and_preserves_history(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(store, researcher_run_id=RESEARCH, creative_run_id=CREATIVE)
+    historical_route = acceptance.frozen_route(
+        recoverable_run(
+            CREATIVE,
+            next(
+                route
+                for route in acceptance.initial_agent_model_routes()
+                if route.profile_key == "creative_balanced"
+            ),
+        ),
+        acceptance.initial_creative_strategist_route(),
+    )
+    failed = recoverable_run(
+        CREATIVE,
+        historical_route,
+        status="FAILED",
+        failure_code="MODEL_PROVIDER_INCOMPLETE_RESPONSE",
+        estimated_cost="0.178964",
+        reserved_cost="0.200000",
+    )
+    current_route = acceptance.initial_creative_strategist_route()
+    replacement = recoverable_run(
+        SUCCESSOR,
+        current_route,
+        status="PENDING",
+        resolved_provider=None,
+        resolved_model=None,
+        model_route_version=None,
+        pricing_version=None,
+        agent_version_id=str(UUID(int=24)),
+        agent_version_number=2,
+        reserved_cost="0.416000",
+    )
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(RESEARCH, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/agent-runs/{CREATIVE}"): failed,
+            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): [failed, replacement],
+            (
+                "POST",
+                f"/v1/products/{PRODUCT}/creative/runs/{CREATIVE}/replacement",
+            ): replacement,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    assert acceptance.replace_output_limited_creative(settings(), store) == 0
+    assert store.load().creative_run_id == SUCCESSOR
+    assert store.load().creative_history_run_ids == [CREATIVE]
+    assert acceptance.replace_output_limited_creative(settings(), store) == 0
+    posts = [call for call in fake.calls if call[0] == "POST"]
+    assert posts == [
+        (
+            "POST",
+            f"/v1/products/{PRODUCT}/creative/runs/{CREATIVE}/replacement",
+            {"transition_id": state.session_id},
+        )
+    ]
+    assert not any(path.endswith("/research/runs") for method, path, _ in posts)
+
+
+def test_live_status_preserves_historical_unknown_and_actual_costs_after_replacement(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=SUCCESSOR,
+        creative_history_run_ids=[CREATIVE],
+    )
+    current_route = acceptance.initial_creative_strategist_route()
+    historical_route = next(
+        route
+        for route in acceptance.initial_agent_model_routes()
+        if route.profile_key == "creative_balanced"
+    )
+    current = recoverable_run(
+        SUCCESSOR,
+        current_route,
+        status="PENDING",
+        resolved_provider=None,
+        resolved_model=None,
+        model_route_version=None,
+        pricing_version=None,
+        estimated_cost="0",
+        reserved_cost="0.416000",
+        agent_version_id=str(UUID(int=24)),
+    )
+    terminal = recoverable_run(
+        CREATIVE,
+        historical_route,
+        status="FAILED",
+        failure_code="MODEL_PROVIDER_INCOMPLETE_RESPONSE",
+        recovery_of_run_id=UNRELATED,
+        estimated_cost="0.178964",
+        unknown_cost="0",
+    )
+    unknown_two = recoverable_run(
+        UNRELATED,
+        historical_route,
+        status="FAILED",
+        recovery_of_run_id=HISTORICAL,
+        estimated_cost="0",
+        unknown_cost="0.256000",
+        remaining_unknown_cost="0.256000",
+    )
+    unknown_one = recoverable_run(
+        HISTORICAL,
+        historical_route,
+        status="FAILED",
+        estimated_cost="0",
+        unknown_cost="0.256000",
+        remaining_unknown_cost="0.256000",
+    )
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                {
+                    **succeeded(RESEARCH, acceptance.initial_researcher_route()),
+                    "estimated_cost": "0",
+                }
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): [current],
+            ("GET", f"/v1/agent-runs/{CREATIVE}"): terminal,
+            ("GET", f"/v1/agent-runs/{UNRELATED}"): unknown_two,
+            ("GET", f"/v1/agent-runs/{HISTORICAL}"): unknown_one,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings, **_kwargs: fake)
+
+    assert acceptance.session_status(settings(), store) == 0
+    output = capsys.readouterr().out
+    assert "historical Creative lineage:" in output
+    assert "immutable original unknown cost: 0.512000 USD" in output
+    assert "Session-bound actual cost: 0.178964 USD" in output
+    assert "Session-bound reserved cost: 0.416000 USD" in output
+    assert "Session-bound unknown potential cost: 0.512000 USD" in output
 
 
 def test_live_session_does_not_adopt_unrelated_recovery_successor(tmp_path) -> None:

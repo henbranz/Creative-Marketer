@@ -121,6 +121,7 @@ async def _main() -> int:
         choices=(
             "preflight",
             "openai-smoke",
+            "creative-replace",
             "image-smoke",
             "seedance-smoke",
             "e2e",
@@ -137,6 +138,8 @@ async def _main() -> int:
     try:
         if command == "openai-smoke":
             return acceptance.openai_smoke(settings)
+        if command == "creative-replace":
+            return acceptance.replace_output_limited_creative(settings)
         if command == "image-smoke":
             return acceptance.media_smoke(settings, "IMAGE")
         if command == "seedance-smoke":

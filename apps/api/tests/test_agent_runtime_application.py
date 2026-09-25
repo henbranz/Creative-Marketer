@@ -37,6 +37,7 @@ from creative_marketer.agent_runtime.application import (
     build_creative_model_context,
     conservative_input_token_bound,
     fit_researcher_evidence,
+    historical_creative_strategist_route,
     initial_agent_model_routes,
     initial_creative_strategist_route,
     initial_intelligence_route,
@@ -421,6 +422,14 @@ class MemoryRepository:
 
     async def get_by_idempotency(self, key):
         return next((run for run in self.runs.values() if run.idempotency_key == key), None)
+
+    async def list_attempts(self, run_id):
+        return tuple(
+            sorted(
+                (value for value in self.attempts.values() if value.agent_run_id == run_id),
+                key=lambda value: value.attempt_number,
+            )
+        )
 
     async def prepare_researcher(self, product_id):
         return self.prepared if self.prepared.product_snapshot.product_id == product_id else None
@@ -923,6 +932,7 @@ def service(prepared, provider):
         ModelRouter(
             (
                 route(),
+                historical_creative_strategist_route(),
                 initial_creative_strategist_route(),
                 initial_intelligence_route(),
                 initial_supervisor_route(),
@@ -1764,6 +1774,225 @@ async def test_creative_request_preflight_fails_closed_and_reuses_active_run() -
         )
 
 
+async def _output_limited_creative_fixture():
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    runtime, repository, _, _ = service(
+        prepared, FakeModelProvider(lambda _invocation: pytest.fail("provider must not run"))
+    )
+    selected = select_evidence_blocks(prepared.evidence)
+    research_run = replace(
+        run(),
+        tenant_id=tenant_id,
+        product_id=product_id,
+        product_snapshot_id=prepared.product_snapshot.id,
+        product_snapshot_digest=prepared.product_snapshot.digest,
+        research_context_digest=prepared.manifest.digest,
+    )
+    snapshot = parse_research_output(
+        output(selected[0]), run=research_run, selected_blocks=selected
+    )
+    old_preparation = creative_preparation(prepared, snapshot)
+    repository.creative_prepared = old_preparation
+    requested = await runtime.request_creative_strategist(
+        context(tenant_id),
+        product_id=product_id,
+        request=CreativeStrategyRequest(5, ChannelIntent.ORGANIC_SHORT_FORM),
+        idempotency_key="historical-creative-8k",
+    )
+    route_8k = historical_creative_strategist_route()
+    at = datetime.now(UTC)
+    attempt = ModelAttempt(
+        tenant_id=tenant_id,
+        agent_run_id=requested.id,
+        attempt_number=1,
+        workload_id="local-live-agent-worker",
+        model_route_version=route_8k.route_version,
+        pricing_version=route_8k.pricing.version,
+        provider=route_8k.provider,
+        model=route_8k.model,
+        claimed_at=at - timedelta(minutes=2),
+        provider_started_at=at - timedelta(minutes=1),
+        response_recorded_at=at,
+        finished_at=at,
+        lease_expires_at=at + timedelta(minutes=13),
+        status=ModelAttemptStatus.FAILED_RESPONSE,
+        provider_response_id="resp_output_limited",
+        input_tokens=4_741,
+        output_tokens=8_000,
+        total_tokens=12_741,
+        estimated_cost=Decimal("0.178964"),
+        provider_response_status=ProviderResponseStatus.INCOMPLETE,
+        provider_failure_reason=ProviderFailureReason.MAX_OUTPUT_TOKENS,
+        usage_available=True,
+        failure_code=ModelIncompleteResponse.code,
+    )
+    failed = replace(
+        requested,
+        status=AgentRunStatus.FAILED,
+        completed_at=at,
+        resolved_provider=route_8k.provider,
+        resolved_model=route_8k.model,
+        resolved_model_route_version=route_8k.route_version,
+        pricing_version=route_8k.pricing.version,
+        max_output_tokens=8_000,
+        model_call_count=1,
+        input_tokens=4_741,
+        output_tokens=8_000,
+        total_tokens=12_741,
+        estimated_cost=Decimal("0.178964"),
+        provider_response_id=attempt.provider_response_id,
+        failure_code=ModelIncompleteResponse.code,
+    )
+    repository.runs[failed.id] = failed
+    repository.attempts[attempt.id] = attempt
+    cfg = replace(
+        old_preparation.strategist.configuration,
+        prompt_revision="creative_strategist_v3_sol_16k_policy",
+        model_policy=ModelPolicy(
+            "creative_balanced_v2", ("reasoning", "structured_output", "text"), 1
+        ),
+        run_budget_policy=RunBudgetPolicy(1, 0, 40_000, Decimal("0.416"), "USD"),
+        period_budget_policy=PeriodBudgetPolicy(BudgetPeriod.DAILY, 20, Decimal("8.32"), "USD"),
+    )
+    repository.creative_prepared = replace(
+        old_preparation,
+        strategist=replace(
+            old_preparation.strategist,
+            version_id=uuid4(),
+            version_number=2,
+            configuration=cfg,
+            configuration_digest=cfg.configuration_digest,
+        ),
+    )
+    return runtime, repository, context(tenant_id), failed, attempt
+
+
+@pytest.mark.asyncio
+async def test_output_limited_creative_replacement_is_fresh_and_idempotent() -> None:
+    (
+        runtime,
+        repository,
+        execution_context,
+        failed,
+        attempt,
+    ) = await _output_limited_creative_fixture()
+    transition_id = uuid4()
+    replacement = await runtime.request_creative_replacement(
+        execution_context,
+        product_id=failed.product_id,
+        failed_run_id=failed.id,
+        transition_id=transition_id,
+    )
+    replay = await runtime.request_creative_replacement(
+        execution_context,
+        product_id=failed.product_id,
+        failed_run_id=failed.id,
+        transition_id=transition_id,
+    )
+
+    assert replay.id == replacement.id
+    assert replacement.id != failed.id
+    assert replacement.recovery_of_run_id is None
+    assert replacement.agent_version_id != failed.agent_version_id
+    assert replacement.model_profile_key == "creative_balanced_v2"
+    assert replacement.max_total_tokens == 40_000
+    assert replacement.reserved_cost == Decimal("0.416")
+    assert replacement.input_context_refs == failed.input_context_refs
+    assert repository.runs[failed.id] == failed
+    assert repository.attempts[attempt.id] == attempt
+    assert len(repository.runs) == 2
+
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=uuid4(),
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+    with pytest.raises(AgentRunNotReady):
+        await runtime.request_creative_replacement(
+            context(uuid4()),
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("run_status", "attempt_status", "response_status", "failure_reason"),
+    (
+        (
+            AgentRunStatus.FAILED,
+            ModelAttemptStatus.FAILED_RESPONSE,
+            ProviderResponseStatus.INCOMPLETE,
+            ProviderFailureReason.SAFETY,
+        ),
+        (AgentRunStatus.FAILED, ModelAttemptStatus.UNKNOWN, None, None),
+        (
+            AgentRunStatus.SUCCEEDED,
+            ModelAttemptStatus.FAILED_RESPONSE,
+            ProviderResponseStatus.INCOMPLETE,
+            ProviderFailureReason.MAX_OUTPUT_TOKENS,
+        ),
+        (
+            AgentRunStatus.PENDING,
+            ModelAttemptStatus.FAILED_RESPONSE,
+            ProviderResponseStatus.INCOMPLETE,
+            ProviderFailureReason.MAX_OUTPUT_TOKENS,
+        ),
+        (
+            AgentRunStatus.RUNNING,
+            ModelAttemptStatus.FAILED_RESPONSE,
+            ProviderResponseStatus.INCOMPLETE,
+            ProviderFailureReason.MAX_OUTPUT_TOKENS,
+        ),
+    ),
+)
+async def test_creative_replacement_rejects_ineligible_state(
+    run_status, attempt_status, response_status, failure_reason
+) -> None:
+    (
+        runtime,
+        repository,
+        execution_context,
+        failed,
+        attempt,
+    ) = await _output_limited_creative_fixture()
+    repository.runs[failed.id] = replace(failed, status=run_status)
+    if attempt_status is ModelAttemptStatus.UNKNOWN:
+        repository.attempts[attempt.id] = replace(
+            attempt,
+            status=attempt_status,
+            response_recorded_at=None,
+            provider_response_status=None,
+            provider_failure_reason=None,
+            usage_available=None,
+            provider_response_id=None,
+            input_tokens=0,
+            output_tokens=0,
+            total_tokens=0,
+            estimated_cost=Decimal("0"),
+            unknown_cost=failed.reserved_cost,
+        )
+    else:
+        repository.attempts[attempt.id] = replace(
+            attempt,
+            status=attempt_status,
+            provider_response_status=response_status,
+            provider_failure_reason=failure_reason,
+        )
+
+    with pytest.raises(AgentRunNotReady, match="replacement"):
+        await runtime.request_creative_replacement(
+            execution_context,
+            product_id=failed.product_id,
+            failed_run_id=failed.id,
+            transition_id=uuid4(),
+        )
+
+
 @pytest.mark.asyncio
 async def test_researcher_rejects_unauthorized_or_unready_requests() -> None:
     tenant_id, product_id = uuid4(), uuid4()
@@ -2414,7 +2643,7 @@ async def test_creative_unknown_recovery_creates_one_frozen_successor_without_pr
         repository,
         requested.id,
         status=ModelAttemptStatus.PROVIDER_STARTED,
-        model_route=initial_creative_strategist_route(),
+        model_route=historical_creative_strategist_route(),
     )
     original = stranded.run
     assert not provider.calls

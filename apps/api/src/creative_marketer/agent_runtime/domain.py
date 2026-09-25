@@ -265,6 +265,10 @@ class AgentRunNotReady(AgentRuntimeError):
     code = "AGENT_RUN_NOT_READY"
 
 
+class CreativeReplacementNotAllowed(AgentRunNotReady):
+    code = "CREATIVE_REPLACEMENT_NOT_ALLOWED"
+
+
 class AgentRunRecoveryRequired(AgentRunNotReady):
     code = "AGENT_RECOVERY_REQUIRED"
 

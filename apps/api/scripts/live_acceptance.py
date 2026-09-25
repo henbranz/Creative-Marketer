@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
 from creative_marketer.agent_runtime.application import (
+    initial_agent_model_routes,
     initial_creative_strategist_route,
     initial_researcher_route,
 )
@@ -81,6 +82,7 @@ class LiveState:
     product_id: str
     researcher_run_id: str | None = None
     creative_run_id: str | None = None
+    creative_history_run_ids: list[str] = field(default_factory=list)
     creative_concept_id: str | None = None
     producer_run_id: str | None = None
     production_plan_id: str | None = None
@@ -91,6 +93,7 @@ class LiveState:
 
 
 FIELDS = set(LiveState.__dataclass_fields__)
+FIELDS_V1 = FIELDS - {"creative_history_run_ids"}
 OPTIONAL_IDS = FIELDS - {
     "version",
     "session_id",
@@ -98,6 +101,7 @@ OPTIONAL_IDS = FIELDS - {
     "product_id",
     "image_job_ids",
     "video_job_ids",
+    "creative_history_run_ids",
 }
 
 
@@ -121,12 +125,19 @@ class StateStore:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID") from None
-        if not isinstance(raw, dict) or set(raw) != FIELDS or raw.get("version") != 1:
+        if not isinstance(raw, dict):
+            raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
+        if set(raw) == FIELDS_V1 and raw.get("version") == 1:
+            raw["version"] = 2
+            raw["creative_history_run_ids"] = []
+        elif set(raw) == FIELDS and raw.get("version") == 1:
+            raw["version"] = 2
+        elif set(raw) != FIELDS or raw.get("version") != 2:
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
         for name in ("session_id", "tenant_id", "product_id", *OPTIONAL_IDS):
             if raw[name] is not None:
                 raw[name] = valid_id(raw[name], name)
-        for name in ("image_job_ids", "video_job_ids"):
+        for name in ("image_job_ids", "video_job_ids", "creative_history_run_ids"):
             if not isinstance(raw[name], list):
                 raise RuntimeError(f"LIVE_VALIDATION_STATE_INVALID_{name.upper()}")
             raw[name] = [valid_id(item, name) for item in raw[name]]
@@ -170,7 +181,7 @@ def session(
 ) -> LiveState | None:
     value = store.load()
     if value is None and create:
-        value = LiveState(1, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
+        value = LiveState(2, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
         store.save(value)
         print(f"Live acceptance session started: {value.session_id}")
     if value is not None and (
@@ -200,6 +211,11 @@ def exact_run(
 
 
 def validate_run_route(run: dict[str, Any], route: ModelRoute) -> None:
+    if (
+        run.get("model_profile_key") is not None
+        and run.get("model_profile_key") != route.profile_key
+    ):
+        raise RuntimeError("LIVE_SESSION_AGENT_RUN_ROUTE_MISMATCH")
     route_values = (
         run.get("resolved_provider"),
         run.get("resolved_model"),
@@ -213,6 +229,25 @@ def validate_run_route(run: dict[str, Any], route: ModelRoute) -> None:
         route.pricing.version,
     ):
         raise RuntimeError("LIVE_SESSION_AGENT_RUN_ROUTE_MISMATCH")
+
+
+def frozen_route(run: dict[str, Any], fallback: ModelRoute) -> ModelRoute:
+    """Resolve current or historical immutable route provenance."""
+
+    profile_key = run.get("model_profile_key")
+    if profile_key is None:
+        validate_run_route(run, fallback)
+        return fallback
+    candidates = [
+        route for route in initial_agent_model_routes() if route.profile_key == profile_key
+    ]
+    if len(candidates) != 1:
+        raise RuntimeError("LIVE_SESSION_AGENT_RUN_ROUTE_MISMATCH")
+    route = candidates[0]
+    validate_run_route(run, route)
+    if fallback.provider != route.provider or fallback.model != route.model:
+        raise RuntimeError("LIVE_SESSION_AGENT_RUN_ROUTE_MISMATCH")
+    return route
 
 
 RECOVERY_PROVENANCE_FIELDS = (
@@ -250,6 +285,7 @@ def bind_recovery_successor(
     identifier = cast(str, getattr(state, field_name))
     values = items(api, f"/v1/products/{product}/{kind}/runs")
     predecessor = exact(values, identifier, f"{kind}_run")
+    route = frozen_route(predecessor, route)
     successors = [value for value in values if value.get("recovery_of_run_id") == identifier]
     if not successors:
         validate_run_route(predecessor, route)
@@ -287,6 +323,106 @@ def bind_recovery_successor(
     store.save(state)
     print(f"{label}: adopted recovery successor {successor_id} for {identifier}")
     return successor
+
+
+def replace_output_limited_creative(settings: Settings, store: StateStore | None = None) -> int:
+    """Explicitly admit one fresh Creative run without replaying Researcher."""
+
+    api = api_for(settings)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved, create=False))
+    if state is None:
+        raise RuntimeError("LIVE_ACCEPTANCE_SESSION_NOT_STARTED")
+    if state.researcher_run_id is None or state.creative_run_id is None:
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_STAGE_NOT_READY")
+    if (
+        any(
+            value
+            for value in (
+                state.creative_concept_id,
+                state.producer_run_id,
+                state.production_plan_id,
+                state.assembly_plan_id,
+                state.final_creative_id,
+            )
+        )
+        or state.image_job_ids
+        or state.video_job_ids
+    ):
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_STAGE_ALREADY_ADVANCED")
+    researcher = exact_run(
+        api, product, "research", state.researcher_run_id, initial_researcher_route()
+    )
+    if (
+        researcher.get("status") != "SUCCEEDED"
+        or researcher.get("tenant_id") != state.tenant_id
+        or researcher.get("product_id") != state.product_id
+    ):
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_RESEARCH_NOT_SUCCEEDED")
+    if state.creative_history_run_ids:
+        current = exact_run(
+            api,
+            product,
+            "creative",
+            state.creative_run_id,
+            initial_creative_strategist_route(),
+        )
+        if (
+            current.get("tenant_id") != state.tenant_id
+            or current.get("product_id") != state.product_id
+            or current.get("agent_type") != "creative_strategist"
+            or current.get("recovery_of_run_id") is not None
+        ):
+            raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_PROVENANCE_MISMATCH")
+        print(f"Creative replacement already bound: {current['id']} ({current['status']})")
+        return 0
+    failed = exact_run(
+        api,
+        product,
+        "creative",
+        state.creative_run_id,
+        frozen_route(
+            cast(
+                dict[str, Any],
+                api.request(f"/v1/agent-runs/{state.creative_run_id}"),
+            ),
+            initial_creative_strategist_route(),
+        ),
+    )
+    if (
+        failed.get("status") != "FAILED"
+        or failed.get("tenant_id") != state.tenant_id
+        or failed.get("product_id") != state.product_id
+        or failed.get("agent_type") != "creative_strategist"
+    ):
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_REQUIRES_FAILED_RUN")
+    replacement = api.request(
+        f"/v1/products/{product}/creative/runs/{state.creative_run_id}/replacement",
+        method="POST",
+        body={"transition_id": state.session_id},
+    )
+    if not isinstance(replacement, dict):
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_RESPONSE_INVALID")
+    replacement_id = valid_id(replacement.get("id"), "creative_replacement_run_id")
+    if (
+        replacement_id == state.creative_run_id
+        or replacement.get("tenant_id") != state.tenant_id
+        or replacement.get("product_id") != state.product_id
+        or replacement.get("agent_type") != "creative_strategist"
+        or replacement.get("recovery_of_run_id") is not None
+        or replacement.get("agent_version_id") == failed.get("agent_version_id")
+        or replacement.get("model_profile_key") != initial_creative_strategist_route().profile_key
+    ):
+        raise RuntimeError("LIVE_CREATIVE_REPLACEMENT_PROVENANCE_MISMATCH")
+    validate_run_route(replacement, initial_creative_strategist_route())
+    state.creative_history_run_ids.append(state.creative_run_id)
+    state.creative_run_id = replacement_id
+    saved.save(state)
+    print(f"Creative replacement requested: {replacement_id}")
+    print(f"Historical failed Creative retained: {state.creative_history_run_ids[-1]}")
+    print("Researcher was not rerun.")
+    return 0
 
 
 def created_id(response: Any, label: str) -> str:
@@ -667,16 +803,32 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
                 status += " / RECOVERY_REQUIRED"
             print(f"{label}: {status}")
             lineage = [run]
-            recovery_of = run.get("recovery_of_run_id")
             seen = {str(run.get("id"))}
-            while recovery_of is not None:
-                predecessor_id = valid_id(recovery_of, "recovery_predecessor_id")
+            pending_predecessors = [run.get("recovery_of_run_id")]
+            if field_name == "creative_run_id":
+                pending_predecessors.extend(state.creative_history_run_ids)
+            while pending_predecessors:
+                predecessor_ref = pending_predecessors.pop(0)
+                if predecessor_ref is None:
+                    continue
+                predecessor_id = valid_id(predecessor_ref, "recovery_predecessor_id")
                 if predecessor_id in seen or len(seen) >= 16:
                     raise RuntimeError("LIVE_SESSION_RECOVERY_LINEAGE_INVALID")
                 seen.add(predecessor_id)
                 predecessor = cast(dict[str, Any], api.request(f"/v1/agent-runs/{predecessor_id}"))
+                if (
+                    predecessor.get("tenant_id") != state.tenant_id
+                    or predecessor.get("product_id") != state.product_id
+                    or predecessor.get("agent_type") != run.get("agent_type")
+                ):
+                    raise RuntimeError("LIVE_SESSION_HISTORICAL_RUN_PROVENANCE_MISMATCH")
                 lineage.append(predecessor)
-                recovery_of = predecessor.get("recovery_of_run_id")
+                pending_predecessors.append(predecessor.get("recovery_of_run_id"))
+            if field_name == "creative_run_id" and len(lineage) > 1:
+                print(
+                    "  historical Creative lineage: "
+                    + ", ".join(str(value.get("id")) for value in lineage[1:])
+                )
             original_unknown = sum(
                 (
                     Decimal(str(value.get("original_unknown_cost", value.get("unknown_cost", 0))))

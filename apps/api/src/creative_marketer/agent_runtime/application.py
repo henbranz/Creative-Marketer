@@ -109,20 +109,25 @@ from .domain import (
     AgentRunStatus,
     AgentRuntimeError,
     BudgetExceeded,
+    CreativeReplacementNotAllowed,
     EvidenceBlockRef,
     InvalidModelOutput,
     KnownFailedAgentRun,
     ModelAttempt,
+    ModelAttemptStatus,
     ModelCapabilityUnavailable,
     ModelContext,
     ModelFailureDisposition,
     ModelImageInputRef,
+    ModelIncompleteResponse,
     ModelInvocation,
     ModelInvocationResult,
     ModelPricing,
     ModelProviderError,
     ModelRoute,
     ModelRouteUnavailable,
+    ProviderFailureReason,
+    ProviderResponseStatus,
     RecoveryAgentUnavailable,
     RecoveryBlockedBudget,
     RecoveryClassification,
@@ -747,7 +752,8 @@ def initial_researcher_route() -> ModelRoute:
     )
 
 
-def initial_creative_strategist_route() -> ModelRoute:
+def historical_creative_strategist_route() -> ModelRoute:
+    """Frozen 8K route retained for historical reconstruction and exact recovery."""
     return ModelRoute(
         profile_key="creative_balanced",
         route_version="openai-gpt-5.6-sol-creative-2026-09-13",
@@ -756,6 +762,22 @@ def initial_creative_strategist_route() -> ModelRoute:
         capabilities=frozenset({"text", "reasoning", "structured_output"}),
         reasoning_effort="high",
         max_output_tokens=8000,
+        pricing=ModelPricing(
+            "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
+        ),
+    )
+
+
+def initial_creative_strategist_route() -> ModelRoute:
+    """Current 16K Creative route; the historical 8K profile remains installed."""
+    return ModelRoute(
+        profile_key="creative_balanced_v2",
+        route_version="openai-gpt-5.6-sol-creative-16k-2026-09-25",
+        provider="openai",
+        model="gpt-5.6-sol",
+        capabilities=frozenset({"text", "reasoning", "structured_output"}),
+        reasoning_effort="high",
+        max_output_tokens=16_000,
         pricing=ModelPricing(
             "openai-gpt-5.6-sol-2026-09-13", Decimal("4.00"), Decimal("20.00"), "USD"
         ),
@@ -811,9 +833,10 @@ def initial_supervisor_route() -> ModelRoute:
 
 
 def initial_agent_model_routes() -> tuple[ModelRoute, ...]:
-    """Current exact routes shared by API, workers, and trusted recovery."""
+    """Current and historical exact routes shared by API, workers, and recovery."""
     return (
         initial_researcher_route(),
+        historical_creative_strategist_route(),
         initial_creative_strategist_route(),
         initial_producer_route(),
         initial_intelligence_route(),
@@ -988,6 +1011,7 @@ class AgentRunRepository(Protocol):
     ) -> AgentRun | None: ...
     async def add(self, run: AgentRun) -> bool: ...
     async def get(self, run_id: UUID, *, for_update: bool = False) -> AgentRun | None: ...
+    async def list_attempts(self, run_id: UUID) -> tuple[ModelAttempt, ...]: ...
     async def list_for_product(self, product_id: UUID) -> tuple[AgentRun, ...]: ...
     async def lock_period_budgets(
         self, definition_id: UUID, period_starts: tuple[datetime, ...]
@@ -1996,6 +2020,147 @@ class AgentRunService:
                 attributes={"agent.type": "creative_strategist", "result": "pending"},
             )
             return run
+
+    async def request_creative_replacement(
+        self,
+        context: ExecutionContext,
+        *,
+        product_id: UUID,
+        failed_run_id: UUID,
+        transition_id: UUID,
+    ) -> AgentRun:
+        """Start one normal run after an exact terminal output-limit response.
+
+        This is deliberately not recovery: the prior response and cost are authoritative,
+        while normal admission binds the replacement to current canonical context and the
+        newly active immutable AgentVersion.
+        """
+
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
+        idempotency_key = f"creative-replace:{transition_id}:{failed_run_id}"
+        async with self.uow_factory(context.tenant_id) as uow:
+            failed = await uow.runs.get(failed_run_id)
+            if (
+                failed is None
+                or failed.tenant_id != context.tenant_id
+                or failed.product_id != product_id
+                or failed.agent_type != "creative_strategist"
+                or failed.status is not AgentRunStatus.FAILED
+            ):
+                raise CreativeReplacementNotAllowed(
+                    "replacement requires the exact failed Creative run"
+                )
+            attempts = await uow.runs.list_attempts(failed_run_id)
+            if len(attempts) != 1:
+                raise CreativeReplacementNotAllowed(
+                    "replacement requires exactly one authoritative model attempt"
+                )
+            attempt = attempts[0]
+            if (
+                attempt.status is not ModelAttemptStatus.FAILED_RESPONSE
+                or attempt.provider_response_status is not ProviderResponseStatus.INCOMPLETE
+                or attempt.provider_failure_reason is not ProviderFailureReason.MAX_OUTPUT_TOKENS
+                or not attempt.usage_available
+                or attempt.provider_response_id is None
+                or attempt.unknown_cost != 0
+                or failed.provider_response_id != attempt.provider_response_id
+            ):
+                raise CreativeReplacementNotAllowed(
+                    "replacement requires an authoritative MAX_OUTPUT_TOKENS response"
+                )
+            preparation = await uow.runs.prepare_creative(product_id)
+            if preparation is None:
+                raise CreativeReplacementNotAllowed("current Creative preparation is unavailable")
+            cfg = preparation.strategist.configuration
+            route = self.router.resolve(
+                cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
+            )
+            try:
+                historical_route = self.router.resolve(
+                    failed.model_profile_key, cfg.model_policy.required_capabilities
+                )
+            except ModelRouteUnavailable:
+                raise CreativeReplacementNotAllowed(
+                    "failed Creative route is no longer resolvable"
+                ) from None
+            if (
+                failed.failure_code != attempt.failure_code
+                or failed.failure_code != ModelIncompleteResponse.code
+                or failed.resolved_model_route_version != historical_route.route_version
+                or failed.pricing_version != historical_route.pricing.version
+                or failed.resolved_provider != historical_route.provider
+                or failed.resolved_model != historical_route.model
+                or failed.max_output_tokens != historical_route.max_output_tokens
+                or attempt.model_route_version != historical_route.route_version
+                or attempt.pricing_version != historical_route.pricing.version
+                or preparation.strategist.version_id == failed.agent_version_id
+                or route.route_version == attempt.model_route_version
+                or route.provider != attempt.provider
+                or route.model != attempt.model
+                or route.pricing.version != attempt.pricing_version
+                or route.max_output_tokens <= historical_route.max_output_tokens
+            ):
+                raise CreativeReplacementNotAllowed(
+                    "active Creative version must resolve to a larger compatible route"
+                )
+            active = await uow.runs.active_for_product(
+                product_id, preparation.strategist.requested_definition_id
+            )
+            if active is not None and active.idempotency_key != idempotency_key:
+                raise CreativeReplacementNotAllowed(
+                    "another Creative run is already active for this Product"
+                )
+            request_ref = next(
+                (
+                    item
+                    for item in failed.input_context_refs
+                    if item.get("kind") == "strategy_request"
+                ),
+                None,
+            )
+            if request_ref is None:
+                raise CreativeReplacementNotAllowed("failed Creative request provenance is missing")
+            try:
+                concept_count = request_ref["concept_count"]
+                channel_intent = request_ref["channel_intent"]
+                if (
+                    not isinstance(concept_count, int)
+                    or isinstance(concept_count, bool)
+                    or not isinstance(channel_intent, str)
+                ):
+                    raise ValueError
+                request = CreativeStrategyRequest(
+                    concept_count,
+                    ChannelIntent(channel_intent),
+                )
+                experiment_ref = next(
+                    (
+                        item
+                        for item in failed.input_context_refs
+                        if item.get("kind") == "approved_experiment_proposal"
+                    ),
+                    None,
+                )
+                experiment_id = UUID(str(experiment_ref["id"])) if experiment_ref else None
+            except (KeyError, TypeError, ValueError):
+                raise CreativeReplacementNotAllowed(
+                    "failed Creative request provenance is invalid"
+                ) from None
+
+        replacement = await self.request_creative_strategist(
+            context,
+            product_id=product_id,
+            request=request,
+            idempotency_key=idempotency_key,
+            approved_experiment_proposal_id=experiment_id,
+        )
+        if replacement.idempotency_key != idempotency_key:
+            raise CreativeReplacementNotAllowed("another Creative run won replacement admission")
+        return replacement
 
     async def request_producer(
         self,

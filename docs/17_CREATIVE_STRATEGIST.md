@@ -93,12 +93,20 @@ Historical runs are not backfilled or reclassified.
 
 The explicit `creative_strategist` capability uses the common AgentRuntime lifecycle, Agent Registry,
 ModelRouter, ModelAttempt boundary, daily ledger, response-before-validation durability, recovery,
-Audit, Outbox, and telemetry. The current `creative_balanced` route uses OpenAI `gpt-5.6-sol`, high
-reasoning, 8,000 maximum output tokens, 32,000 total tokens, one model call, zero tool calls, and a
-USD 0.256 run ceiling. The versioned prices are USD 4/M input, USD 0.40/M eligible cached input, and
-USD 20/M output; reservations conservatively price all input as uncached. Thus 24,000 input plus
-8,000 output tokens costs at most USD 0.256; the daily ceiling is 20 runs/USD 5.12. Historical
-Terra runs retain their frozen model, route, pricing, and cost provenance.
+Audit, Outbox, and telemetry. The current `creative_balanced_v2` route uses OpenAI `gpt-5.6-sol`,
+high reasoning, 16,000 maximum output tokens, 40,000 total tokens, one model call, zero tool calls,
+and a USD 0.416 run ceiling. The versioned prices are USD 4/M input, USD 0.40/M eligible cached input,
+and USD 20/M output; reservations conservatively price all input as uncached. Thus 24,000 input plus
+16,000 output tokens costs at most USD 0.416; even 40,000 all-input tokens cost only USD 0.160. The
+measured 21,324-token conservative Creative input bound plus 16,000 output tokens fits the 40,000
+envelope without context truncation. The daily ceiling is 20 runs/USD 8.32.
+
+The prior `creative_balanced` route remains installed with its immutable 8,000-output/32,000-total
+policy so historical runs and legitimate exact recovery can resolve their frozen route and pricing.
+Historical Terra runs likewise retain their frozen model, route, pricing, and cost provenance.
+An authoritative `FAILED_RESPONSE` caused by `MAX_OUTPUT_TOKENS` is terminal and cannot use ordinary
+recovery. After an operator explicitly requests a transition, the governed normal admission path may
+create one fresh run on the active version; it never rewrites or recovery-links the terminal run.
 
 Existing `ResearcherWorkflow` history is unchanged. New Creative runs use the future-only thin
 `AgentExecutionWorkflow`, and the event bridge resolves authoritative AgentRun type before selecting

@@ -22,6 +22,7 @@ from creative_marketer.identity.application.errors import (
 )
 from creative_marketer_api.creative_routes import (
     CreativeDecisionRequest,
+    CreativeReplacementStart,
     CreativeRunStart,
     create_creative_router,
 )
@@ -48,6 +49,11 @@ class AgentService:
         self.error = None
 
     async def request_creative_strategist(self, _context, **_values):
+        if self.error:
+            raise self.error
+        return self.run
+
+    async def request_creative_replacement(self, _context, **_values):
         if self.error:
             raise self.error
         return self.run
@@ -108,6 +114,16 @@ async def test_creative_routes_expose_runs_results_and_decisions() -> None:
     started = await endpoint(value, "/v1/products/{product_id}/creative/runs", "POST")(
         product_id, CreativeRunStart(idempotency_key="creative-browser"), ctx
     )
+    replacement = await endpoint(
+        value,
+        "/v1/products/{product_id}/creative/runs/{failed_run_id}/replacement",
+        "POST",
+    )(
+        product_id,
+        uuid4(),
+        CreativeReplacementStart(transition_id=uuid4()),
+        ctx,
+    )
     runs = await endpoint(value, "/v1/products/{product_id}/creative/runs", "GET")(product_id, ctx)
     sets = await endpoint(value, "/v1/products/{product_id}/creative/concept-sets", "GET")(
         product_id, ctx
@@ -129,6 +145,7 @@ async def test_creative_routes_expose_runs_results_and_decisions() -> None:
         ctx,
     )
     assert started.id == runs[0].id and len(runs) == 1
+    assert replacement.id == started.id
     assert sets[0].freshness == "CURRENT"
     assert loaded_set.id == creative.value.id
     assert loaded_concept.id == concept.id
