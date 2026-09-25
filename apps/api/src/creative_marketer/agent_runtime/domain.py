@@ -203,6 +203,10 @@ class AgentRouteBudgetMismatch(BudgetExceeded):
 class AgentContextBudgetExceeded(BudgetExceeded):
     code = "AGENT_CONTEXT_BUDGET_EXCEEDED"
 
+    def __init__(self, message: str, *, diagnostics: Mapping[str, object] | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics or {}
+
 
 class AgentPeriodBudgetExceeded(BudgetExceeded):
     code = "AGENT_PERIOD_BUDGET_EXCEEDED"

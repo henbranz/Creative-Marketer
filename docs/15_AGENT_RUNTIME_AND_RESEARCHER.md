@@ -75,14 +75,25 @@ Evidence older than 30 days is marked stale. Each selected block binds EvidenceS
 ID, block index/kind, a content digest, and stale flag. Product context is drawn only from the exact
 ProductKnowledgeSnapshot. Assets and object keys are absent.
 
-The Researcher budget fitter removes only absent or empty Product fields from the provider-facing
-representation; it never changes the immutable Product snapshot or its provenance digest. It then
+New Researcher requests use the explicit, versioned `researcher.v2` Product context projection
+(ADR-045), not every non-empty Product Brain field. The allowlist retains complete market,
+audience, positioning, offer and factual Product fields; it excludes Creative claim authority,
+Creative execution controls, assets and internal lifecycle metadata. Absent and empty projected
+values compact deterministically. The full immutable Product snapshot and its original ID/digest
+remain authoritative. The run context digest additionally covers the projection version and
+projection digest. Historical `researcher.v1` runs reconstruct the original full compacted context
+and digest; no backfill changes their meaning. The fitter then
 uses the route's total-token bound minus its maximum output tokens as the input allowance and takes
 the longest canonical prefix of complete EvidenceBlocks that fits the conservative UTF-8 byte
 bound. Blocks are never text-truncated, lower-priority blocks never bypass a non-fitting
 higher-priority block, and at least one complete block is required. Fixed context that cannot fit,
 or an allowance that cannot hold the first block, fails before reservation and before any provider
-call.
+call. A denial appends only `agent.run.context_budget_denied` Audit metadata: the fixed finite
+reason (`FIXED_CONTEXT_TOO_LARGE` or `NO_EVIDENCE_BLOCK_FITS`), allowance, fixed bound, candidate/
+selected counts, first rejected block contribution, projection version, and numeric section sizes.
+It commits no AgentRun, ModelAttempt, reservation or run-requested event. The HTTP error remains
+`AGENT_CONTEXT_BUDGET_EXCEEDED`, with no Product/Evidence text exposed. Oversized included fields
+fail closed with section-size attribution; no substring, summarization or budget increase occurs.
 
 System instructions are separate from the user message. The user message labels Product context as
 trusted and external evidence as untrusted quoted data. Evidence cannot add tools because the

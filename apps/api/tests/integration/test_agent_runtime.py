@@ -24,10 +24,12 @@ from creative_marketer.agent_runtime.application import (
     ModelRouter,
     RecoveryOperator,
     WorkloadIdentity,
+    build_context,
     build_creative_model_context,
     build_producer_model_context,
     initial_creative_strategist_route,
     initial_researcher_route,
+    select_evidence_blocks,
 )
 from creative_marketer.agent_runtime.domain import (
     AgentRun,
@@ -201,6 +203,31 @@ async def test_agent_runtime_happy_path_rls_privacy_immutability_and_budget_conc
         context, product_id=product.id, idempotency_key="integration-request"
     )
     assert pending.product_snapshot_id == product_snapshot.id
+    assert pending.product_snapshot_digest == product_snapshot.digest
+    assert pending.input_context_kind == "researcher.v2"
+    assert pending.input_context_schema_version == 2
+    async with uows(context.tenant_id) as uow:
+        prepared = await uow.runs.prepare_researcher(product.id)
+        assert prepared is not None
+        blocks = select_evidence_blocks(prepared.evidence)
+        projected = await uow.runs.resolve_context(pending)
+        assert projected == build_context(prepared, blocks)
+        assert "assets" not in projected.product_context
+        # Replay original V1 semantics without modifying any historical row.
+        legacy = build_context(prepared, blocks, projection_version=1)
+        legacy_run = replace(
+            pending,
+            input_context_kind="researcher.v1",
+            input_context_schema_version=1,
+            context_digest=legacy.context_digest,
+            input_context_digest=legacy.context_digest,
+        )
+        assert await uow.runs.resolve_context(legacy_run) == legacy
+        assert legacy.context_digest != projected.context_digest
+        with pytest.raises(ValueError, match="context version mismatch"):
+            await uow.runs.resolve_context(replace(pending, input_context_kind="researcher.v1"))
+        with pytest.raises(ValueError, match="bound context digest mismatch"):
+            await uow.runs.resolve_context(replace(pending, context_digest=legacy.context_digest))
     v2_configuration = replace(configuration(), prompt_revision="researcher.v2")
     version_two = await CreateAgentVersion(agent_registry_factory)(
         context, definition.id, v2_configuration

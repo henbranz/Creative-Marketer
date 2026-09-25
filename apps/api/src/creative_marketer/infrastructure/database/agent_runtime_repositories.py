@@ -27,8 +27,8 @@ from creative_marketer.agent_runtime.application import (
     build_creative_model_context,
     build_intelligence_model_context,
     build_producer_model_context,
+    build_researcher_model_context,
     build_supervisor_model_context,
-    compact_context,
 )
 from creative_marketer.agent_runtime.domain import (
     KNOWN_FAILED_NO_RESPONSE_CODES,
@@ -2898,22 +2898,17 @@ class SqlAlchemyAgentRunRepository:
             created_by=s["created_by"],
             created_at=s["created_at"],
         )
-        context = ModelContext(
-            v["system_instructions"],
-            cast(dict[str, object], compact_context(product.content)),
-            tuple(blocks),
-            run.context_digest,
+        if run.input_context_kind != f"researcher.v{run.input_context_schema_version}":
+            raise ValueError("bound Researcher context version mismatch")
+        context = build_researcher_model_context(
+            system_instructions=v["system_instructions"],
+            configuration_digest=run.agent_configuration_digest,
+            product_snapshot=product,
+            research_context_digest=run.research_context_digest,
+            blocks=tuple(blocks),
+            projection_version=run.input_context_schema_version,
         )
-        expected = canonical_digest(
-            {
-                "schema_version": 1,
-                "agent_configuration_digest": run.agent_configuration_digest,
-                "product_snapshot_digest": run.product_snapshot_digest,
-                "research_context_digest": run.research_context_digest,
-                "evidence_blocks": [item.identity() for item in blocks],
-            }
-        )
-        if expected != run.context_digest:
+        if context.context_digest != run.context_digest:
             raise ValueError("bound context digest mismatch")
         return context
 

@@ -149,7 +149,7 @@ def configuration() -> AgentVersionConfiguration:
 
 def preparation(tenant_id, product_id) -> ResearcherPreparation:
     now = datetime.now(UTC)
-    content = {"product": {"name": "Atlas", "description": "A bottle"}}
+    content = {"product": {"name": "Atlas"}, "profile": {"description": "A bottle"}}
     product_snapshot = ProductKnowledgeSnapshot(
         tenant_id=tenant_id,
         product_id=product_id,
@@ -582,7 +582,9 @@ class MemoryRepository:
             )
             in selected
         )
-        return build_context(self.prepared, blocks)
+        return build_context(
+            self.prepared, blocks, projection_version=run.input_context_schema_version
+        )
 
     async def finish_success(self, run, result, snapshot, cost, attempt_id, workload_id):
         attempt = self.attempts[attempt_id]
@@ -1390,7 +1392,7 @@ def test_researcher_evidence_fitting_requires_one_complete_block_and_bounded_ove
     oversized_fixed = preparation_with_blocks(
         prepared,
         ("evidence",),
-        product_content={"product": {"description": "p" * 8_192}},
+        product_content={"profile": {"description": "p" * 8_000}},
     )
     with pytest.raises(AgentContextBudgetExceeded, match="fixed Researcher context"):
         fit_researcher_evidence(
@@ -2788,7 +2790,7 @@ async def test_context_and_period_budget_failures_are_distinct_and_pre_provider(
     oversized = preparation_with_blocks(
         preparation(tenant_id, product_id),
         ("evidence",),
-        product_content={"product": {"description": "p" * 8_192}},
+        product_content={"profile": {"description": "p" * 8_000}},
     )
     runtime, repository, _, _ = service(oversized, provider)
     with pytest.raises(AgentContextBudgetExceeded) as context_failure:

@@ -131,6 +131,7 @@ from .domain import (
     canonical_digest,
     parse_research_output,
 )
+from .researcher_context import RESEARCHER_PROJECTION_VERSION, project_researcher_product
 
 MAX_EVIDENCE_SOURCES = 20
 MAX_BLOCKS_PER_SOURCE = 10
@@ -1163,21 +1164,45 @@ def select_evidence_blocks(
 def build_context(
     preparation: ResearcherPreparation,
     blocks: tuple[EvidenceBlockRef, ...],
+    *,
+    projection_version: int = RESEARCHER_PROJECTION_VERSION,
 ) -> ModelContext:
-    configuration = preparation.researcher.configuration
-    # ProductKnowledgeSnapshot already contains only intentional Product Brain fields. Binary
-    # Asset data and storage internals are absent; V2 contains bounded metadata only.
-    product = cast(dict[str, object], compact_context(preparation.product_snapshot.content))
-    digest = canonical_digest(
-        {
-            "schema_version": 1,
-            "agent_configuration_digest": preparation.researcher.configuration_digest,
-            "product_snapshot_digest": preparation.product_snapshot.digest,
-            "research_context_digest": preparation.manifest.digest,
-            "evidence_blocks": [item.identity() for item in blocks],
-        }
+    return build_researcher_model_context(
+        system_instructions=preparation.researcher.configuration.system_instructions,
+        configuration_digest=preparation.researcher.configuration_digest,
+        product_snapshot=preparation.product_snapshot,
+        research_context_digest=preparation.manifest.digest,
+        blocks=blocks,
+        projection_version=projection_version,
     )
-    return ModelContext(configuration.system_instructions, product, blocks, digest)
+
+
+def build_researcher_model_context(
+    *,
+    system_instructions: str,
+    configuration_digest: str,
+    product_snapshot: ProductKnowledgeSnapshot,
+    research_context_digest: str,
+    blocks: tuple[EvidenceBlockRef, ...],
+    projection_version: int,
+) -> ModelContext:
+    """One builder for admission and durable reconstruction; preserve legacy V1 exactly."""
+    if projection_version == 1:
+        product = cast(dict[str, object], compact_context(product_snapshot.content))
+    elif projection_version == RESEARCHER_PROJECTION_VERSION:
+        product = project_researcher_product(product_snapshot.content)
+    else:
+        raise ValueError("unsupported Researcher projection version")
+    provenance: dict[str, object] = {
+        "schema_version": projection_version,
+        "agent_configuration_digest": configuration_digest,
+        "product_snapshot_digest": product_snapshot.digest,
+        "research_context_digest": research_context_digest,
+        "evidence_blocks": [item.identity() for item in blocks],
+    }
+    if projection_version != 1:
+        provenance["product_projection_digest"] = canonical_digest(product)
+    return ModelContext(system_instructions, product, blocks, canonical_digest(provenance))
 
 
 def load_output_schema(version: int = RESEARCH_CONTRACT_VERSION) -> Mapping[str, object]:
@@ -1243,13 +1268,37 @@ def fit_researcher_evidence(
     """Greedily fit complete blocks in canonical priority order within the safe byte bound."""
 
     configuration = preparation.researcher.configuration
-    product = cast(dict[str, object], compact_context(preparation.product_snapshot.content))
+    product = project_researcher_product(preparation.product_snapshot.content)
     fixed_bound = conservative_researcher_input_token_bound(
         configuration.system_instructions, product, ()
     )
+
+    def size(value: object) -> int:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+
+    diagnostics: dict[str, object] = {
+        "input_allowance": input_allowance,
+        "fixed_bound": fixed_bound,
+        "candidate_block_count": len(candidates),
+        "selected_block_count": 0,
+        "first_rejected_block_bound": (
+            conservative_researcher_input_token_bound(
+                configuration.system_instructions, product, candidates[:1]
+            )
+            - fixed_bound
+            if candidates
+            else 0
+        ),
+        "projection_version": RESEARCHER_PROJECTION_VERSION,
+        "product_bytes": size(product),
+        "system_bytes": size(configuration.system_instructions),
+        "schema_bytes": size(load_output_schema()),
+        "section_bytes": {key: size(value) for key, value in product.items()},
+    }
     if fixed_bound >= input_allowance:
         raise AgentContextBudgetExceeded(
-            "fixed Researcher context exceeds the input token envelope"
+            "fixed Researcher context exceeds the input token envelope",
+            diagnostics={**diagnostics, "reason": "FIXED_CONTEXT_TOO_LARGE"},
         )
     selected: list[EvidenceBlockRef] = []
     for block in candidates:
@@ -1264,7 +1313,8 @@ def fit_researcher_evidence(
         selected.append(block)
     if not selected:
         raise AgentContextBudgetExceeded(
-            "no complete Researcher evidence block fits the input token envelope"
+            "no complete Researcher evidence block fits the input token envelope",
+            diagnostics={**diagnostics, "reason": "NO_EVIDENCE_BLOCK_FITS"},
         )
     fitted = tuple(selected)
     return fitted, build_context(preparation, fitted)
@@ -1650,7 +1700,28 @@ class AgentRunService:
             blocks = select_evidence_blocks(preparation.evidence, now=now)
             if not blocks:
                 raise AgentRunNotReady("Researcher requires at least one evidence block")
-            blocks, model_context = fit_researcher_evidence(preparation, blocks, input_allowance)
+            try:
+                blocks, model_context = fit_researcher_evidence(
+                    preparation, blocks, input_allowance
+                )
+            except AgentContextBudgetExceeded as error:
+                # Admission has not reserved budget or inserted a run. Persist only bounded,
+                # content-free denial evidence; an audit failure must not permit admission.
+                await uow.audit.append(
+                    tenant_audit(
+                        context,
+                        action="agent.run.context_budget_denied",
+                        outcome=AuditOutcome.DENIED,
+                        resource_type="product",
+                        resource_id=str(product_id),
+                        agent_definition_id=preparation.researcher.requested_definition_id,
+                        agent_version_id=preparation.researcher.version_id,
+                        reason_code=error.code,
+                        metadata=safe_metadata(cast(Mapping[str, JsonValue], error.diagnostics)),
+                    )
+                )
+                await uow.commit()
+                raise
             period_start = _period_start(now, cfg.period_budget_policy.period)
             run = AgentRun(
                 tenant_id=context.tenant_id,
@@ -1666,6 +1737,8 @@ class AgentRunService:
                 product_snapshot_schema_version=preparation.product_snapshot.schema_version,
                 research_context_digest=preparation.manifest.digest,
                 context_digest=model_context.context_digest,
+                input_context_kind="researcher.v2",
+                input_context_schema_version=RESEARCHER_PROJECTION_VERSION,
                 selected_evidence=tuple(item.identity() for item in blocks),
                 model_profile_key=cfg.model_policy.profile_key,
                 output_contract_key=RESEARCH_CONTRACT_KEY,
