@@ -21,6 +21,14 @@ _KNOWN_NO_RESPONSE_CODES = (
     "'MODEL_PROVIDER_AUTHENTICATION_FAILED','MODEL_PROVIDER_PERMISSION_DENIED',"
     "'MODEL_PROVIDER_MODEL_UNAVAILABLE','MODEL_PROVIDER_CONFLICT','MODEL_RATE_LIMITED'"
 )
+_PLAN_DIGEST_CONSTRAINT = (
+    "concept_digest ~ '^sha256:[0-9a-f]{64}$' "
+    "AND concept_set_digest ~ '^sha256:[0-9a-f]{64}$' "
+    "AND product_snapshot_digest ~ '^sha256:[0-9a-f]{64}$' "
+    "AND research_snapshot_digest ~ '^sha256:[0-9a-f]{64}$' "
+    "AND context_digest ~ '^sha256:[0-9a-f]{64}$' "
+    "AND semantic_digest ~ '^sha256:[0-9a-f]{64}$'"
+)
 
 
 def _recovery_guard(*, allow_producer_replacement: bool) -> str:
@@ -93,13 +101,28 @@ def _recovery_guard(*, allow_producer_replacement: bool) -> str:
 
 
 def upgrade() -> None:
+    op.drop_constraint(
+        "ck_production_plans_digests",
+        "production_plans",
+        schema="production",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_production_plans_digests",
+        "production_plans",
+        f"schema_version IN (1,2) AND {_PLAN_DIGEST_CONSTRAINT}",
+        schema="production",
+    )
     op.execute(_recovery_guard(allow_producer_replacement=True))
     op.execute("REVOKE ALL ON FUNCTION agent_runtime.validate_agent_run_recovery() FROM PUBLIC")
 
 
 def downgrade() -> None:
     op.execute(
-        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM agent_runtime.agent_runs successor "
+        "DO $$ BEGIN IF EXISTS (SELECT 1 FROM production.production_plans "
+        "WHERE schema_version=2) THEN "
+        "RAISE EXCEPTION 'cannot downgrade with ProductionPlan v2 rows'; "
+        "END IF; IF EXISTS (SELECT 1 FROM agent_runtime.agent_runs successor "
         "JOIN agent_runtime.agent_runs predecessor "
         "ON predecessor.tenant_id=successor.tenant_id "
         "AND predecessor.id=successor.recovery_of_run_id "
@@ -108,6 +131,18 @@ def downgrade() -> None:
         "AND predecessor.failure_code='MODEL_INVALID_OUTPUT') THEN "
         "RAISE EXCEPTION 'cannot downgrade Producer validation replacement lineage'; "
         "END IF; END $$"
+    )
+    op.drop_constraint(
+        "ck_production_plans_digests",
+        "production_plans",
+        schema="production",
+        type_="check",
+    )
+    op.create_check_constraint(
+        "ck_production_plans_digests",
+        "production_plans",
+        f"schema_version=1 AND {_PLAN_DIGEST_CONSTRAINT}",
+        schema="production",
     )
     op.execute(_recovery_guard(allow_producer_replacement=False))
     op.execute("REVOKE ALL ON FUNCTION agent_runtime.validate_agent_run_recovery() FROM PUBLIC")
