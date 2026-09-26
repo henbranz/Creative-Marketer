@@ -165,6 +165,59 @@ def test_compiler_rejects_schema_over_provider_property_limit() -> None:
             contract_key="test.oversized",
             contract_version=1,
         )
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        normalize_openai_strict_output_schema(schema)
+
+
+def test_compiler_rejects_unsupported_format_and_empty_union() -> None:
+    base = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["value"],
+        "properties": {"value": {"type": "string", "format": "unsupported"}},
+    }
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        normalize_openai_strict_output_schema(base)
+
+    base["properties"]["value"] = {"anyOf": []}
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        normalize_openai_strict_output_schema(base)
+
+
+def test_validator_traverses_nested_schema_lists_fail_closed() -> None:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["value"],
+        "properties": {"value": [{"oneOf": []}]},
+    }
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        validate_openai_strict_output_schema(schema)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "not-a-local-reference",
+        "#/$defs/missing/child",
+        "#/$defs/missing",
+    ],
+    ids=["nonlocal", "nonmapping-intermediate", "missing-target"],
+)
+def test_compiler_rejects_unresolvable_schema_references(reference: str) -> None:
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["value"],
+        "properties": {"value": {"$ref": reference}},
+        "$defs": {},
+    }
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        compile_openai_strict_output_schema(
+            schema,
+            contract_key="test.invalid-reference",
+            contract_version=1,
+        )
 
 
 @pytest.mark.parametrize("keyword", ["properties", "required", "additionalProperties"])
