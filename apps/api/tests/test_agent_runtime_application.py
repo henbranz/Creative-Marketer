@@ -2676,6 +2676,30 @@ async def test_invalid_provider_output_with_completed_response_is_recorded_befor
 
 
 @pytest.mark.asyncio
+async def test_invalid_provider_output_without_response_requires_recovery() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+
+    class InvalidOutputProvider:
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            raise InvalidModelOutput("invalid output without response")
+
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), InvalidOutputProvider())
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="invalid-output-unknown"
+    )
+
+    with pytest.raises(AgentRunRecoveryRequired):
+        await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert attempt.status is ModelAttemptStatus.UNKNOWN
+    assert attempt.failure_code == "MODEL_INVALID_OUTPUT"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "failure_code", "expected_calls"),
     [

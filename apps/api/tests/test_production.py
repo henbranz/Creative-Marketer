@@ -13,6 +13,8 @@ import pytest
 from jsonschema import Draft202012Validator
 from openai import APIStatusError, APITimeoutError
 
+import creative_marketer.production.application as production_application
+import creative_marketer.production.domain as production_domain
 import creative_marketer.production.infrastructure.seedance as seedance_module
 from creative_marketer.agent_runtime.application import (
     AgentCapabilityRegistry,
@@ -50,6 +52,7 @@ from creative_marketer.production.domain import (
     InvalidProductionPlan,
     MediaKind,
     ProductionCost,
+    ProductionCreativeNotApproved,
     ProductionCreativeRefreshRequired,
     ProductionPermissionDenied,
     ProductionPlanDecision,
@@ -360,6 +363,21 @@ def test_context_freshness_round_trip_and_valid_plan() -> None:
         )
 
 
+def test_context_requires_an_approved_decision_before_reading_handoff() -> None:
+    unapproved = SimpleNamespace(
+        decision=SimpleNamespace(state=CreativeDecisionState.REJECTED),
+    )
+    with pytest.raises(ProductionCreativeNotApproved, match="requires current production approval"):
+        build_production_context(
+            unapproved,
+            current_product_snapshot_id=uuid4(),
+            current_product_snapshot_digest=DIGEST,
+            current_research_snapshot_id=uuid4(),
+            current_research_snapshot_digest=DIGEST,
+            asset_manifest=[],
+        )
+
+
 @pytest.mark.parametrize("mutation", ["scene", "asset", "duration", "provider", "strategy"])
 def test_plan_validation_fails_closed(mutation: str) -> None:
     planning = context()
@@ -511,6 +529,55 @@ def test_v1_schema_drift_is_rejected_by_domain_validation(mutation, reason) -> N
     assert caught.value.diagnostic.reason is reason
 
 
+def test_validator_fallbacks_classify_parse_and_pricing_failures(monkeypatch) -> None:
+    planning = context()
+    monkeypatch.setattr(
+        production_application,
+        "load_production_plan_schema",
+        lambda _version=2: {},
+    )
+    with pytest.raises(InvalidProductionPlan) as invalid_collections:
+        validate_production_plan(
+            {"scenes": (), "generation_segments": []},
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+    assert invalid_collections.value.diagnostic.reason is ProductionPlanInvalidReason.PARSE_INVALID
+
+    with pytest.raises(InvalidProductionPlan) as malformed_scene:
+        validate_production_plan(
+            {"scenes": [{"scene_key": "scene_one"}], "generation_segments": []},
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+    assert malformed_scene.value.diagnostic.reason is ProductionPlanInvalidReason.PARSE_INVALID
+
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+
+    def reject_quality(_self, _quality):
+        raise ValueError("unsupported image quality")
+
+    monkeypatch.setattr(ImageReservationPricing, "reserve", reject_quality)
+    with pytest.raises(InvalidProductionPlan) as invalid_pricing:
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+    assert invalid_pricing.value.diagnostic.reason is (
+        ProductionPlanInvalidReason.PRICING_DIMENSION_INVALID
+    )
+
+
 @pytest.mark.asyncio
 async def test_production_budget_guard_rejects_negative_and_denied_reservations() -> None:
     class Ledger:
@@ -553,6 +620,8 @@ def test_generation_job_unknown_and_lineage() -> None:
     assert unknown.unknown_cost == Decimal("1.2")
     with pytest.raises(ValueError):
         unknown.transition(GenerationJobStatus.READY)
+    with pytest.raises(ValueError, match="workload identity"):
+        replace(job, executed_by_workload_id=" ")
     assert (
         AssetLineage(job.tenant_id, uuid4(), uuid4(), "REFERENCE_IMAGE").relationship_type
         == "REFERENCE_IMAGE"
@@ -561,7 +630,7 @@ def test_generation_job_unknown_and_lineage() -> None:
         AssetLineage(job.tenant_id, job.id, job.id, "DERIVED_FROM")
 
 
-def test_production_domain_invariants_fail_closed() -> None:
+def test_production_domain_invariants_fail_closed(monkeypatch) -> None:
     planning = context()
     plan = validate_production_plan(
         valid_output(str(planning.selected_assets[0].asset_id)),
@@ -642,6 +711,12 @@ def test_production_domain_invariants_fail_closed() -> None:
         )
     with pytest.raises(InvalidProductionPlan, match="plan digest"):
         replace(plan, semantic_digest=DIGEST)
+    monkeypatch.setattr(production_domain, "MAX_IMAGE_GENERATIONS", 0)
+    with pytest.raises(InvalidProductionPlan, match="generation count") as excessive:
+        replace(plan)
+    assert excessive.value.diagnostic.reason is (
+        ProductionPlanInvalidReason.GENERATION_COUNT_EXCEEDED
+    )
 
     with pytest.raises(ValueError, match="cost binding"):
         ProductionPlanDecision(
