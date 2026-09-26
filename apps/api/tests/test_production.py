@@ -263,6 +263,8 @@ def valid_output(asset_id: str) -> dict[str, object]:
 
 def test_routes_pricing_contracts_and_selection() -> None:
     producer = initial_producer_route()
+    with pytest.raises(AgentCapabilityUnavailable, match="unsupported"):
+        ProducerCapability().output_schema(99)
     assert (producer.profile_key, producer.model, producer.reasoning_effort) == (
         "production_deep",
         "gpt-5.6-sol",
