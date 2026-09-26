@@ -66,7 +66,7 @@ def test_fresh_agent_configurations_create_new_sol_policy_versions() -> None:
     ] == [
         "researcher_v3_social_evidence",
         "creative_strategist_v3_sol_16k_policy",
-        "producer_v3_sol_policy",
+        "producer_v4_context_v2",
     ]
     assert [
         configuration.run_budget_policy.max_cost

@@ -176,6 +176,9 @@ owns route, budget, attempt, provider, recovery, Audit, Outbox, and telemetry be
 
 Producer is the third installed capability. It reuses the same one-call lifecycle and recovery
 mechanism, but validates `production.production_plan.v1` against frozen approved-Creative context.
+New runs use the explicit `production_planning.v2` Product/Research projection from ADR-048 while
+retaining the complete approved CreativeConcept and full immutable source provenance. Historical
+Producer v1 runs retain their original full-snapshot context.
 Its bounded image references are opaque tenant/Asset/digest locators; only the OpenAI infrastructure
 adapter can materialize private bytes after rechecking current READY state, rights, allowed use, and
 digest. No object key or signed URL enters ModelContext or AgentRun persistence.

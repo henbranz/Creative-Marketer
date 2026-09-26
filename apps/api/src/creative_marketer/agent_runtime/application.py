@@ -138,6 +138,14 @@ from .domain import (
     canonical_digest,
     parse_research_output,
 )
+from .producer_context import (
+    PRODUCER_CONTEXT_VERSION,
+    PRODUCER_PRODUCT_PROJECTION_VERSION,
+    PRODUCER_PROMPT_REVISION,
+    PRODUCER_RESEARCH_PROJECTION_VERSION,
+    InvalidProducerProjection,
+    build_producer_provider_projection,
+)
 from .researcher_context import RESEARCHER_PROJECTION_VERSION, project_researcher_product
 
 MAX_EVIDENCE_SOURCES = 20
@@ -439,7 +447,10 @@ class ProducerCapability:
         values = context.capability_context
         if values is None:
             raise AgentRunNotReady("Producer capability context is unavailable")
-        planning = production_context_from_payload(values, run.input_context_digest)
+        raw_planning_digest = values.get("production_context_digest", run.input_context_digest)
+        if not isinstance(raw_planning_digest, str):
+            raise AgentRunNotReady("Producer production provenance is unavailable")
+        planning = production_context_from_payload(values, raw_planning_digest)
         scene_keys = values.get("concept_scene_keys", ())
         if not isinstance(scene_keys, (list, tuple)):
             raise AgentRunNotReady("Producer Creative scene references are unavailable")
@@ -1440,6 +1451,7 @@ def build_producer_model_context(
     request: ProductionPlanningRequest,
     *,
     frozen_context: ProductionPlanningContext | None = None,
+    context_version: int = PRODUCER_CONTEXT_VERSION,
 ) -> tuple[ProductionPlanningContext, ModelContext]:
     planning = frozen_context
     if planning is None:
@@ -1481,26 +1493,79 @@ def build_producer_model_context(
     approved_concept = dict(preparation.approved.concept.payload)
     approved_concept["scenes"] = normalized_scenes
     provenance = planning.semantic_content()
-    sections: dict[str, object] = {
-        **provenance,
-        "production_request": provenance["request"],
-        "concept_scene_keys": scene_keys,
-        "approved_creative_concept": compact_context(approved_concept),
-        "product_knowledge_snapshot": compact_context(preparation.product_snapshot.content),
-        "research_findings": [item.semantic() for item in preparation.research_snapshot.findings],
-        "research_gaps": list(preparation.research_snapshot.research_gaps),
-    }
+    if context_version == 1:
+        sections: dict[str, object] = {
+            **provenance,
+            "production_request": provenance["request"],
+            "concept_scene_keys": scene_keys,
+            "approved_creative_concept": compact_context(approved_concept),
+            "product_knowledge_snapshot": compact_context(preparation.product_snapshot.content),
+            "research_findings": [
+                item.semantic() for item in preparation.research_snapshot.findings
+            ],
+            "research_gaps": list(preparation.research_snapshot.research_gaps),
+        }
+        context_digest = planning.context_digest
+        output_task = (
+            "Return only production.production_plan.v1. Preserve every supplied CreativeConcept "
+            "scene in order. Plan media; never authorize or execute generation."
+        )
+    elif context_version == PRODUCER_CONTEXT_VERSION:
+        projection = build_producer_provider_projection(
+            product_content=preparation.product_snapshot.content,
+            product_snapshot_digest=preparation.product_snapshot.digest,
+            approved_concept=approved_concept,
+            research_snapshot_id=str(preparation.research_snapshot.id),
+            research_findings=preparation.research_snapshot.findings,
+        )
+        projection_metadata = {
+            "product_version": PRODUCER_PRODUCT_PROJECTION_VERSION,
+            "product_digest": projection.product_digest,
+            "research_version": PRODUCER_RESEARCH_PROJECTION_VERSION,
+            "research_digest": projection.research_digest,
+        }
+        context_digest = canonical_digest(
+            {
+                "schema_version": PRODUCER_CONTEXT_VERSION,
+                "agent_configuration_digest": preparation.producer.configuration_digest,
+                "production_context_digest": planning.context_digest,
+                "product_snapshot_digest": preparation.product_snapshot.digest,
+                "research_snapshot_digest": preparation.research_snapshot.semantic_digest,
+                "approved_concept_digest": preparation.approved.concept.semantic_digest,
+                "provider_projection": projection_metadata,
+                "product_claim_refs": list(projection.product_claim_refs),
+                "research_finding_refs": [dict(item) for item in projection.research_finding_refs],
+            }
+        )
+        sections = {
+            **provenance,
+            "production_request": provenance["request"],
+            "production_context_digest": planning.context_digest,
+            "concept_scene_keys": scene_keys,
+            "approved_creative_concept": _plain_json(approved_concept),
+            "producer_product": dict(projection.product),
+            "referenced_research_findings": [dict(item) for item in projection.research_findings],
+            "provider_projection": projection_metadata,
+        }
+        output_task = (
+            "Return only production.production_plan.v1. Execute the full approved "
+            "CreativeConcept without re-strategizing or re-researching it, and preserve every "
+            "supplied scene in order. Product facts are authorized only by exact entries in "
+            "producer_product.approved_claims; Research findings explain approved rationale but "
+            "do not grant Product claim authority. Preserve supplied safety constraints and "
+            "disclaimers. Plan media; never authorize or execute generation."
+        )
+    else:
+        raise ValueError("unsupported Producer context version")
     sections.pop("request", None)
     model = ModelContext(
         preparation.producer.configuration.system_instructions,
         {},
         (),
-        planning.context_digest,
+        context_digest,
+        schema_version=context_version,
         capability_context=sections,
-        output_task=(
-            "Return only production.production_plan.v1. Preserve every supplied CreativeConcept "
-            "scene in order. Plan media; never authorize or execute generation."
-        ),
+        output_task=output_task,
     )
     return planning, model
 
@@ -1513,6 +1578,36 @@ def conservative_producer_input_token_bound(context: ModelContext) -> int:
         "output_schema": load_production_plan_schema(),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
+
+
+def producer_context_diagnostics(
+    context: ModelContext, *, input_allowance: int
+) -> dict[str, object]:
+    """Return bounded, content-free Producer admission measurements."""
+
+    def size(value: object) -> int:
+        return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode())
+
+    sections = dict(context.capability_context or {})
+    assets = sections.get("selected_assets", ())
+    product = sections.get("producer_product", {})
+    research = sections.get("referenced_research_findings", ())
+    claims = product.get("approved_claims", ()) if isinstance(product, Mapping) else ()
+    return {
+        "reason": "FIXED_CONTEXT_TOO_LARGE",
+        "input_allowance": input_allowance,
+        "fixed_input_bound": conservative_producer_input_token_bound(context),
+        "projection_version": PRODUCER_CONTEXT_VERSION,
+        "product_projection_version": PRODUCER_PRODUCT_PROJECTION_VERSION,
+        "research_projection_version": PRODUCER_RESEARCH_PROJECTION_VERSION,
+        "total_provider_context_bytes": size(sections),
+        "section_bytes": {key: size(value) for key, value in sections.items()},
+        "selected_asset_count": len(assets) if isinstance(assets, (list, tuple)) else 0,
+        "referenced_research_finding_count": (
+            len(research) if isinstance(research, (list, tuple)) else 0
+        ),
+        "referenced_product_claim_count": (len(claims) if isinstance(claims, (list, tuple)) else 0),
+    }
 
 
 def build_intelligence_model_context(preparation: IntelligencePreparation) -> ModelContext:
@@ -2196,6 +2291,7 @@ class AgentRunService:
             if (
                 cfg.output_contract_key != PRODUCTION_CONTRACT_KEY
                 or cfg.output_contract_version != PRODUCTION_CONTRACT_VERSION
+                or cfg.prompt_revision != PRODUCER_PROMPT_REVISION
                 or cfg.model_policy.max_turns != 1
                 or not cfg.model_policy.structured_output_required
                 or cfg.model_policy.fallback_allowed
@@ -2214,7 +2310,7 @@ class AgentRunService:
                 }
                 or set(cfg.write_scopes) != {"production.plan"}
             ):
-                raise AgentRunNotReady("active Producer configuration violates v1 invariants")
+                raise AgentRunNotReady("active Producer configuration violates current invariants")
             route = self.router.resolve(
                 cfg.model_policy.profile_key, cfg.model_policy.required_capabilities
             )
@@ -2237,9 +2333,52 @@ class AgentRunService:
             )
             if active is not None:
                 return active
-            planning, model_context = build_producer_model_context(preparation, request)
-            if conservative_producer_input_token_bound(model_context) > input_allowance:
-                raise BudgetExceeded("bounded Producer context exceeds input token envelope")
+            try:
+                planning, model_context = build_producer_model_context(preparation, request)
+            except InvalidProducerProjection as error:
+                raise AgentRunNotReady(
+                    "approved Producer context cannot be resolved against frozen authority"
+                ) from error
+            input_bound = conservative_producer_input_token_bound(model_context)
+            if input_bound > input_allowance:
+                denial = AgentContextBudgetExceeded(
+                    "fixed Producer context exceeds the input token envelope",
+                    diagnostics=producer_context_diagnostics(
+                        model_context, input_allowance=input_allowance
+                    ),
+                )
+                await uow.audit.append(
+                    tenant_audit(
+                        context,
+                        action="agent.run.context_budget_denied",
+                        outcome=AuditOutcome.DENIED,
+                        resource_type="creative_concept",
+                        resource_id=str(concept_id),
+                        agent_definition_id=preparation.producer.requested_definition_id,
+                        agent_version_id=preparation.producer.version_id,
+                        reason_code=denial.code,
+                        metadata=safe_metadata(cast(Mapping[str, JsonValue], denial.diagnostics)),
+                    )
+                )
+                await uow.commit()
+                raise denial
+            projection_metadata = (model_context.capability_context or {}).get(
+                "provider_projection"
+            )
+            if not isinstance(projection_metadata, Mapping):
+                raise AgentRunNotReady("Producer provider projection provenance is unavailable")
+            projected_product = (model_context.capability_context or {}).get("producer_product", {})
+            projected_research = (model_context.capability_context or {}).get(
+                "referenced_research_findings", ()
+            )
+            product_claims = (
+                projected_product.get("approved_claims", ())
+                if isinstance(projected_product, Mapping)
+                else ()
+            )
+            research_items = (
+                projected_research if isinstance(projected_research, (list, tuple)) else ()
+            )
             refs: tuple[Mapping[str, object], ...] = (
                 {
                     "kind": "approved_concept",
@@ -2268,6 +2407,37 @@ class AgentRunService:
                     "target_format": request.target_format,
                     "aspect_ratio": request.aspect_ratio,
                 },
+                {
+                    "kind": "production_context",
+                    "digest": planning.context_digest,
+                },
+                {
+                    "kind": "producer_product_projection",
+                    "version": projection_metadata["product_version"],
+                    "digest": projection_metadata["product_digest"],
+                    "claim_refs": [
+                        str(item["key"]) for item in product_claims if isinstance(item, Mapping)
+                    ],
+                },
+                {
+                    "kind": "producer_research_projection",
+                    "version": projection_metadata["research_version"],
+                    "digest": projection_metadata["research_digest"],
+                    "finding_refs": [
+                        {
+                            "key": str(item["key"]),
+                            "digest": canonical_digest(
+                                next(
+                                    finding.semantic()
+                                    for finding in preparation.research_snapshot.findings
+                                    if finding.key == str(item["key"])
+                                )
+                            ),
+                        }
+                        for item in research_items
+                        if isinstance(item, Mapping)
+                    ],
+                },
             )
             run = AgentRun(
                 tenant_id=context.tenant_id,
@@ -2282,7 +2452,7 @@ class AgentRunService:
                 product_snapshot_digest=planning.product_snapshot_digest,
                 product_snapshot_schema_version=2,
                 research_context_digest=planning.research_snapshot_digest,
-                context_digest=planning.context_digest,
+                context_digest=model_context.context_digest,
                 selected_evidence=(),
                 model_profile_key=cfg.model_policy.profile_key,
                 output_contract_key=PRODUCTION_CONTRACT_KEY,
@@ -2295,9 +2465,9 @@ class AgentRunService:
                 currency=cfg.run_budget_policy.currency,
                 idempotency_key=idempotency_key,
                 agent_type="producer",
-                input_context_kind="production_planning.v1",
-                input_context_schema_version=1,
-                input_context_digest=planning.context_digest,
+                input_context_kind=f"production_planning.v{PRODUCER_CONTEXT_VERSION}",
+                input_context_schema_version=PRODUCER_CONTEXT_VERSION,
+                input_context_digest=model_context.context_digest,
                 input_context_refs=refs,
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,

@@ -21,6 +21,7 @@ from creative_marketer.agent_governance.domain import (
     PeriodBudgetPolicy,
     RunBudgetPolicy,
 )
+from creative_marketer.agent_runtime.producer_context import PRODUCER_PROMPT_REVISION
 from creative_marketer.identity.application.authentication import (
     Actor,
     ActorKind,
@@ -53,7 +54,7 @@ def producer_configuration() -> AgentVersionConfiguration:
             "Never predict performance, authorize spend, invoke tools, name providers, or reveal "
             "hidden reasoning. Return only production.production_plan.v1."
         ),
-        prompt_revision="producer_v3_sol_policy",
+        prompt_revision=PRODUCER_PROMPT_REVISION,
         model_policy=ModelPolicy(
             "production_deep", ("image_input", "reasoning", "structured_output", "text"), 1
         ),

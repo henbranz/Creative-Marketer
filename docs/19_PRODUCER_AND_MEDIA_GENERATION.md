@@ -50,6 +50,21 @@ Asset ID, capped at ten. Image bytes are materialized server-side only for the p
 keys, signed URLs, bytes, and provider prompts never enter Audit, events, logs, database context JSON,
 Temporal, or knowledge projection.
 
+New runs use `production_planning.v2` and the immutable `producer_v4_context_v2` prompt revision.
+The complete approved CreativeConcept remains provider input and is the primary production
+authority. Product input is the explicit `producer_product.v1` allowlist: identity, bounded visual
+truth, exact referenced allowed claims, and complete production/publication safety constraints.
+Research input is `producer_research.v1`: only findings named by the concept's exact
+`supporting_research_refs`, with no unrelated findings or gaps. Product/Research snapshots remain
+complete immutable sources and their original IDs/digests stay frozen on AgentRun. Projection
+versions/digests and referenced claim/finding identities are frozen separately. Historical
+`production_planning.v1` runs reconstruct their original full-snapshot provider context. See
+ADR-048.
+
+Fixed v2 context that exceeds the unchanged input allowance fails before reservation or AgentRun
+creation. Its Audit diagnostic contains numeric allowance/bounds, projection versions, section byte
+sizes, and reference counts only—never Product text, Research text, prompts, or model content.
+
 `production.production_plan.v1` is strict JSON Schema 2020-12. It preserves concept scene order and
 models provider-neutral shots with `USE_EXISTING_ASSET`, `GENERATE_IMAGE`, `GENERATE_VIDEO`, or
 `MANUAL_CAPTURE`. A `GenerationSegment` is the execution unit and may combine contiguous shots.

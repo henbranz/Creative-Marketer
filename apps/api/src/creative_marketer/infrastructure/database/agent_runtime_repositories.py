@@ -58,6 +58,7 @@ from creative_marketer.agent_runtime.domain import (
     canonical_digest,
     classify_stranded_attempt,
 )
+from creative_marketer.agent_runtime.producer_context import PRODUCER_CONTEXT_VERSION
 from creative_marketer.catalog.domain import (
     ProductKnowledgeSnapshot,
     evaluate_semantic_completeness,
@@ -2632,6 +2633,10 @@ class SqlAlchemyAgentRunRepository:
             )
             return build_intelligence_model_context(preparation)
         if run.agent_type == "producer":
+            if run.input_context_kind != f"production_planning.v{run.input_context_schema_version}":
+                raise ValueError("bound Producer context version mismatch")
+            if run.input_context_schema_version not in {1, PRODUCER_CONTEXT_VERSION}:
+                raise ValueError("unsupported Producer context version")
             concept_ref = next(
                 (item for item in run.input_context_refs if item.get("kind") == "approved_concept"),
                 None,
@@ -2656,8 +2661,38 @@ class SqlAlchemyAgentRunRepository:
                 ),
                 None,
             )
+            production_context_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "production_context"
+                ),
+                None,
+            )
+            product_projection_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "producer_product_projection"
+                ),
+                None,
+            )
+            research_projection_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "producer_research_projection"
+                ),
+                None,
+            )
             if None in (concept_ref, research_ref, assets_ref, request_ref):
                 raise ValueError("Producer run context references are incomplete")
+            if run.input_context_schema_version == PRODUCER_CONTEXT_VERSION and None in (
+                production_context_ref,
+                product_projection_ref,
+                research_projection_ref,
+            ):
+                raise ValueError("Producer v2 projection references are incomplete")
             assert concept_ref is not None and research_ref is not None
             assert assets_ref is not None and request_ref is not None
             concept_row = (
@@ -2767,6 +2802,11 @@ class SqlAlchemyAgentRunRepository:
                 research,
                 tuple(dict(item) for item in asset_manifest if isinstance(item, Mapping)),
             )
+            planning_digest = (
+                str(production_context_ref["digest"])
+                if production_context_ref is not None
+                else run.input_context_digest
+            )
             frozen_context = production_context_from_payload(
                 {
                     "concept_id": concept_ref["id"],
@@ -2784,7 +2824,7 @@ class SqlAlchemyAgentRunRepository:
                         "aspect_ratio": request_ref["aspect_ratio"],
                     },
                 },
-                run.input_context_digest,
+                planning_digest,
             )
             planning, model = build_producer_model_context(
                 producer_preparation,
@@ -2792,9 +2832,54 @@ class SqlAlchemyAgentRunRepository:
                     str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
                 ),
                 frozen_context=frozen_context,
+                context_version=run.input_context_schema_version,
             )
-            if planning.context_digest != run.input_context_digest:
+            if planning.context_digest != planning_digest:
+                raise ValueError("bound Producer production-context digest mismatch")
+            if (
+                model.context_digest != run.input_context_digest
+                or model.context_digest != run.context_digest
+            ):
                 raise ValueError("bound Producer context digest mismatch")
+            if run.input_context_schema_version == PRODUCER_CONTEXT_VERSION:
+                assert product_projection_ref is not None
+                assert research_projection_ref is not None
+                projection = (model.capability_context or {}).get("provider_projection")
+                product_value = (model.capability_context or {}).get("producer_product", {})
+                research_value = (model.capability_context or {}).get(
+                    "referenced_research_findings", ()
+                )
+                if not isinstance(projection, Mapping) or not isinstance(product_value, Mapping):
+                    raise ValueError("bound Producer projection is malformed")
+                claims = product_value.get("approved_claims", ())
+                claim_values = claims if isinstance(claims, (list, tuple)) else ()
+                research_values = (
+                    research_value if isinstance(research_value, (list, tuple)) else ()
+                )
+                expected_findings = [
+                    {
+                        "key": str(item["key"]),
+                        "digest": canonical_digest(
+                            next(
+                                finding.semantic()
+                                for finding in research.findings
+                                if finding.key == str(item["key"])
+                            )
+                        ),
+                    }
+                    for item in research_values
+                    if isinstance(item, Mapping)
+                ]
+                if (
+                    product_projection_ref.get("version") != projection.get("product_version")
+                    or product_projection_ref.get("digest") != projection.get("product_digest")
+                    or product_projection_ref.get("claim_refs")
+                    != [str(item["key"]) for item in claim_values if isinstance(item, Mapping)]
+                    or research_projection_ref.get("version") != projection.get("research_version")
+                    or research_projection_ref.get("digest") != projection.get("research_digest")
+                    or research_projection_ref.get("finding_refs") != expected_findings
+                ):
+                    raise ValueError("bound Producer projection provenance mismatch")
             return model
         if run.agent_type == "creative_strategist":
             research_ref = next(

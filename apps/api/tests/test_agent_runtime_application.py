@@ -35,6 +35,7 @@ from creative_marketer.agent_runtime.application import (
     WorkloadIdentity,
     build_context,
     build_creative_model_context,
+    build_producer_model_context,
     conservative_input_token_bound,
     fit_researcher_evidence,
     historical_creative_strategist_route,
@@ -115,6 +116,11 @@ from creative_marketer.orchestration.domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from creative_marketer.production.application import (
+    build_production_context,
+    initial_producer_route,
+)
+from creative_marketer.production.domain import ProductionPlanningRequest
 from creative_marketer.research.domain import (
     EvidenceBlock,
     EvidenceBlockKind,
@@ -417,6 +423,7 @@ class MemoryRepository:
         self.agent_available = True
         self.budget_available = True
         self.creative_prepared = None
+        self.producer_prepared = None
         self.intelligence_prepared = None
         self.supervisor_prepared = None
 
@@ -440,6 +447,15 @@ class MemoryRepository:
         return (
             self.creative_prepared
             if self.creative_prepared.product_snapshot.product_id == product_id
+            else None
+        )
+
+    async def prepare_producer(self, concept_id):
+        if self.producer_prepared is None:
+            return None
+        return (
+            self.producer_prepared
+            if self.producer_prepared.approved.concept.id == concept_id
             else None
         )
 
@@ -589,6 +605,36 @@ class MemoryRepository:
         return value
 
     async def resolve_context(self, run):
+        if run.agent_type == "producer":
+            assert self.producer_prepared is not None
+            request_ref = next(
+                item for item in run.input_context_refs if item["kind"] == "production_request"
+            )
+            production_ref = next(
+                (item for item in run.input_context_refs if item["kind"] == "production_context"),
+                None,
+            )
+            frozen = build_production_context(
+                self.producer_prepared.approved,
+                current_product_snapshot_id=self.producer_prepared.product_snapshot.id,
+                current_product_snapshot_digest=self.producer_prepared.product_snapshot.digest,
+                current_research_snapshot_id=self.producer_prepared.research_snapshot.id,
+                current_research_snapshot_digest=(
+                    self.producer_prepared.research_snapshot.semantic_digest
+                ),
+                asset_manifest=self.producer_prepared.asset_manifest,
+                request=ProductionPlanningRequest(
+                    str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
+                ),
+            )
+            if production_ref is not None and production_ref["digest"] != frozen.context_digest:
+                raise ValueError("bound Producer production-context digest mismatch")
+            return build_producer_model_context(
+                self.producer_prepared,
+                frozen.request,
+                frozen_context=frozen,
+                context_version=run.input_context_schema_version,
+            )[1]
         if run.agent_type == "creative_strategist":
             assert self.creative_prepared is not None
             request_ref = next(
@@ -639,7 +685,9 @@ class MemoryRepository:
             estimated_cost=cost,
             provider_response_id=result.provider_response_id,
             result_ref=(
-                f"creative-concept-set://{snapshot.id}"
+                f"production-plan://{snapshot.id}"
+                if run.agent_type == "producer"
+                else f"creative-concept-set://{snapshot.id}"
                 if run.agent_type == "creative_strategist"
                 else f"research-snapshot://{snapshot.id}"
             ),
@@ -800,6 +848,9 @@ class MemoryRepository:
         if run.agent_type == "creative_strategist":
             assert self.creative_prepared is not None
             return self.creative_prepared.strategist.configuration
+        if run.agent_type == "producer":
+            assert self.producer_prepared is not None
+            return self.producer_prepared.producer.configuration
         return self.prepared.researcher.configuration
 
     async def abandon_stranded(self, stranded, *, workload_id, failure_code):
@@ -934,6 +985,7 @@ def service(prepared, provider):
                 route(),
                 historical_creative_strategist_route(),
                 initial_creative_strategist_route(),
+                initial_producer_route(),
                 initial_intelligence_route(),
                 initial_supervisor_route(),
             )

@@ -318,7 +318,7 @@ prior `creative_balanced` profile remains installed for immutable historical rou
 new bootstrap configuration digest creates and activates a new AgentVersion rather than changing
 the earlier version.
 
-## Producer V1
+## Producer
 
 The `producer` definition selects the logical `production_deep` profile, strict
 `production.production_plan` V1 output, one model call, zero model-facing Tools, no memory, and
@@ -326,3 +326,6 @@ read-only Product/Research/approved-Concept/Asset-manifest scopes. Operational r
 resolves it to `gpt-5.6-sol` at high reasoning independently of the immutable AgentVersion. The
 Researcher uses the same model at medium reasoning and Creative Strategist uses it at high reasoning;
 historical Terra/Astra runs keep their exact frozen provenance.
+The current immutable prompt revision is `producer_v4_context_v2`; it activates the versioned,
+bounded `production_planning.v2` provider projection described in ADR-048. Historical AgentVersions
+and `production_planning.v1` AgentRuns remain unchanged and reconstructable.

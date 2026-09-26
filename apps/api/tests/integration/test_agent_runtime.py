@@ -809,15 +809,58 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     async with uows(context.tenant_id) as uow:
         prepared_producer = await uow.runs.prepare_producer(concept.id)
         assert prepared_producer is not None
-        producer_context = build_producer_model_context(
+        producer_context, producer_model = build_producer_model_context(
             prepared_producer, ProductionPlanningRequest()
-        )[0]
+        )
     producer_run = await runtime.request_producer(
         context,
         concept_id=concept.id,
         request=ProductionPlanningRequest(),
         idempotency_key="producer-run",
     )
+    assert producer_run.input_context_kind == "production_planning.v2"
+    assert producer_run.input_context_schema_version == 2
+    assert producer_run.input_context_digest == producer_model.context_digest
+    async with uows(context.tenant_id) as uow:
+        assert await uow.runs.resolve_context(producer_run) == producer_model
+        legacy_model = build_producer_model_context(
+            prepared_producer,
+            ProductionPlanningRequest(),
+            context_version=1,
+        )[1]
+        legacy_refs = tuple(
+            item
+            for item in producer_run.input_context_refs
+            if item.get("kind")
+            not in {
+                "production_context",
+                "producer_product_projection",
+                "producer_research_projection",
+            }
+        )
+        legacy_run = replace(
+            producer_run,
+            input_context_kind="production_planning.v1",
+            input_context_schema_version=1,
+            context_digest=producer_context.context_digest,
+            input_context_digest=producer_context.context_digest,
+            input_context_refs=legacy_refs,
+        )
+        assert await uow.runs.resolve_context(legacy_run) == legacy_model
+        with pytest.raises(ValueError, match="context version mismatch"):
+            await uow.runs.resolve_context(
+                replace(producer_run, input_context_kind="production_planning.v1")
+            )
+        with pytest.raises(ValueError, match="projection provenance mismatch"):
+            altered_refs = tuple(
+                (
+                    {**item, "digest": "sha256:" + "0" * 64}
+                    if item.get("kind") == "producer_product_projection"
+                    else item
+                )
+                for item in producer_run.input_context_refs
+            )
+            await uow.runs.resolve_context(replace(producer_run, input_context_refs=altered_refs))
     completed_producer = await runtime.execute(context.tenant_id, producer_run.id)
     assert completed_producer.status is AgentRunStatus.SUCCEEDED
     production = ProductionService(
