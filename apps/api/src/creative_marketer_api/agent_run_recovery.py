@@ -9,6 +9,7 @@ from uuid import UUID
 
 from creative_marketer.agent_runtime.application import (
     AgentRunRecoveryService,
+    ModelProviderRegistry,
     ModelRouter,
     initial_agent_model_routes,
 )
@@ -16,6 +17,7 @@ from creative_marketer.infrastructure.database.agent_runtime_uow import (
     SqlAlchemyAgentRuntimeUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.model_providers import ExecutionProcessOnlyModelProvider
 from creative_marketer.infrastructure.recovery_operator import ConfiguredRecoveryOperatorProvider
 from creative_marketer.observability.ports import NullTelemetry
 from creative_marketer_api.config import Settings
@@ -47,6 +49,7 @@ def _service(settings: Settings) -> AgentRunRecoveryService:
             settings.app_env,
         ),
         NullTelemetry(),
+        providers=ModelProviderRegistry({"openai": ExecutionProcessOnlyModelProvider()}),
     )
 
 

@@ -71,6 +71,9 @@ owns frozen scene order, ordinals, shot/segment relationships, Asset authorizati
 neutrality, duration/count limits, pricing dimensions, and digest integrity. Rejections use stable
 `PRODUCTION_PLAN_INVALID` plus bounded finite Audit diagnostics; raw model output is never retained.
 Historical v1 contracts remain readable. See ADR-049.
+The canonical v2 intersection remains unchanged. ADR-050 defines its provider-only equivalent as
+four complete strict `shot` alternatives and two complete strict `segment` alternatives, compiled
+and digest-addressed before run admission.
 
 An eligible terminal v1 validation failure may be continued only through the explicit
 `make live-producer-replace` operator path. It creates one new pending v2 AgentRun with immutable

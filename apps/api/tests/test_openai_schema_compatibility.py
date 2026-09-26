@@ -9,18 +9,18 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from creative_marketer.agent_runtime.application import (
-    load_output_schema,
-    load_supervisor_output_schema,
+    default_capability_registry,
 )
 from creative_marketer.agent_runtime.domain import ModelProviderSchemaUnsupported
-from creative_marketer.commerce.application import load_commerce_output_schema
 from creative_marketer.creative.application import load_creative_output_schema
 from creative_marketer.infrastructure.model_providers.openai_schema import (
+    OPENAI_SCHEMA_COMPILER_REVISION,
+    audit_openai_schema,
+    compile_openai_strict_output_schema,
     normalize_openai_strict_output_schema,
     validate_openai_strict_output_schema,
 )
-from creative_marketer.intelligence.application import load_intelligence_output_schema
-from creative_marketer.production.application import load_production_plan_schema
+from scripts.openai_contract_audit import audit_contracts
 
 
 def test_creative_schema_uses_supported_disjoint_any_of() -> None:
@@ -35,34 +35,90 @@ def test_creative_schema_uses_supported_disjoint_any_of() -> None:
 
 
 @pytest.mark.parametrize(
-    "schema",
-    [
-        load_output_schema(1),
-        load_output_schema(2),
-        load_creative_output_schema(),
-        load_production_plan_schema(1),
-        load_production_plan_schema(2),
-        load_intelligence_output_schema(),
-        load_commerce_output_schema(),
-        load_supervisor_output_schema(),
-    ],
-    ids=[
-        "researcher-v1",
-        "researcher-v2",
-        "creative-strategist",
-        "producer-v1",
-        "producer-v2",
-        "intelligence",
-        "commerce-operations",
-        "supervisor",
-    ],
+    "contract",
+    default_capability_registry().output_contracts(),
+    ids=lambda value: f"{value.agent_type}-v{value.version}",
 )
-def test_all_openai_agent_schemas_are_strict_compatible(schema) -> None:
-    before = deepcopy(schema)
-    provider_schema = normalize_openai_strict_output_schema(schema)
-    validate_openai_strict_output_schema(provider_schema)
-    assert schema == before
-    assert normalize_openai_strict_output_schema(provider_schema) == provider_schema
+def test_all_registered_openai_agent_schemas_compile_strictly(contract) -> None:
+    before = deepcopy(contract.schema)
+    compiled = compile_openai_strict_output_schema(
+        contract.schema, contract_key=contract.key, contract_version=contract.version
+    )
+    validate_openai_strict_output_schema(compiled.schema)
+    assert contract.schema == before
+    assert compiled.compiler_revision == OPENAI_SCHEMA_COMPILER_REVISION
+    assert compiled.digest.startswith("sha256:")
+    again = compile_openai_strict_output_schema(
+        compiled.schema, contract_key=contract.key, contract_version=contract.version
+    )
+    assert again.schema == compiled.schema
+    assert again.digest == compiled.digest
+
+
+def test_contract_registry_auto_enumerates_all_installed_versions() -> None:
+    contracts = default_capability_registry().output_contracts()
+    assert len(contracts) == 8
+    assert sum(contract.current for contract in contracts) == 6
+    assert {(value.key, value.version) for value in contracts} == {
+        ("research.research_snapshot", 1),
+        ("research.research_snapshot", 2),
+        ("creative.creative_concept_set", 1),
+        ("production.production_plan", 1),
+        ("production.production_plan", 2),
+        ("intelligence.intelligence_report", 1),
+        ("commerce.operations_report", 1),
+        ("orchestration.supervisor_report", 1),
+    }
+
+
+def test_offline_audit_reports_every_contract_without_provider_claim() -> None:
+    rows = audit_contracts()
+    assert len(rows) == 8
+    assert all(row["local_result"] == "ACCEPTED" for row in rows)
+    assert all(row["provider_count_result"] == "NOT_RUN" for row in rows)
+    assert all(str(row["provider_schema_digest"]).startswith("sha256:") for row in rows)
+
+
+def test_producer_v2_compiler_expands_exactly_six_partial_object_branches() -> None:
+    contract = next(
+        value
+        for value in default_capability_registry().output_contracts()
+        if value.key == "production.production_plan" and value.version == 2
+    )
+    canonical_audit = audit_openai_schema(contract.schema)
+    assert canonical_audit.partial_object_branches == 6
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        validate_openai_strict_output_schema(contract.schema)
+
+    compiled = compile_openai_strict_output_schema(
+        contract.schema, contract_key=contract.key, contract_version=contract.version
+    )
+    provider_audit = audit_openai_schema(compiled.schema)
+    assert provider_audit.partial_object_branches == 0
+    assert len(compiled.schema["$defs"]["shot"]["anyOf"]) == 4
+    assert len(compiled.schema["$defs"]["segment"]["anyOf"]) == 2
+    for definition in ("shot", "segment"):
+        canonical = contract.schema["$defs"][definition]
+        for branch in compiled.schema["$defs"][definition]["anyOf"]:
+            assert branch["type"] == "object"
+            assert branch["additionalProperties"] is False
+            assert branch["required"] == canonical["required"]
+            assert set(branch["properties"]) == set(canonical["properties"])
+
+
+@pytest.mark.parametrize("keyword", ["properties", "required", "additionalProperties"])
+def test_object_structural_keyword_requires_explicit_object_type(keyword: str) -> None:
+    branch: dict[str, object] = {keyword: {} if keyword == "properties" else []}
+    if keyword == "additionalProperties":
+        branch[keyword] = False
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["value"],
+        "properties": {"value": {"anyOf": [branch]}},
+    }
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        validate_openai_strict_output_schema(schema)
 
 
 @pytest.mark.parametrize("keyword", ["oneOf", "allOf", "not", "if"])

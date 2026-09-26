@@ -31,6 +31,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelRefusal,
     ModelTimeout,
     ModelUsage,
+    ProviderContractCompilation,
     ProviderFailureReason,
     ProviderResponseStatus,
     ReturnedProviderResponse,
@@ -40,7 +41,7 @@ from creative_marketer.infrastructure.model_providers.openai_diagnostics import 
     safe_status_diagnostic,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
-    normalize_openai_strict_output_schema,
+    compile_openai_strict_output_schema,
 )
 
 
@@ -64,11 +65,22 @@ class OpenAIResponsesModelProvider:
         self._client = client or AsyncOpenAI(api_key=api_key, max_retries=0)
         self._image_materializer = image_materializer
 
-    def validate_invocation(self, invocation: ModelInvocation) -> None:
-        normalize_openai_strict_output_schema(invocation.output_schema)
+    def validate_invocation(self, invocation: ModelInvocation) -> ProviderContractCompilation:
+        compiled = compile_openai_strict_output_schema(
+            invocation.output_schema,
+            contract_key=invocation.output_contract_key,
+            contract_version=invocation.output_contract_version,
+        )
+        return ProviderContractCompilation(
+            compiled.contract_key,
+            compiled.contract_version,
+            compiled.schema,
+            compiled.digest,
+            compiled.compiler_revision,
+        )
 
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult:
-        self.validate_invocation(invocation)
+        compiled = self.validate_invocation(invocation)
         evidence = [
             {
                 "reference": item.identity(),
@@ -137,7 +149,7 @@ class OpenAIResponsesModelProvider:
                         "name": invocation.output_contract_key.replace(".", "_")
                         + "_v"
                         + str(invocation.output_contract_version),
-                        "schema": normalize_openai_strict_output_schema(invocation.output_schema),
+                        "schema": compiled.provider_schema,
                         "strict": True,
                     }
                 },

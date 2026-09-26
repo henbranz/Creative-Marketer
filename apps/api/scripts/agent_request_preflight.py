@@ -1,4 +1,4 @@
-"""Read-only frozen Researcher/Creative request gate. No provider network transport."""
+"""Read-only frozen structured AgentRun request gate. No provider transport."""
 
 from __future__ import annotations
 
@@ -15,12 +15,16 @@ from openai import AsyncOpenAI
 from sqlalchemy import text
 
 from creative_marketer.agent_runtime.application import (
+    conservative_commerce_input_token_bound,
     conservative_creative_input_token_bound,
     conservative_input_token_bound,
+    conservative_intelligence_input_token_bound,
+    conservative_producer_input_token_bound,
+    conservative_supervisor_input_token_bound,
     default_capability_registry,
     initial_agent_model_routes,
 )
-from creative_marketer.agent_runtime.domain import ModelInvocation, canonical_digest
+from creative_marketer.agent_runtime.domain import ModelInvocation
 from creative_marketer.infrastructure.database.agent_runtime_repositories import (
     SqlAlchemyAgentRunRepository,
 )
@@ -29,7 +33,7 @@ from creative_marketer.infrastructure.model_providers.openai_responses import (
     OpenAIResponsesModelProvider,
 )
 from creative_marketer.infrastructure.model_providers.openai_schema import (
-    normalize_openai_strict_output_schema,
+    compile_openai_strict_output_schema,
 )
 from creative_marketer_api.config import Settings
 
@@ -89,11 +93,7 @@ async def inspect_invocation(
     A pass is NOT provider acceptance or retry authority. No validation-only Responses
     endpoint is assumed. Image-bearing invocations are deliberately out of scope.
     """
-    if (
-        invocation.image_inputs
-        or invocation.route.provider != "openai"
-        or invocation.route.model != "gpt-5.6-sol"
-    ):
+    if invocation.route.provider != "openai" or invocation.route.model != "gpt-5.6-sol":
         raise ValueError("unsupported preflight scope")
     if invocation.reasoning_effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
         raise ValueError("unsupported reasoning effort")
@@ -110,7 +110,12 @@ async def inspect_invocation(
         or input_bound + invocation.max_output_tokens > min(total_limit, 1_050_000)
     ):
         raise ValueError("invalid token envelope")
-    provider_schema = normalize_openai_strict_output_schema(invocation.output_schema)
+    compiled = compile_openai_strict_output_schema(
+        invocation.output_schema,
+        contract_key=invocation.output_contract_key,
+        contract_version=invocation.output_contract_version,
+    )
+    provider_schema = compiled.schema
     metadata = schema_metadata(provider_schema)
     if metadata["properties"] > 5000 or metadata["schema_container_depth"] > 10:
         raise ValueError("schema exceeds documented structural limits")
@@ -185,22 +190,41 @@ async def inspect_invocation(
             },
         )
 
-    async with (
-        httpx.AsyncClient(transport=httpx.MockTransport(capture), trust_env=False) as http,
-        AsyncOpenAI(
-            api_key="offline-only",
-            base_url="https://api.openai.com/v1",
-            max_retries=0,
-            http_client=http,
-        ) as client,
-    ):
-        await OpenAIResponsesModelProvider("offline-only", client=client).generate_structured(
-            invocation
+    if invocation.image_inputs:
+        captured.update(
+            {
+                "model": invocation.route.model,
+                "reasoning_effort": invocation.reasoning_effort,
+                "max_output_tokens": invocation.max_output_tokens,
+                "messages": 1,
+                "content_types": ["input_text", "input_image"],
+                "image_count": len(invocation.image_inputs),
+                "images": True,
+                "contract_name": name,
+                "contract_version": invocation.output_contract_version,
+                "request_bytes": None,
+                "tools": [],
+                "store": False,
+            }
         )
+    else:
+        async with (
+            httpx.AsyncClient(transport=httpx.MockTransport(capture), trust_env=False) as http,
+            AsyncOpenAI(
+                api_key="offline-only",
+                base_url="https://api.openai.com/v1",
+                max_retries=0,
+                http_client=http,
+            ) as client,
+        ):
+            await OpenAIResponsesModelProvider("offline-only", client=client).generate_structured(
+                invocation
+            )
     return {
         **metadata,
         **captured,
-        "normalized_schema_digest": canonical_digest(provider_schema),
+        "normalized_schema_digest": compiled.digest,
+        "compiler_revision": compiled.compiler_revision,
         "estimated_input_bound": input_bound,
         "max_total_tokens": total_limit,
         "local_checks": "PASS",
@@ -234,7 +258,15 @@ async def inspect_run(settings: Settings, tenant_id: UUID, run_id: UUID) -> dict
         if (
             run is None
             or run.tenant_id != tenant_id
-            or run.agent_type not in {"researcher", "creative_strategist"}
+            or run.agent_type
+            not in {
+                "researcher",
+                "creative_strategist",
+                "producer",
+                "intelligence",
+                "commerce_operations",
+                "supervisor",
+            }
         ):
             raise ValueError("frozen run unavailable in supported tenant scope")
         route = next(
@@ -263,39 +295,38 @@ async def inspect_run(settings: Settings, tenant_id: UUID, run_id: UUID) -> dict
         invocation = (
             default_capability_registry().resolve(run.agent_type).invocation(run, route, context)
         )
-        bound = (
-            conservative_input_token_bound(context)
-            if run.agent_type == "researcher"
-            else conservative_creative_input_token_bound(context)
-        )
+        bounders = {
+            "researcher": conservative_input_token_bound,
+            "creative_strategist": conservative_creative_input_token_bound,
+            "producer": conservative_producer_input_token_bound,
+            "intelligence": conservative_intelligence_input_token_bound,
+            "commerce_operations": conservative_commerce_input_token_bound,
+            "supervisor": conservative_supervisor_input_token_bound,
+        }
+        bound = bounders[run.agent_type](context)
         result = await inspect_invocation(invocation, bound, run.max_total_tokens)
         frozen_context: dict[str, Any] = {
             "product_snapshot_id": str(run.product_snapshot_id),
             "product_snapshot_digest": run.product_snapshot_digest,
-        }
-        if run.agent_type == "creative_strategist":
-            safe_refs = {
-                str(item.get("kind")): item
+            "context_refs": [
+                {key: item[key] for key in ("kind", "id", "digest", "version") if key in item}
                 for item in run.input_context_refs
-                if item.get("kind") in {"research_snapshot", "strategy_request"}
-            }
-            research = safe_refs.get("research_snapshot", {})
-            request = safe_refs.get("strategy_request", {})
-            frozen_context.update(
-                {
-                    "research_snapshot_id": research.get("id"),
-                    "research_snapshot_digest": research.get("digest"),
-                    "concept_count": request.get("concept_count"),
-                    "channel_intent": request.get("channel_intent"),
-                }
-            )
+            ],
+        }
         await session.rollback()
         return {
             "run_id": str(run_id),
             "agent_type": run.agent_type,
             "route": route.route_version,
             "pricing": route.pricing.version,
+            "agent_version_id": str(run.agent_version_id),
+            "agent_version_number": run.agent_version_number,
+            "agent_configuration_digest": run.agent_configuration_digest,
             "context_kind": run.input_context_kind,
+            "context_schema_version": run.input_context_schema_version,
+            "context_digest": run.input_context_digest,
+            "output_contract_key": run.output_contract_key,
+            "output_contract_version": run.output_contract_version,
             "frozen_context": frozen_context,
             **result,
         }

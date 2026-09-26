@@ -256,6 +256,13 @@ async def test_gate_reads_in_read_only_tenant_transaction_without_claim(monkeypa
         max_output_tokens=route.max_output_tokens,
         max_total_tokens=40000,
         input_context_kind="creative_strategy.v1",
+        input_context_schema_version=1,
+        input_context_digest="sha256:" + "c" * 64,
+        agent_version_id=uuid4(),
+        agent_version_number=2,
+        agent_configuration_digest="sha256:" + "d" * 64,
+        output_contract_key="creative.creative_concept_set",
+        output_contract_version=1,
         product_snapshot_id=uuid4(),
         product_snapshot_digest="sha256:" + "a" * 64,
         input_context_refs=(
@@ -300,4 +307,10 @@ async def test_gate_reads_in_read_only_tenant_transaction_without_claim(monkeypa
     assert result["retry_authorized"] is False
     assert result["normalized_schema_digest"].startswith("sha256:")
     assert result["frozen_context"]["product_snapshot_id"] == str(run.product_snapshot_id)
-    assert result["frozen_context"]["concept_count"] == 5
+    assert result["agent_version_id"] == str(run.agent_version_id)
+    assert result["output_contract_key"] == run.output_contract_key
+    assert result["compiler_revision"].startswith("openai-strict-")
+    assert all(
+        set(reference).issubset({"kind", "id", "digest", "version"})
+        for reference in result["frozen_context"]["context_refs"]
+    )

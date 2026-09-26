@@ -265,6 +265,10 @@ class AgentRunNotReady(AgentRuntimeError):
     code = "AGENT_RUN_NOT_READY"
 
 
+class AgentProviderContractUnsupported(AgentRunNotReady):
+    code = "AGENT_PROVIDER_CONTRACT_UNSUPPORTED"
+
+
 class CreativeReplacementNotAllowed(AgentRunNotReady):
     code = "CREATIVE_REPLACEMENT_NOT_ALLOWED"
 
@@ -449,6 +453,15 @@ class ModelInvocation:
     capability_context: Mapping[str, object] | None = None
     output_task: str = "Produce the ResearchSnapshot and cite exact supplied references."
     image_inputs: tuple[ModelImageInputRef, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderContractCompilation:
+    contract_key: str
+    contract_version: int
+    provider_schema: Mapping[str, object]
+    provider_schema_digest: str
+    compiler_revision: str
 
 
 @dataclass(frozen=True, slots=True)

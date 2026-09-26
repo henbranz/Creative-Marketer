@@ -101,6 +101,7 @@ from creative_marketer.research.domain import (
 from .domain import (
     AgentContextBudgetExceeded,
     AgentExecutionNotAllowed,
+    AgentProviderContractUnsupported,
     AgentRouteBudgetMismatch,
     AgentRun,
     AgentRunConflict,
@@ -127,9 +128,11 @@ from .domain import (
     ModelInvocationResult,
     ModelPricing,
     ModelProviderError,
+    ModelProviderSchemaUnsupported,
     ModelRoute,
     ModelRouteUnavailable,
     ProducerReplacementNotAllowed,
+    ProviderContractCompilation,
     ProviderFailureReason,
     ProviderResponseStatus,
     RecoveryAgentUnavailable,
@@ -195,6 +198,7 @@ class AgentCapabilityHandler(Protocol):
     agent_type: str
     output_contract_key: str
     output_contract_version: int
+    output_contract_versions: tuple[int, ...]
 
     def supports_output_contract(self, key: str, version: int) -> bool: ...
 
@@ -223,12 +227,35 @@ class AgentCapabilityRegistry:
             raise AgentCapabilityUnavailable("agent capability is not installed")
         return handler
 
+    def output_contracts(self) -> tuple[InstalledOutputContract, ...]:
+        return tuple(
+            InstalledOutputContract(
+                handler.agent_type,
+                handler.output_contract_key,
+                version,
+                handler.output_schema(version),
+                version == handler.output_contract_version,
+            )
+            for handler in sorted(self._handlers.values(), key=lambda value: value.agent_type)
+            for version in handler.output_contract_versions
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InstalledOutputContract:
+    agent_type: str
+    key: str
+    version: int
+    schema: Mapping[str, object]
+    current: bool
+
 
 @dataclass(frozen=True, slots=True)
 class ResearcherCapability:
     agent_type: str = "researcher"
     output_contract_key: str = RESEARCH_CONTRACT_KEY
     output_contract_version: int = RESEARCH_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = (1, 2)
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return key == self.output_contract_key and version in {1, 2}
@@ -282,6 +309,7 @@ class CreativeStrategistCapability:
     agent_type: str = "creative_strategist"
     output_contract_key: str = CREATIVE_CONTRACT_KEY
     output_contract_version: int = CREATIVE_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = (CREATIVE_CONTRACT_VERSION,)
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return key == self.output_contract_key and version == self.output_contract_version
@@ -411,6 +439,9 @@ class ProducerCapability:
     agent_type: str = "producer"
     output_contract_key: str = PRODUCTION_CONTRACT_KEY
     output_contract_version: int = PRODUCTION_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = tuple(
+        sorted(PRODUCTION_HISTORICAL_CONTRACT_VERSIONS)
+    )
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return (
@@ -494,6 +525,7 @@ class IntelligenceCapability:
     agent_type: str = "intelligence"
     output_contract_key: str = INTELLIGENCE_CONTRACT_KEY
     output_contract_version: int = INTELLIGENCE_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = (INTELLIGENCE_CONTRACT_VERSION,)
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return key == self.output_contract_key and version == self.output_contract_version
@@ -574,6 +606,7 @@ class CommerceOperationsCapability:
     agent_type: str = "commerce_operations"
     output_contract_key: str = COMMERCE_CONTRACT_KEY
     output_contract_version: int = COMMERCE_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = (COMMERCE_CONTRACT_VERSION,)
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return key == self.output_contract_key and version == self.output_contract_version
@@ -665,6 +698,7 @@ class SupervisorCapability:
     agent_type: str = "supervisor"
     output_contract_key: str = SUPERVISOR_CONTRACT_KEY
     output_contract_version: int = SUPERVISOR_CONTRACT_VERSION
+    output_contract_versions: tuple[int, ...] = (SUPERVISOR_CONTRACT_VERSION,)
 
     def supports_output_contract(self, key: str, version: int) -> bool:
         return key == self.output_contract_key and version == self.output_contract_version
@@ -864,7 +898,9 @@ def initial_agent_model_routes() -> tuple[ModelRoute, ...]:
 
 
 class ModelProvider(Protocol):
-    def validate_invocation(self, invocation: ModelInvocation) -> None: ...
+    def validate_invocation(
+        self, invocation: ModelInvocation
+    ) -> ProviderContractCompilation | None: ...
 
     async def generate_structured(self, invocation: ModelInvocation) -> ModelInvocationResult: ...
 
@@ -1784,6 +1820,56 @@ class AgentRunService:
     capabilities: AgentCapabilityRegistry = field(default_factory=default_capability_registry)
     execution_admission: AgentExecutionAdmissionPolicy = field(default_factory=AllowAgentExecution)
 
+    async def _validate_provider_contract_admission(
+        self,
+        uow: AgentRuntimeUnitOfWork,
+        context: ExecutionContext,
+        run: AgentRun,
+        route: ModelRoute,
+        model_context: ModelContext,
+        *,
+        resource_type: str,
+        resource_id: str,
+    ) -> ProviderContractCompilation | None:
+        """Pure provider-contract gate before budget, run, or outbox mutation."""
+
+        capability = self.capabilities.resolve(run.agent_type)
+        if not capability.supports_output_contract(
+            run.output_contract_key, run.output_contract_version
+        ):
+            raise AgentProviderContractUnsupported(
+                "Agent output contract is not installed for provider admission"
+            )
+        invocation = capability.invocation(run, route, model_context)
+        try:
+            return self.providers.resolve(route.provider).validate_invocation(invocation)
+        except ModelProviderSchemaUnsupported:
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="agent.run.provider_contract_denied",
+                    outcome=AuditOutcome.DENIED,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    agent_definition_id=run.requested_agent_definition_id,
+                    agent_version_id=run.agent_version_id,
+                    reason_code=AgentProviderContractUnsupported.code,
+                    metadata=safe_metadata(
+                        {
+                            "agent_type": run.agent_type,
+                            "provider": route.provider,
+                            "output_contract_key": run.output_contract_key,
+                            "output_contract_version": run.output_contract_version,
+                            "mismatch_category": "PROVIDER_SCHEMA_UNSUPPORTED",
+                        }
+                    ),
+                )
+            )
+            await uow.commit()
+            raise AgentProviderContractUnsupported(
+                "Agent output contract is not supported by the resolved provider"
+            ) from None
+
     async def request_researcher(
         self, context: ExecutionContext, *, product_id: UUID, idempotency_key: str
     ) -> AgentRun:
@@ -1911,6 +1997,15 @@ class AgentRunService:
                 idempotency_key=idempotency_key,
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
+            )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="product",
+                resource_id=str(product_id),
             )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
@@ -2093,6 +2188,15 @@ class AgentRunService:
                 input_context_refs=creative_context.refs(),
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
+            )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="product",
+                resource_id=str(product_id),
             )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
@@ -2505,6 +2609,15 @@ class AgentRunService:
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
             )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="creative_concept",
+                resource_id=str(concept_id),
+            )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
                 definition_id=run.requested_agent_definition_id,
@@ -2799,6 +2912,15 @@ class AgentRunService:
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
             )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="product",
+                resource_id=str(product_id),
+            )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
                 definition_id=run.requested_agent_definition_id,
@@ -2968,6 +3090,15 @@ class AgentRunService:
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
             )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="product",
+                resource_id=str(product_id),
+            )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
                 definition_id=run.requested_agent_definition_id,
@@ -3132,6 +3263,15 @@ class AgentRunService:
                 input_context_refs=refs,
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
+            )
+            await self._validate_provider_contract_admission(
+                uow,
+                context,
+                run,
+                route,
+                model_context,
+                resource_type="supervisor_context_manifest",
+                resource_id=str(context_manifest_id),
             )
             await uow.runs.reserve_period_budget(
                 run_id=run.id,
@@ -3718,6 +3858,8 @@ class AgentRunRecoveryService:
     operator_provider: RecoveryOperatorProvider
     telemetry: OperationalTelemetry = field(default_factory=NullTelemetry)
     clock: Callable[[], datetime] = field(default_factory=lambda: lambda: datetime.now(UTC))
+    providers: ModelProviderRegistry | None = None
+    capabilities: AgentCapabilityRegistry = field(default_factory=default_capability_registry)
 
     async def find_stranded(self) -> tuple[StrandedAgentRun, ...]:
         operator = await self.operator_provider.current()
@@ -3805,6 +3947,42 @@ class AgentRunRecoveryService:
                     or route.model != original.resolved_model
                 ):
                     raise ModelRouteUnavailable("historical model route is unavailable")
+                if self.providers is not None:
+                    capability = self.capabilities.resolve(original.agent_type)
+                    if not capability.supports_output_contract(
+                        original.output_contract_key, original.output_contract_version
+                    ):
+                        raise AgentProviderContractUnsupported(
+                            "Recovery output contract is not installed"
+                        )
+                    frozen_context = await uow.runs.resolve_context(original)
+                    try:
+                        self.providers.resolve(route.provider).validate_invocation(
+                            capability.invocation(original, route, frozen_context)
+                        )
+                    except ModelProviderSchemaUnsupported:
+                        await uow.audit.append(
+                            _recovery_audit(
+                                operator,
+                                original,
+                                action="agent.run.recovery_provider_contract_denied",
+                                reason_code=AgentProviderContractUnsupported.code,
+                                metadata={
+                                    "model_attempt_id": str(attempt.id),
+                                    "provider": route.provider,
+                                    "output_contract_key": original.output_contract_key,
+                                    "output_contract_version": str(
+                                        original.output_contract_version
+                                    ),
+                                    "mismatch_category": "PROVIDER_SCHEMA_UNSUPPORTED",
+                                },
+                                outcome=AuditOutcome.DENIED,
+                            )
+                        )
+                        await uow.commit()
+                        raise AgentProviderContractUnsupported(
+                            "Recovery output contract is not supported by the provider"
+                        ) from None
                 failure_code = (
                     _recovery_failure_code(stranded.classification)
                     if stranded is not None
@@ -3991,6 +4169,7 @@ def _recovery_audit(
     action: str,
     metadata: Mapping[str, str],
     reason_code: str | None = None,
+    outcome: AuditOutcome = AuditOutcome.SUCCESS,
 ) -> AuditRecord:
     return AuditRecord(
         scope_kind=AuditScopeKind.TENANT,
@@ -3998,7 +4177,7 @@ def _recovery_audit(
         actor_kind=AuditActorKind.WORKLOAD,
         actor_id=operator.workload.workload_id,
         action=action,
-        outcome=AuditOutcome.SUCCESS,
+        outcome=outcome,
         reason_code=reason_code,
         resource_type="agent_run",
         resource_id=str(run.id),

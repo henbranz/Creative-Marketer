@@ -41,6 +41,10 @@ kind/digest/references, contract, route, pricing version, and limits remain froz
 definitions or an unavailable
 historical route fail closed.
 
+Before budget reservation or predecessor closure, rerun admission re-compiles the predecessor's
+exact frozen output contract for its historical route. A static provider-contract mismatch records a
+bounded denied audit and creates no successor. This check makes no provider request.
+
 The same explicit `rerun` command also accepts one narrow terminal known-failure case. The original
 run must be `FAILED`; it must have exactly one `FAILED_NO_RESPONSE` ModelAttempt; run and attempt
 must have no provider response ID, zero tokens, zero actual/estimated/unknown cost, matching safe

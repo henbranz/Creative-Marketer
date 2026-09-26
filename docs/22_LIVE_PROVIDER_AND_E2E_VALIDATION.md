@@ -69,20 +69,40 @@ official OpenAI model fails as `PROVIDER_MODEL_NOT_AVAILABLE_TO_ACCOUNT`; there 
 
 ## 4. Intentionally activate live execution
 
-Before any proposed Researcher/Creative retry, inspect the exact frozen run without generation:
+Before any proposed structured Agent retry, inspect the exact frozen run without generation:
 
 ```bash
 cd apps/api
 uv run dotenv -f ../../.env run --no-override -- python -m scripts.agent_request_preflight TENANT_UUID RUN_UUID
 ```
 
-This local gate requires the live OpenAI configuration, verifies the frozen route and context,
-uses a read-only tenant-scoped transaction, checks local schema/token/request invariants, and
-serializes through the real SDK into a mandatory in-memory HTTP transport with a dummy credential.
-It neither claims a run nor starts a worker. It prints structural metadata only. A local PASS
-explicitly leaves provider acceptance UNVERIFIED and never authorizes a retry. Unsupported image
-inputs, other Agent types, unresolved/recursive schema references, and unknown historical routes
-fail closed in this deliberately narrow diagnostic (not in the production provider).
+This local gate supports Researcher, Creative Strategist, Producer, Intelligence, Commerce
+Operations, and Supervisor. It verifies the frozen AgentVersion, route, pricing, context provenance,
+token envelope, and exact compiled provider contract in a read-only tenant transaction. Image
+references are reported only as bounded identity/count metadata; bytes are not loaded. It neither
+claims a run nor starts a worker and prints no Product or Research prose. A local PASS explicitly
+leaves provider acceptance UNVERIFIED and never authorizes a retry.
+
+Audit every installed contract version offline:
+
+```bash
+make openai-contract-audit
+make openai-contract-gate
+```
+
+The second command is also offline and proves that six current contracts serialize exclusively for
+the official input-token count endpoint. With separate operator approval, validate those synthetic
+contracts against OpenAI without generation:
+
+```bash
+make openai-contract-gate-approved \
+  APPROVAL=I_APPROVE_OPENAI_INPUT_TOKEN_CONTRACT_GATE \
+  DIAGNOSTIC_FILE=/private/path/openai-contract-gate.jsonl
+```
+
+This calls only `POST /v1/responses/input_tokens`. It sends no Product, Research, tenant, prompt, or
+asset content, makes no `/v1/responses` request, and records only contract identity, model, compiler
+revision, provider-schema digest, input-token count, and bounded rejection metadata.
 
 Provider HTTP failures now emit an `openai_status_diagnostic` log containing only status, allowlisted
 type/code/parameter, bounded request ID, and SDK class. Unknown values are redacted rather than

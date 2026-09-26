@@ -181,6 +181,8 @@ New runs use the explicit `production_planning.v2` Product/Research projection f
 retaining the complete approved CreativeConcept and full immutable source provenance. Historical
 Producer v1 runs retain their original full-snapshot context. Production domain rejections retain
 `PRODUCTION_PLAN_INVALID` and emit only finite bounded invariant diagnostics (ADR-049).
+All installed structured-output capabilities share the versioned OpenAI contract compiler and
+admission-before-reservation gate from ADR-050; worker validation remains defense in depth.
 Its bounded image references are opaque tenant/Asset/digest locators; only the OpenAI infrastructure
 adapter can materialize private bytes after rechecking current READY state, rights, allowed use, and
 digest. No object key or signed URL enters ModelContext or AgentRun persistence.

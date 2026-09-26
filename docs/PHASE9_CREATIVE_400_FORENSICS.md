@@ -93,6 +93,11 @@ a durable diagnostic source. The historical executions cannot be backfilled from
 
 ## Prepared probes — NOT EXECUTED
 
+> Historical record only — the generation-based probe described below is retired and its former
+> CLI shape no longer exists. Do not use these commands or approval token. ADR-050 replaces it with
+> the all-agent `POST /v1/responses/input_tokens` gate documented in
+> `22_LIVE_PROVIDER_AND_E2E_VALIDATION.md`; that gate cannot generate model output.
+
 Script: `apps/api/scripts/synthetic_openai_probe.py`. Offline preview uses the real SDK and existing
 Responses adapter with `httpx.MockTransport`, never the network and never Settings/credentials.
 

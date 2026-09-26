@@ -51,6 +51,7 @@ from creative_marketer.agent_runtime.domain import (
     AgentContextBudgetExceeded,
     AgentExecutionNotAllowed,
     AgentPeriodBudgetExceeded,
+    AgentProviderContractUnsupported,
     AgentRouteBudgetMismatch,
     AgentRunConflict,
     AgentRunDenied,
@@ -68,7 +69,6 @@ from creative_marketer.agent_runtime.domain import (
     ModelIncompleteResponse,
     ModelInvocationResult,
     ModelProviderBadRequest,
-    ModelProviderSchemaUnsupported,
     ModelProviderServerError,
     ModelRateLimited,
     ModelRefusal,
@@ -105,9 +105,12 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.infrastructure.model_providers.execution_process_only import (
+    ExecutionProcessOnlyModelProvider,
+)
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.infrastructure.model_providers.openai_schema import (
-    validate_openai_strict_output_schema,
+    compile_openai_strict_output_schema,
 )
 from creative_marketer.intelligence.domain import (
     CanonicalRef,
@@ -2442,6 +2445,56 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
     assert repository.attempts[attempt.id] == attempt
     assert len(provider.calls) == 2
 
+    rejected = replace(
+        replacement,
+        status=AgentRunStatus.FAILED,
+        started_at=now,
+        completed_at=now,
+        executed_by_workload_id="local-live-agent-worker",
+        resolved_provider=route_value.provider,
+        resolved_model=route_value.model,
+        resolved_model_route_version=route_value.route_version,
+        pricing_version=route_value.pricing.version,
+        reasoning_effort=route_value.reasoning_effort,
+        max_output_tokens=route_value.max_output_tokens,
+        model_call_count=1,
+        failure_code=ModelProviderBadRequest.code,
+    )
+    repository.runs[replacement.id] = rejected
+    rejected_attempt = ModelAttempt(
+        tenant_id,
+        rejected.id,
+        1,
+        "local-live-agent-worker",
+        route_value.route_version,
+        route_value.pricing.version,
+        route_value.provider,
+        route_value.model,
+        now,
+        now + timedelta(minutes=10),
+        status=ModelAttemptStatus.FAILED_NO_RESPONSE,
+        finished_at=now,
+        failure_code=ModelProviderBadRequest.code,
+    )
+    repository.attempts[rejected_attempt.id] = rejected_attempt
+    recovery = AgentRunRecoveryService(
+        lambda _tenant: MemoryUow(repository, RecordingWriter(), RecordingWriter()),
+        ModelRouter((route_value,)),
+        OperatorProvider(tenant_id),
+        providers=ModelProviderRegistry({"openai": ExecutionProcessOnlyModelProvider()}),
+    )
+
+    recovery_successor = await recovery.rerun_as_new(rejected.id)
+
+    assert recovery_successor.status is AgentRunStatus.PENDING
+    assert recovery_successor.recovery_of_run_id == rejected.id
+    assert recovery_successor.output_contract_version == 2
+    assert repository.runs[historical.id] == historical
+    assert repository.attempts[attempt.id] == attempt
+    assert repository.runs[rejected.id] == rejected
+    assert repository.attempts[rejected_attempt.id] == rejected_attempt
+    assert len(provider.calls) == 2
+
 
 @pytest.mark.asyncio
 async def test_transient_provider_timeout_is_retried_once_then_succeeds(monkeypatch) -> None:
@@ -2861,32 +2914,80 @@ async def test_invalid_openai_schema_fails_before_provider_start_without_unknown
         calls = 0
 
         def validate_invocation(self, invocation):
-            validate_openai_strict_output_schema(invocation.output_schema)
+            return compile_openai_strict_output_schema(
+                invocation.output_schema,
+                contract_key=invocation.output_contract_key,
+                contract_version=invocation.output_contract_version,
+            )
 
         async def generate_structured(self, _invocation):
             self.calls += 1
             pytest.fail("invalid schema must not cross the provider boundary")
 
     provider = StrictSchemaProvider()
-    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    runtime, repository, audit, outbox = service(preparation(tenant_id, product_id), provider)
     runtime.capabilities = AgentCapabilityRegistry((InvalidSchemaResearcher(),))
+    with pytest.raises(AgentProviderContractUnsupported) as caught:
+        await runtime.request_researcher(
+            context(tenant_id), product_id=product_id, idempotency_key="invalid-provider-schema"
+        )
+
+    assert caught.value.code == "AGENT_PROVIDER_CONTRACT_UNSUPPORTED"
+    assert repository.runs == {}
+    assert repository.attempts == {}
+    assert repository.reservations == []
+    assert outbox.values == []
+    assert audit.values[-1].action == "agent.run.provider_contract_denied"
+    assert audit.values[-1].reason_code == "AGENT_PROVIDER_CONTRACT_UNSUPPORTED"
+    assert "schema-secret" not in audit.values[-1].safe_metadata.canonical_json
+    assert provider.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_revalidates_schema_before_provider_started_as_defense_in_depth() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+
+    class MutableBoundaryProvider:
+        calls = 0
+
+        def validate_invocation(self, invocation):
+            return compile_openai_strict_output_schema(
+                invocation.output_schema,
+                contract_key=invocation.output_contract_key,
+                contract_version=invocation.output_contract_version,
+            )
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            pytest.fail("invalid worker schema must not reach provider I/O")
+
+    class InvalidWorkerSchema(ResearcherCapability):
+        def output_schema(self, version):
+            del version
+            return {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["value"],
+                "properties": {"value": {"properties": {"secret": {"type": "string"}}}},
+            }
+
+    provider = MutableBoundaryProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
     requested = await runtime.request_researcher(
-        context(tenant_id), product_id=product_id, idempotency_key="invalid-provider-schema"
+        context(tenant_id), product_id=product_id, idempotency_key="worker-schema-defense"
     )
+    runtime.capabilities = AgentCapabilityRegistry((InvalidWorkerSchema(),))
 
     failed = await runtime.execute(tenant_id, requested.id)
 
-    attempt = next(iter(repository.attempts.values()))
+    attempt = next(
+        value for value in repository.attempts.values() if value.agent_run_id == failed.id
+    )
     assert failed.status is AgentRunStatus.FAILED
-    assert failed.failure_code == ModelProviderSchemaUnsupported.code
-    assert failed.estimated_cost == 0
-    assert failed.input_tokens == failed.output_tokens == failed.total_tokens == 0
+    assert failed.failure_code == "MODEL_PROVIDER_SCHEMA_UNSUPPORTED"
     assert attempt.status is ModelAttemptStatus.FAILED_NO_RESPONSE
     assert attempt.provider_started_at is None
-    assert attempt.unknown_cost == 0
-    assert attempt.failure_code == ModelProviderSchemaUnsupported.code
     assert provider.calls == 0
-    assert "schema-secret" not in (failed.failure_code or "")
 
 
 async def _stranded(
