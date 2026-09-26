@@ -106,6 +106,67 @@ def test_producer_v2_compiler_expands_exactly_six_partial_object_branches() -> N
             assert set(branch["properties"]) == set(canonical["properties"])
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda schema: schema.pop("$defs"),
+        lambda schema: schema["$defs"].pop("shot"),
+        lambda schema: schema["$defs"]["shot"]["anyOf"].pop(),
+        lambda schema: schema["$defs"]["shot"]["anyOf"][0].__setitem__("extra", True),
+        lambda schema: schema["$defs"]["shot"]["anyOf"][0]["properties"].pop(
+            "image_generation_spec"
+        ),
+        lambda schema: schema["$defs"]["shot"]["anyOf"][0]["properties"].__setitem__(
+            "source_strategy", {"enum": ["USE_EXISTING_ASSET"]}
+        ),
+        lambda schema: schema["$defs"]["shot"]["anyOf"][0]["properties"][
+            "source_strategy"
+        ].__setitem__("const", "UNRECOGNIZED"),
+    ],
+    ids=[
+        "missing-definitions",
+        "missing-target-definition",
+        "wrong-branch-count",
+        "unexpected-branch-key",
+        "incomplete-branch-fields",
+        "missing-const-discriminator",
+        "wrong-discriminator-value",
+    ],
+)
+def test_producer_v2_compiler_fails_closed_on_noncanonical_shape(mutation) -> None:
+    contract = next(
+        value
+        for value in default_capability_registry().output_contracts()
+        if value.key == "production.production_plan" and value.version == 2
+    )
+    malformed = deepcopy(contract.schema)
+    mutation(malformed)
+
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        compile_openai_strict_output_schema(
+            malformed,
+            contract_key=contract.key,
+            contract_version=contract.version,
+        )
+
+
+def test_compiler_rejects_schema_over_provider_property_limit() -> None:
+    properties = {f"value_{index}": {"type": "string"} for index in range(5001)}
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(properties),
+        "properties": properties,
+    }
+
+    with pytest.raises(ModelProviderSchemaUnsupported):
+        compile_openai_strict_output_schema(
+            schema,
+            contract_key="test.oversized",
+            contract_version=1,
+        )
+
+
 @pytest.mark.parametrize("keyword", ["properties", "required", "additionalProperties"])
 def test_object_structural_keyword_requires_explicit_object_type(keyword: str) -> None:
     branch: dict[str, object] = {keyword: {} if keyword == "properties" else []}
