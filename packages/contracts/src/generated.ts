@@ -1822,6 +1822,10 @@ export interface components {
       operational_status: string;
       /** Original Unknown Cost */
       original_unknown_cost: string;
+      /** Output Contract Key */
+      output_contract_key: string;
+      /** Output Contract Version */
+      output_contract_version: number;
       /** Output Tokens */
       output_tokens: number;
       /** Pricing Version */

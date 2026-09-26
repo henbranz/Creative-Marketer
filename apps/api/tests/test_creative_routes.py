@@ -45,6 +45,8 @@ class AgentService:
             input_context_kind="creative_strategy.v1",
             selected_evidence=(),
             input_context_refs=({"kind": "creative_context", "digest": "sha256:" + "a" * 64},),
+            output_contract_key="creative.creative_concept_set",
+            output_contract_version=1,
         )
         self.error = None
 
@@ -145,6 +147,8 @@ async def test_creative_routes_expose_runs_results_and_decisions() -> None:
         ctx,
     )
     assert started.id == runs[0].id and len(runs) == 1
+    assert started.output_contract_key == "creative.creative_concept_set"
+    assert started.output_contract_version == 1
     assert replacement.id == started.id
     assert sets[0].freshness == "CURRENT"
     assert loaded_set.id == creative.value.id

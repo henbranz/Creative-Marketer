@@ -1,6 +1,8 @@
 # mypy: disable-error-code="arg-type,attr-defined,no-untyped-call,no-untyped-def,union-attr"
 
 import json
+from dataclasses import replace
+from decimal import Decimal
 from io import BytesIO
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -10,7 +12,10 @@ import pytest
 
 import scripts.live_acceptance as acceptance
 import scripts.live_validation as live
+from creative_marketer.agent_runtime.domain import AgentRunStatus
 from creative_marketer_api.config import Settings
+from creative_marketer_api.research_routes import _agent_run
+from tests.test_agent_runtime_domain import run
 
 DATABASE = "postgresql+psycopg://test:test@localhost:5432/test"
 
@@ -601,30 +606,40 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
         creative_concept_id=CONCEPT,
         producer_run_id=PRODUCER,
     )
-    route = acceptance.initial_producer_route()
-    failed = recoverable_run(
-        PRODUCER,
-        route,
-        status="FAILED",
+    failed_run = replace(
+        run(),
+        id=UUID(PRODUCER),
+        tenant_id=UUID(TENANT),
+        product_id=UUID(PRODUCT),
         agent_type="producer",
-        failure_code="MODEL_INVALID_OUTPUT",
+        input_context_kind="production_planning.v1",
+        selected_evidence=(),
+        output_contract_key="production.production_plan",
         output_contract_version=1,
-        estimated_cost="0.129156",
-        unknown_cost="0",
+        status=AgentRunStatus.FAILED,
+        failure_code="MODEL_INVALID_OUTPUT",
+        estimated_cost=Decimal("0.129156"),
+        unknown_cost=Decimal("0"),
     )
-    replacement = recoverable_run(
-        SUCCESSOR,
-        route,
-        status="PENDING",
-        agent_type="producer",
-        recovery_of_run_id=PRODUCER,
+    replacement_run = replace(
+        failed_run,
+        id=UUID(SUCCESSOR),
+        recovery_of_run_id=UUID(PRODUCER),
         output_contract_version=2,
-        agent_version_id=str(UUID(int=24)),
+        status=AgentRunStatus.PENDING,
+        failure_code=None,
+        agent_version_id=UUID(int=24),
         resolved_provider=None,
         resolved_model=None,
-        model_route_version=None,
+        resolved_model_route_version=None,
         pricing_version=None,
     )
+    failed = _agent_run(failed_run).model_dump(mode="json")
+    replacement = _agent_run(replacement_run).model_dump(mode="json")
+    assert failed["output_contract_key"] == "production.production_plan"
+    assert failed["output_contract_version"] == 1
+    assert replacement["output_contract_key"] == "production.production_plan"
+    assert replacement["output_contract_version"] == 2
     fake = FakeApi(
         {
             ("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, replacement],

@@ -680,6 +680,8 @@ const agentRun: AgentRun = {
   input_context_schema_version: 1,
   input_context_digest: `sha256:${"3".repeat(64)}`,
   model_profile_key: "research_balanced",
+  output_contract_key: "research.research_snapshot",
+  output_contract_version: 1,
   resolved_provider: "openai",
   resolved_model: "gpt-5.6-sol",
   model_route_version: "openai-gpt-5.6-sol-research-2026-09-13",

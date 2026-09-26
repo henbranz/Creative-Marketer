@@ -109,6 +109,14 @@
             "title": "Original Unknown Cost",
             "type": "string"
           },
+          "output_contract_key": {
+            "title": "Output Contract Key",
+            "type": "string"
+          },
+          "output_contract_version": {
+            "title": "Output Contract Version",
+            "type": "integer"
+          },
           "output_tokens": {
             "title": "Output Tokens",
             "type": "integer"
@@ -273,6 +281,8 @@
           "input_context_schema_version",
           "input_context_digest",
           "model_profile_key",
+          "output_contract_key",
+          "output_contract_version",
           "resolved_provider",
           "resolved_model",
           "model_route_version",

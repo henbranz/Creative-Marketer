@@ -251,6 +251,8 @@ class AgentRunResponse(Contract):
     input_context_schema_version: int
     input_context_digest: str
     model_profile_key: str
+    output_contract_key: str
+    output_contract_version: int
     resolved_provider: str | None
     resolved_model: str | None
     model_route_version: str | None
@@ -478,6 +480,8 @@ def _agent_run(value: AgentRun) -> AgentRunResponse:
         input_context_schema_version=value.input_context_schema_version,
         input_context_digest=value.input_context_digest,
         model_profile_key=value.model_profile_key,
+        output_contract_key=value.output_contract_key,
+        output_contract_version=value.output_contract_version,
         resolved_provider=value.resolved_provider,
         resolved_model=value.resolved_model,
         model_route_version=value.resolved_model_route_version,

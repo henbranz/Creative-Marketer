@@ -108,6 +108,8 @@ async def test_researcher_run_and_snapshot_routes_return_governed_state() -> Non
     assert fetched.operational_status == "normal"
     assert not fetched.is_stranded
     assert fetched.recovery_of_run_id is None
+    assert fetched.output_contract_key == "research.research_snapshot"
+    assert fetched.output_contract_version == 1
     assert snapshots[0].freshness == snapshot.freshness == "current"
     assert snapshot.findings[0].citations[0].block_digest
 

@@ -46,6 +46,8 @@ class AgentService:
             agent_type="producer",
             input_context_kind="production_planning.v1",
             selected_evidence=(),
+            output_contract_key="production.production_plan",
+            output_contract_version=1,
         )
         self.error = None
 
@@ -55,7 +57,12 @@ class AgentService:
         return self.run
 
     async def request_producer_replacement(self, _context, **values):
-        return replace(self.run, id=uuid4(), recovery_of_run_id=values["failed_run_id"])
+        return replace(
+            self.run,
+            id=uuid4(),
+            recovery_of_run_id=values["failed_run_id"],
+            output_contract_version=2,
+        )
 
     async def list_runs(self, _context, _product_id):
         return (self.run, replace(self.run, id=uuid4(), agent_type="orchestrator"))
@@ -162,7 +169,11 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
         production.jobs[0].id, context
     )
     assert started.id == agent.run.id
+    assert started.output_contract_key == "production.production_plan"
+    assert started.output_contract_version == 1
     assert replacement.recovery_of_run_id == agent.run.id
+    assert replacement.output_contract_key == "production.production_plan"
+    assert replacement.output_contract_version == 2
     assert [item.id for item in runs] == [agent.run.id]
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value
