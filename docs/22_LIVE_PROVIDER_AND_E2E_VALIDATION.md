@@ -90,9 +90,9 @@ make openai-contract-audit
 make openai-contract-gate
 ```
 
-The second command is also offline and proves that six current contracts serialize exclusively for
-the official input-token count endpoint. With separate operator approval, validate those synthetic
-contracts against OpenAI without generation:
+The second command is also offline and proves that all eight installed contract versions across the
+six model-backed agent types serialize exclusively for the official input-token count endpoint. With
+separate operator approval, validate those synthetic contracts against OpenAI without generation:
 
 ```bash
 make openai-contract-gate-approved \

@@ -42,7 +42,8 @@ Compatibility is established through three distinct gates:
 2. admission-time compilation of the exact resolved contract before budget reservation, AgentRun,
    outbox, or worker state exists, with worker validation retained as defense in depth;
 3. an explicit operator-only provider gate using `POST /v1/responses/input_tokens` with synthetic
-   content for all current agents. It never calls `/v1/responses` and never generates output.
+   content for all eight installed contract versions across the six model-backed agents. It never
+   calls `/v1/responses` and never generates output.
 
 Provider rejection at gate 2 uses `AGENT_PROVIDER_CONTRACT_UNSUPPORTED`, not an HTTP provider failure
 code. Only identifiers, version, provider, and mismatch category enter the denial audit.

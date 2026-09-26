@@ -11,7 +11,7 @@ from scripts import synthetic_openai_probe as probe
 
 
 @pytest.mark.asyncio
-async def test_preview_is_offline_and_counts_every_current_contract(monkeypatch):
+async def test_preview_is_offline_and_counts_every_installed_contract(monkeypatch):
     async def forbidden(*_args, **_kwargs):
         pytest.fail("preview cannot use network")
 
@@ -19,7 +19,7 @@ async def test_preview_is_offline_and_counts_every_current_contract(monkeypatch)
     monkeypatch.setattr(probe, "Settings", lambda: pytest.fail("preview cannot load credentials"))
     result = await probe.preview()
     assert result["endpoint"] == "/v1/responses/input_tokens"
-    assert result["contract_count"] == 6
+    assert result["contract_count"] == 8
     assert result["generation_requests"] == 0
     assert {item["agent_type"] for item in result["contracts"]} == {
         "researcher",
@@ -41,7 +41,7 @@ async def test_gate_uses_only_input_token_count_endpoint_and_synthetic_data():
         return httpx.Response(200, json={"input_tokens": 123})
 
     results = await probe.count_contracts("offline-only", transport=httpx.MockTransport(reply))
-    assert len(calls) == len(results) == 6
+    assert len(calls) == len(results) == 8
     for request, result in zip(calls, results, strict=True):
         assert request.method == "POST"
         assert request.url.path == "/v1/responses/input_tokens"
@@ -75,7 +75,7 @@ async def test_rejection_records_only_safe_fields_without_retry(status):
         )
 
     results = await probe.count_contracts("offline-only", transport=httpx.MockTransport(reply))
-    assert len(calls) == 6
+    assert len(calls) == 8
     assert all(item["outcome"] == "rejected" for item in results)
     assert all(item["error_code"] == "future_code" for item in results)
     assert "private-context" not in json.dumps(results)

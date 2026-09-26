@@ -58,8 +58,6 @@ class ContractCase:
 def contract_cases() -> tuple[ContractCase, ...]:
     cases: list[ContractCase] = []
     for contract in default_capability_registry().output_contracts():
-        if not contract.current:
-            continue
         compiled = compile_openai_strict_output_schema(
             contract.schema, contract_key=contract.key, contract_version=contract.version
         )
