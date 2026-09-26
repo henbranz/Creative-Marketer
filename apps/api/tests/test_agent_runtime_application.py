@@ -60,6 +60,7 @@ from creative_marketer.agent_runtime.domain import (
     AgentRunRecoveryRequired,
     AgentRunStatus,
     BudgetExceeded,
+    InvalidModelOutput,
     KnownFailedAgentRun,
     ModelAttempt,
     ModelAttemptStatus,
@@ -2629,6 +2630,48 @@ async def test_returned_response_without_usage_preserves_bounded_cost_uncertaint
     assert operational.operational_status == "normal"
     assert operational.is_stranded is False
     assert operational.remaining_unknown_cost == failed.reserved_cost
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_provider_output_with_completed_response_is_recorded_before_failure() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    returned = ReturnedProviderResponse(
+        provider="openai",
+        model="gpt-5.6-sol",
+        status=ProviderResponseStatus.COMPLETED,
+        failure_reason=ProviderFailureReason.INVALID_OUTPUT,
+        provider_response_id="resp_invalid_output",
+        usage=ModelUsage(100, 50, 150),
+    )
+
+    class InvalidOutputProvider:
+        calls = 0
+
+        def validate_invocation(self, _invocation):
+            return None
+
+        async def generate_structured(self, _invocation):
+            self.calls += 1
+            raise InvalidModelOutput("invalid output", returned_response=returned)
+
+    provider = InvalidOutputProvider()
+    runtime, repository, _, _ = service(preparation(tenant_id, product_id), provider)
+    requested = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="invalid-output-response"
+    )
+
+    failed = await runtime.execute(tenant_id, requested.id)
+
+    attempt = next(iter(repository.attempts.values()))
+    assert failed.status is AgentRunStatus.FAILED
+    assert failed.failure_code == "MODEL_INVALID_OUTPUT"
+    assert failed.provider_response_id == "resp_invalid_output"
+    assert failed.estimated_cost == Decimal("0.001400")
+    assert attempt.status is ModelAttemptStatus.FAILED_RESPONSE
+    assert attempt.provider_response_status is ProviderResponseStatus.COMPLETED
+    assert attempt.provider_failure_reason is ProviderFailureReason.INVALID_OUTPUT
+    assert attempt.usage_available is True
     assert provider.calls == 1
 
 

@@ -301,6 +301,10 @@ def test_routes_pricing_contracts_and_selection() -> None:
     with pytest.raises(ValueError):
         ImageReservationPricing().reserve("AUTO")
     assert len(load_production_plan_schema()["$defs"]) > 1  # type: ignore[arg-type]
+    with pytest.raises(InvalidProductionPlan) as unsupported:
+        load_production_plan_schema(99)
+    assert unsupported.value.diagnostic.reason is ProductionPlanInvalidReason.SCHEMA_INVALID
+    assert unsupported.value.diagnostic.metadata == {"contract_version": 99}
     items = [manifest_item("logo"), manifest_item("product_hero"), manifest_item(allowed=False)]
     assert [item.role for item in select_visual_assets(items)] == ["product_hero", "logo"]
     assert [item.tool_key for item in media_tool_contracts()] == [
@@ -473,6 +477,38 @@ def test_v1_remains_readable_while_v2_rejects_structural_drift() -> None:
     output["generation_segments"][0]["duration_seconds"] = 4
     assert Draft202012Validator(load_production_plan_schema(1)).is_valid(output)
     assert not Draft202012Validator(load_production_plan_schema(2)).is_valid(output)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("existing-binding", ProductionPlanInvalidReason.EXISTING_ASSET_BINDING_INVALID),
+        ("image-strategy", ProductionPlanInvalidReason.IMAGE_SPEC_STRATEGY_MISMATCH),
+        ("duplicate-segment-shot", ProductionPlanInvalidReason.SEGMENT_SHOT_DUPLICATE),
+    ],
+)
+def test_v1_schema_drift_is_rejected_by_domain_validation(mutation, reason) -> None:
+    planning = context()
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+    if mutation == "existing-binding":
+        output["scenes"][0]["shots"][0]["source_strategy"] = "USE_EXISTING_ASSET"
+    elif mutation == "image-strategy":
+        output["scenes"][0]["shots"][0]["source_strategy"] = "GENERATE_VIDEO"
+    else:
+        output["generation_segments"][1]["shot_keys"] = ["shot_one"]
+
+    assert Draft202012Validator(load_production_plan_schema(1)).is_valid(output)
+    with pytest.raises(InvalidProductionPlan) as caught:
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+            contract_version=1,
+        )
+    assert caught.value.diagnostic.reason is reason
 
 
 @pytest.mark.asyncio
