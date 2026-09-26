@@ -14,7 +14,7 @@ from creative_marketer.creative.domain import product_claim_refs
 PRODUCER_CONTEXT_VERSION = 2
 PRODUCER_PRODUCT_PROJECTION_VERSION = 1
 PRODUCER_RESEARCH_PROJECTION_VERSION = 1
-PRODUCER_PROMPT_REVISION = "producer_v4_context_v2"
+PRODUCER_PROMPT_REVISION = "producer_v5_contract_v2"
 
 
 class InvalidProducerProjection(ValueError):

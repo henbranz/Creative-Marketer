@@ -175,10 +175,12 @@ are unchanged. Explicit trusted capability handlers own context/output semantics
 owns route, budget, attempt, provider, recovery, Audit, Outbox, and telemetry behavior.
 
 Producer is the third installed capability. It reuses the same one-call lifecycle and recovery
-mechanism, but validates `production.production_plan.v1` against frozen approved-Creative context.
+mechanism, but validates the AgentRun's immutable Production Plan contract version against frozen
+approved-Creative context. Current runs use v2; historical v1 runs retain their original schema.
 New runs use the explicit `production_planning.v2` Product/Research projection from ADR-048 while
 retaining the complete approved CreativeConcept and full immutable source provenance. Historical
-Producer v1 runs retain their original full-snapshot context.
+Producer v1 runs retain their original full-snapshot context. Production domain rejections retain
+`PRODUCTION_PLAN_INVALID` and emit only finite bounded invariant diagnostics (ADR-049).
 Its bounded image references are opaque tenant/Asset/digest locators; only the OpenAI infrastructure
 adapter can materialize private bytes after rechecking current READY state, rights, allowed use, and
 digest. No object key or signed URL enters ModelContext or AgentRun persistence.

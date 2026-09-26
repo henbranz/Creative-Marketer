@@ -48,6 +48,10 @@ class ProducerRunStart(Contract):
     aspect_ratio: str = "9:16"
 
 
+class ProducerReplacementStart(Contract):
+    transition_id: UUID
+
+
 class ProductionShotResponse(Contract):
     id: UUID
     shot_key: str
@@ -269,6 +273,29 @@ def create_production_router(
             for item in await agent_service.list_runs(ctx, product_id)
             if item.agent_type == "producer"
         ]
+
+    @router.post(
+        "/products/{product_id}/production/runs/{failed_run_id}/replacement",
+        response_model=AgentRunResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def replace_producer(
+        product_id: UUID,
+        failed_run_id: UUID,
+        value: ProducerReplacementStart,
+        ctx: Context,
+    ) -> AgentRunResponse:
+        try:
+            return _agent_run(
+                await agent_service.request_producer_replacement(
+                    ctx,
+                    product_id=product_id,
+                    failed_run_id=failed_run_id,
+                    transition_id=value.transition_id,
+                )
+            )
+        except (AgentRuntimeError, ProductionError, ValueError) as error:
+            raise failure(error) from error
 
     @router.get(
         "/products/{product_id}/production/plans",

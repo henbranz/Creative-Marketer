@@ -27,6 +27,7 @@ from .domain import (
     ProductionCreativeRefreshRequired,
     ProductionPermissionDenied,
     ProductionPlan,
+    ProductionPlanInvalidReason,
     ProductionPlanningContext,
     ProductionPlanningRequest,
     ProductionScene,
@@ -35,7 +36,8 @@ from .domain import (
 )
 
 PRODUCTION_CONTRACT_KEY = "production.production_plan"
-PRODUCTION_CONTRACT_VERSION = 1
+PRODUCTION_CONTRACT_VERSION = 2
+PRODUCTION_HISTORICAL_CONTRACT_VERSIONS = frozenset({1, 2})
 SEEDANCE_MODEL = "dreamina-seedance-2-5-260628"
 SEEDANCE_ROUTE_VERSION = "byteplus-seedance-2.5-2026-08-17"
 SEEDANCE_PRICING_VERSION = "byteplus-enhanced-2026-08-17"
@@ -208,8 +210,14 @@ class ImageReservationPricing:
         return total.quantize(Decimal("0.000001"), rounding=ROUND_UP)
 
 
-def load_production_plan_schema() -> Mapping[str, object]:
-    path = Path(__file__).with_name("schemas") / "production.production_plan.v1.json"
+def load_production_plan_schema(version: int = PRODUCTION_CONTRACT_VERSION) -> Mapping[str, object]:
+    if version not in PRODUCTION_HISTORICAL_CONTRACT_VERSIONS:
+        raise InvalidProductionPlan(
+            "production output contract version is unsupported",
+            reason=ProductionPlanInvalidReason.SCHEMA_INVALID,
+            metadata={"contract_version": version},
+        )
+    path = Path(__file__).with_name("schemas") / f"production.production_plan.v{version}.json"
     return json.loads(path.read_text())  # type: ignore[no-any-return]
 
 
@@ -359,105 +367,200 @@ def validate_production_plan(
     agent_run_id: UUID,
     context: ProductionPlanningContext,
     concept_scene_keys: Sequence[str],
+    contract_version: int = PRODUCTION_CONTRACT_VERSION,
 ) -> ProductionPlan:
     errors = sorted(
         Draft202012Validator(
-            load_production_plan_schema(), format_checker=FormatChecker()
+            load_production_plan_schema(contract_version), format_checker=FormatChecker()
         ).iter_errors(dict(output)),
         key=lambda item: list(item.path),
     )
     if errors:
-        raise InvalidProductionPlan("provider output does not match production contract")
-    raw_scenes = output["scenes"]
-    raw_segments = output["generation_segments"]
-    assert isinstance(raw_scenes, list) and isinstance(raw_segments, list)
+        first = errors[0]
+        raise InvalidProductionPlan(
+            "provider output does not match production contract",
+            reason=ProductionPlanInvalidReason.SCHEMA_INVALID,
+            metadata={
+                "contract_version": contract_version,
+                "schema_validator": str(first.validator),
+                "path_depth": len(tuple(first.path)),
+            },
+        )
+    try:
+        raw_scenes = output["scenes"]
+        raw_segments = output["generation_segments"]
+        if not isinstance(raw_scenes, list) or not isinstance(raw_segments, list):
+            raise TypeError
+    except (KeyError, TypeError):
+        raise InvalidProductionPlan(
+            "provider output cannot be parsed",
+            reason=ProductionPlanInvalidReason.PARSE_INVALID,
+        ) from None
     if [str(item["scene_key"]) for item in raw_scenes] != list(concept_scene_keys):
-        raise InvalidProductionPlan("plan must preserve every CreativeConcept scene in order")
+        raise InvalidProductionPlan(
+            "plan must preserve every CreativeConcept scene in order",
+            reason=ProductionPlanInvalidReason.SCENE_ORDER_MISMATCH,
+            metadata={
+                "expected_scene_count": len(concept_scene_keys),
+                "actual_scene_count": len(raw_scenes),
+            },
+        )
     selected_ids = {item.asset_id for item in context.selected_assets}
     scenes: list[ProductionScene] = []
-    for raw_scene in raw_scenes:
-        shots: list[ProductionShot] = []
-        for raw_shot in raw_scene["shots"]:
-            strategy = SourceStrategy(raw_shot["source_strategy"])
-            existing = raw_shot["existing_asset_id"]
-            image_spec = raw_shot["image_generation_spec"]
-            if strategy is SourceStrategy.USE_EXISTING_ASSET:
-                if existing is None or UUID(existing) not in selected_ids or image_spec is not None:
-                    raise InvalidProductionPlan("existing shot requires an authorized frozen Asset")
-            elif existing is not None:
-                raise InvalidProductionPlan("only existing-asset shots may bind existing_asset_id")
-            if (strategy is SourceStrategy.GENERATE_IMAGE) != (image_spec is not None):
-                raise InvalidProductionPlan("image generation strategy/specification mismatch")
-            specification = {
-                key: value
-                for key, value in raw_shot.items()
-                if key not in {"shot_key", "scene_key", "ordinal", "source_strategy"}
-            }
-            shots.append(
-                ProductionShot(
-                    raw_shot["shot_key"],
-                    raw_shot["scene_key"],
-                    raw_shot["ordinal"],
-                    strategy,
-                    specification,
+    try:
+        for raw_scene in raw_scenes:
+            shots: list[ProductionShot] = []
+            for raw_shot in raw_scene["shots"]:
+                strategy = SourceStrategy(raw_shot["source_strategy"])
+                existing = raw_shot["existing_asset_id"]
+                image_spec = raw_shot["image_generation_spec"]
+                if strategy is SourceStrategy.USE_EXISTING_ASSET:
+                    if existing is None or image_spec is not None:
+                        raise InvalidProductionPlan(
+                            "existing Asset binding conflicts with source strategy",
+                            reason=ProductionPlanInvalidReason.EXISTING_ASSET_BINDING_INVALID,
+                            metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                        )
+                    asset_id = UUID(str(existing))
+                    if asset_id not in selected_ids:
+                        raise InvalidProductionPlan(
+                            "existing shot references an unauthorized Asset",
+                            reason=ProductionPlanInvalidReason.EXISTING_ASSET_UNAUTHORIZED,
+                            metadata={"asset_id": str(asset_id)},
+                        )
+                elif existing is not None:
+                    raise InvalidProductionPlan(
+                        "only existing-asset shots may bind existing_asset_id",
+                        reason=ProductionPlanInvalidReason.EXISTING_ASSET_BINDING_INVALID,
+                        metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                    )
+                if (strategy is SourceStrategy.GENERATE_IMAGE) != (image_spec is not None):
+                    raise InvalidProductionPlan(
+                        "image generation strategy/specification mismatch",
+                        reason=ProductionPlanInvalidReason.IMAGE_SPEC_STRATEGY_MISMATCH,
+                        metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                    )
+                if isinstance(image_spec, Mapping):
+                    for value in image_spec["reference_asset_ids"]:
+                        asset_id = UUID(str(value))
+                        if asset_id not in selected_ids:
+                            raise InvalidProductionPlan(
+                                "image specification references an unauthorized Asset",
+                                reason=ProductionPlanInvalidReason.IMAGE_REFERENCE_ASSET_UNAUTHORIZED,
+                                metadata={"asset_id": str(asset_id)},
+                            )
+                specification = {
+                    key: value
+                    for key, value in raw_shot.items()
+                    if key not in {"shot_key", "scene_key", "ordinal", "source_strategy"}
+                }
+                shots.append(
+                    ProductionShot(
+                        raw_shot["shot_key"],
+                        raw_shot["scene_key"],
+                        raw_shot["ordinal"],
+                        strategy,
+                        specification,
+                    )
+                )
+            scenes.append(
+                ProductionScene(
+                    raw_scene["scene_key"],
+                    raw_scene["ordinal"],
+                    raw_scene["purpose"],
+                    raw_scene["duration_seconds"],
+                    raw_scene["message"],
+                    raw_scene["voiceover"],
+                    raw_scene["on_screen_text"],
+                    tuple(shots),
                 )
             )
-        scenes.append(
-            ProductionScene(
-                raw_scene["scene_key"],
-                raw_scene["ordinal"],
-                raw_scene["purpose"],
-                raw_scene["duration_seconds"],
-                raw_scene["message"],
-                raw_scene["voiceover"],
-                raw_scene["on_screen_text"],
-                tuple(shots),
+        segments = tuple(
+            GenerationSegment(
+                item["segment_key"],
+                tuple(item["shot_keys"]),
+                MediaKind(item["media_kind"]),
+                item["duration_seconds"],
+                tuple(item["continuity"]),
+                tuple(UUID(str(value)) for value in item["reference_asset_ids"]),
+                item["generation_spec"],
             )
+            for item in raw_segments
         )
-    segments = tuple(
-        GenerationSegment(
-            item["segment_key"],
-            tuple(item["shot_keys"]),
-            MediaKind(item["media_kind"]),
-            item["duration_seconds"],
-            tuple(item["continuity"]),
-            tuple(UUID(value) for value in item["reference_asset_ids"]),
-            item["generation_spec"],
-        )
-        for item in raw_segments
-    )
+    except InvalidProductionPlan:
+        raise
+    except (KeyError, TypeError, ValueError, AssertionError, StopIteration):
+        raise InvalidProductionPlan(
+            "provider output cannot be parsed safely",
+            reason=ProductionPlanInvalidReason.PARSE_INVALID,
+        ) from None
     if any(
         asset_id not in selected_ids for item in segments for asset_id in item.reference_asset_ids
     ):
-        raise InvalidProductionPlan("segment references an Asset outside frozen Producer context")
+        raise InvalidProductionPlan(
+            "segment references an Asset outside frozen Producer context",
+            reason=ProductionPlanInvalidReason.SEGMENT_REFERENCE_ASSET_UNAUTHORIZED,
+        )
+
+    # Validate all cross-object relationships before pricing dereferences them.
+    shot_by_key = {shot.shot_key: shot for scene in scenes for shot in scene.shots}
+    segment_shot_keys = [key for segment in segments for key in segment.shot_keys]
+    if any(key not in shot_by_key for key in segment_shot_keys):
+        raise InvalidProductionPlan(
+            "generation segment references an unknown shot",
+            reason=ProductionPlanInvalidReason.SEGMENT_UNKNOWN_SHOT,
+        )
+    if len(segment_shot_keys) != len(set(segment_shot_keys)):
+        raise InvalidProductionPlan(
+            "a shot may appear in only one generation segment",
+            reason=ProductionPlanInvalidReason.SEGMENT_SHOT_DUPLICATE,
+        )
+    expected_strategy = {
+        MediaKind.IMAGE: SourceStrategy.GENERATE_IMAGE,
+        MediaKind.VIDEO: SourceStrategy.GENERATE_VIDEO,
+    }
+    if any(
+        shot_by_key[key].source_strategy is not expected_strategy[segment.media_kind]
+        for segment in segments
+        for key in segment.shot_keys
+    ):
+        raise InvalidProductionPlan(
+            "segment media kind conflicts with shot source strategy",
+            reason=ProductionPlanInvalidReason.SEGMENT_MEDIA_STRATEGY_MISMATCH,
+        )
     seedance = SeedancePricing()
     image = ImageReservationPricing()
-    video_cost = sum(
-        (
-            seedance.cost(
-                output_duration_seconds=item.duration_seconds or 0,
-                resolution=str(item.generation_spec["resolution"]),
-            )
-            for item in segments
-            if item.media_kind is MediaKind.VIDEO
-        ),
-        Decimal(0),
-    )
-    image_cost = sum(
-        (
-            image.reserve(
-                next(
-                    str(shot.specification["image_generation_spec"]["quality_intent"])  # type: ignore[index]
-                    for scene in scenes
-                    for shot in scene.shots
-                    if shot.shot_key in item.shot_keys
+    try:
+        video_cost = sum(
+            (
+                seedance.cost(
+                    output_duration_seconds=item.duration_seconds or 0,
+                    resolution=str(item.generation_spec["resolution"]),
                 )
-            )
-            for item in segments
-            if item.media_kind is MediaKind.IMAGE
-        ),
-        Decimal(0),
-    )
+                for item in segments
+                if item.media_kind is MediaKind.VIDEO
+            ),
+            Decimal(0),
+        )
+        image_cost = sum(
+            (
+                image.reserve(
+                    str(
+                        shot_by_key[item.shot_keys[0]].specification["image_generation_spec"][  # type: ignore[index]
+                            "quality_intent"
+                        ]
+                    )
+                )
+                for item in segments
+                if item.media_kind is MediaKind.IMAGE
+            ),
+            Decimal(0),
+        )
+    except (KeyError, TypeError, ValueError, AssertionError, StopIteration):
+        raise InvalidProductionPlan(
+            "production pricing dimensions are invalid",
+            reason=ProductionPlanInvalidReason.PRICING_DIMENSION_INVALID,
+        ) from None
     cost = ProductionCost(
         video_cost,
         image_cost,
@@ -466,7 +569,7 @@ def validate_production_plan(
         image.version,
     )
     semantic = {
-        "schema_version": 1,
+        "schema_version": contract_version,
         "context_digest": context.context_digest,
         "strategy": output["strategy"],
         "format": output["format"],
@@ -487,6 +590,7 @@ def validate_production_plan(
         else (),
         cost,
         canonical_digest(semantic),
+        schema_version=contract_version,
     )
 
 

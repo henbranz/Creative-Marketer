@@ -66,7 +66,7 @@ def test_fresh_agent_configurations_create_new_sol_policy_versions() -> None:
     ] == [
         "researcher_v3_social_evidence",
         "creative_strategist_v3_sol_16k_policy",
-        "producer_v4_context_v2",
+        "producer_v5_contract_v2",
     ]
     assert [
         configuration.run_budget_policy.max_cost
@@ -88,6 +88,7 @@ def test_fresh_agent_configurations_create_new_sol_policy_versions() -> None:
         configuration.run_budget_policy.max_model_calls == 1
         for configuration in (researcher, creative, producer)
     )
+    assert producer.output_contract_version == 2
     assert all(
         configuration.run_budget_policy.max_tool_calls == 0
         for configuration in (researcher, creative, producer)

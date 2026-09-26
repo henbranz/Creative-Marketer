@@ -77,6 +77,7 @@ from creative_marketer.orchestration.domain import (
 from creative_marketer.production.application import (
     PRODUCTION_CONTRACT_KEY,
     PRODUCTION_CONTRACT_VERSION,
+    PRODUCTION_HISTORICAL_CONTRACT_VERSIONS,
     build_production_context,
     initial_producer_route,
     load_production_plan_schema,
@@ -84,7 +85,9 @@ from creative_marketer.production.application import (
     validate_production_plan,
 )
 from creative_marketer.production.domain import (
+    InvalidProductionPlan,
     ProductionCreativeRefreshRequired,
+    ProductionError,
     ProductionPlanningContext,
     ProductionPlanningRequest,
 )
@@ -126,6 +129,7 @@ from .domain import (
     ModelProviderError,
     ModelRoute,
     ModelRouteUnavailable,
+    ProducerReplacementNotAllowed,
     ProviderFailureReason,
     ProviderResponseStatus,
     RecoveryAgentUnavailable,
@@ -409,12 +413,14 @@ class ProducerCapability:
     output_contract_version: int = PRODUCTION_CONTRACT_VERSION
 
     def supports_output_contract(self, key: str, version: int) -> bool:
-        return key == self.output_contract_key and version == self.output_contract_version
+        return (
+            key == self.output_contract_key and version in PRODUCTION_HISTORICAL_CONTRACT_VERSIONS
+        )
 
     def output_schema(self, version: int) -> Mapping[str, object]:
-        if version != self.output_contract_version:
+        if version not in PRODUCTION_HISTORICAL_CONTRACT_VERSIONS:
             raise AgentCapabilityUnavailable("Producer output contract is unsupported")
-        return load_production_plan_schema()
+        return load_production_plan_schema(version)
 
     def invocation(
         self, run: AgentRun, route: ModelRoute, context: ModelContext
@@ -461,6 +467,7 @@ class ProducerCapability:
             agent_run_id=run.id,
             context=planning,
             concept_scene_keys=tuple(str(item) for item in scene_keys),
+            contract_version=run.output_contract_version,
         )
         return CapabilityResult(
             value=plan,
@@ -1547,14 +1554,33 @@ def build_producer_model_context(
             "referenced_research_findings": [dict(item) for item in projection.research_findings],
             "provider_projection": projection_metadata,
         }
-        output_task = (
-            "Return only production.production_plan.v1. Execute the full approved "
-            "CreativeConcept without re-strategizing or re-researching it, and preserve every "
-            "supplied scene in order. Product facts are authorized only by exact entries in "
-            "producer_product.approved_claims; Research findings explain approved rationale but "
-            "do not grant Product claim authority. Preserve supplied safety constraints and "
-            "disclaimers. Plan media; never authorize or execute generation."
-        )
+        output_contract_version = preparation.producer.configuration.output_contract_version
+        if output_contract_version == 1:
+            output_task = (
+                "Return only production.production_plan.v1. Execute the full approved "
+                "CreativeConcept without re-strategizing or re-researching it, and preserve every "
+                "supplied scene in order. Product facts are authorized only by exact entries in "
+                "producer_product.approved_claims; Research findings explain approved rationale "
+                "but do not grant Product claim authority. Preserve supplied safety constraints "
+                "and disclaimers. Plan media; never authorize or execute generation."
+            )
+        else:
+            output_task = (
+                "Return only production.production_plan.v2. Execute the full approved "
+                "CreativeConcept without re-strategizing or re-researching it, and preserve every "
+                "supplied scene in order. Product facts are authorized only by exact entries in "
+                "producer_product.approved_claims; Research findings explain approved rationale "
+                "but do not grant Product claim authority. Preserve supplied safety constraints "
+                "and disclaimers. Preserve exact scene keys and contiguous scene/shot ordinals. "
+                "Use each shot key once globally and in at most one generation segment. "
+                "USE_EXISTING_ASSET may reference only selected_assets; GENERATE_IMAGE requires "
+                "an image specification; GENERATE_VIDEO and MANUAL_CAPTURE forbid one. All image "
+                "and segment reference Asset UUIDs must come from selected_assets. IMAGE segments "
+                "require null duration and only GENERATE_IMAGE shots; VIDEO segments require 4-30 "
+                "seconds and only GENERATE_VIDEO shots. Keep total scene duration 10-60 seconds, "
+                "at most 8 image segments and 4 video segments, and all specifications "
+                "provider-neutral. Plan media; never authorize or execute generation."
+            )
     else:
         raise ValueError("unsupported Producer context version")
     sections.pop("request", None)
@@ -1571,11 +1597,14 @@ def build_producer_model_context(
 
 
 def conservative_producer_input_token_bound(context: ModelContext) -> int:
+    contract_version = (
+        1 if "production.production_plan.v1" in context.output_task else PRODUCTION_CONTRACT_VERSION
+    )
     document = {
         "system_instructions": context.system_instructions,
         "context_sections": _plain_json(context.capability_context or {}),
         "output_task": context.output_task,
-        "output_schema": load_production_plan_schema(),
+        "output_schema": load_production_plan_schema(contract_version),
     }
     return len(json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode())
 
@@ -2264,6 +2293,7 @@ class AgentRunService:
         concept_id: UUID,
         request: ProductionPlanningRequest,
         idempotency_key: str,
+        recovery_of_run_id: UUID | None = None,
     ) -> AgentRun:
         if (
             context.membership_status is not MembershipStatus.ACTIVE
@@ -2281,6 +2311,8 @@ class AgentRunService:
                     for item in replay.input_context_refs
                 ):
                     raise AgentRunNotReady("idempotency key is bound to another request")
+                if replay.recovery_of_run_id != recovery_of_run_id:
+                    raise AgentRunNotReady("idempotency key is bound to another lineage")
                 return replay
             preparation = await uow.runs.prepare_producer(concept_id)
             if preparation is None:
@@ -2469,6 +2501,7 @@ class AgentRunService:
                 input_context_schema_version=PRODUCER_CONTEXT_VERSION,
                 input_context_digest=model_context.context_digest,
                 input_context_refs=refs,
+                recovery_of_run_id=recovery_of_run_id,
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
             )
@@ -2525,6 +2558,124 @@ class AgentRunService:
                 "agent_runs", attributes={"agent.type": "producer", "result": "pending"}
             )
             return run
+
+    async def request_producer_replacement(
+        self,
+        context: ExecutionContext,
+        *,
+        product_id: UUID,
+        failed_run_id: UUID,
+        transition_id: UUID,
+    ) -> AgentRun:
+        """Admit one explicit successor for an authoritative v1 validation failure."""
+
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+        ):
+            raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
+        idempotency_key = f"producer-replace:{transition_id}:{failed_run_id}"
+        async with self.uow_factory(context.tenant_id) as uow:
+            replay = await uow.runs.get_by_idempotency(idempotency_key)
+            if replay is not None:
+                if replay.agent_type != "producer" or replay.recovery_of_run_id != failed_run_id:
+                    raise ProducerReplacementNotAllowed(
+                        "replacement idempotency is bound to another request"
+                    )
+                return replay
+            failed = await uow.runs.get(failed_run_id)
+            if (
+                failed is None
+                or failed.tenant_id != context.tenant_id
+                or failed.product_id != product_id
+                or failed.agent_type != "producer"
+                or failed.status is not AgentRunStatus.FAILED
+                or failed.output_contract_key != PRODUCTION_CONTRACT_KEY
+                or failed.output_contract_version != 1
+                or failed.failure_code != "MODEL_INVALID_OUTPUT"
+                or failed.result_ref is not None
+            ):
+                raise ProducerReplacementNotAllowed(
+                    "replacement requires the exact eligible failed Producer run"
+                )
+            attempts = await uow.runs.list_attempts(failed_run_id)
+            if len(attempts) != 1:
+                raise ProducerReplacementNotAllowed(
+                    "replacement requires exactly one authoritative model attempt"
+                )
+            attempt = attempts[0]
+            if (
+                attempt.status is not ModelAttemptStatus.SUCCEEDED
+                or attempt.provider_response_status is not ProviderResponseStatus.COMPLETED
+                or attempt.provider_failure_reason is not None
+                or attempt.usage_available is not True
+                or attempt.provider_response_id is None
+                or attempt.unknown_cost != 0
+                or attempt.failure_code != failed.failure_code
+                or failed.model_call_count != 1
+                or failed.provider_response_id != attempt.provider_response_id
+                or failed.input_tokens != attempt.input_tokens
+                or failed.output_tokens != attempt.output_tokens
+                or failed.total_tokens != attempt.total_tokens
+                or failed.estimated_cost != attempt.estimated_cost
+            ):
+                raise ProducerReplacementNotAllowed(
+                    "replacement requires an authoritative completed provider response"
+                )
+            concept_ref = next(
+                (
+                    item
+                    for item in failed.input_context_refs
+                    if item.get("kind") == "approved_concept"
+                ),
+                None,
+            )
+            request_ref = next(
+                (
+                    item
+                    for item in failed.input_context_refs
+                    if item.get("kind") == "production_request"
+                ),
+                None,
+            )
+            try:
+                if concept_ref is None or request_ref is None:
+                    raise ValueError
+                concept_id = UUID(str(concept_ref["id"]))
+                request = ProductionPlanningRequest(
+                    str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
+                )
+            except (KeyError, TypeError, ValueError):
+                raise ProducerReplacementNotAllowed(
+                    "failed Producer request provenance is invalid"
+                ) from None
+            preparation = await uow.runs.prepare_producer(concept_id)
+            if preparation is None:
+                raise ProducerReplacementNotAllowed(
+                    "current approved Producer provenance is unavailable"
+                )
+            cfg = preparation.producer.configuration
+            if (
+                preparation.approved.concept.product_id != product_id
+                or preparation.producer.version_id == failed.agent_version_id
+                or cfg.output_contract_key != PRODUCTION_CONTRACT_KEY
+                or cfg.output_contract_version != PRODUCTION_CONTRACT_VERSION
+                or cfg.prompt_revision != PRODUCER_PROMPT_REVISION
+            ):
+                raise ProducerReplacementNotAllowed(
+                    "active Producer version must provide the hardened output contract"
+                )
+
+        replacement = await self.request_producer(
+            context,
+            concept_id=concept_id,
+            request=request,
+            idempotency_key=idempotency_key,
+            recovery_of_run_id=failed_run_id,
+        )
+        if replacement.recovery_of_run_id != failed_run_id:
+            raise ProducerReplacementNotAllowed("another Producer run won replacement admission")
+        return replacement
 
     async def request_intelligence(
         self,
@@ -3282,7 +3433,10 @@ class AgentRunService:
             if run is not None and attempt is not None and claim_committed:
                 code = (
                     error.code
-                    if isinstance(error, (AgentRuntimeError, ModelProviderError, CreativeError))
+                    if isinstance(
+                        error,
+                        (AgentRuntimeError, ModelProviderError, CreativeError, ProductionError),
+                    )
                     else "MODEL_INVALID_OUTPUT"
                 )
                 known_no_response = (
@@ -3346,6 +3500,32 @@ class AgentRunService:
                                 reason_code=error.code,
                                 safe_metadata=safe_metadata(
                                     cast(Mapping[str, JsonValue], error.diagnostic.safe_fields())
+                                ),
+                            )
+                        )
+                    if isinstance(error, InvalidProductionPlan):
+                        await uow.audit.append(
+                            AuditRecord(
+                                scope_kind=AuditScopeKind.TENANT,
+                                tenant_id=run.tenant_id,
+                                actor_kind=AuditActorKind.WORKLOAD,
+                                actor_id=workload.workload_id,
+                                action="production.plan_validation.failed",
+                                outcome=AuditOutcome.FAILED,
+                                resource_type="agent_run",
+                                resource_id=str(run.id),
+                                agent_definition_id=run.requested_agent_definition_id,
+                                agent_version_id=run.agent_version_id,
+                                agent_run_id=run.id,
+                                attempt_id=attempt.id,
+                                correlation_id=run.correlation_id,
+                                environment=workload.environment,
+                                reason_code=error.code,
+                                safe_metadata=safe_metadata(
+                                    cast(
+                                        Mapping[str, JsonValue],
+                                        error.diagnostic.safe_fields(),
+                                    )
                                 ),
                             )
                         )

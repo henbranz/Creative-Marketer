@@ -25,6 +25,7 @@ from creative_marketer.agent_runtime.application import (
     IntelligencePreparation,
     ModelProviderRegistry,
     ModelRouter,
+    ProducerPreparation,
     RecoveryOperator,
     RejectIdempotencyPrefixes,
     ResearcherCapability,
@@ -87,8 +88,11 @@ from creative_marketer.agent_runtime.domain import (
 )
 from creative_marketer.catalog.domain import ProductKnowledgeSnapshot
 from creative_marketer.creative.domain import (
+    ApprovedCreativeConcept,
     ChannelIntent,
     CreativeBriefIncomplete,
+    CreativeConceptDecision,
+    CreativeDecisionState,
     CreativeResearchRefreshRequired,
     CreativeStrategyRequest,
 )
@@ -131,8 +135,11 @@ from creative_marketer.research.domain import (
     research_sha256_v1,
 )
 from scripts.bootstrap_intelligence import intelligence_configuration
+from scripts.bootstrap_producer import producer_configuration
 from tests.test_agent_runtime_domain import output, route, run
 from tests.test_creative_strategy import output as creative_output
+from tests.test_production import context as production_context
+from tests.test_production import valid_output as production_output
 
 
 def configuration() -> AgentVersionConfiguration:
@@ -2211,6 +2218,228 @@ async def test_invalid_citation_fails_without_persisting_snapshot_and_records_bi
     assert failed.failure_code == "INVALID_RESEARCH_CITATION"
     assert failed.estimated_cost == Decimal("0.002400")
     assert repository.snapshots == {}
+
+
+@pytest.mark.asyncio
+async def test_invalid_production_plan_keeps_domain_code_and_safe_diagnostic() -> None:
+    planning = production_context()
+    raw = production_output(str(planning.selected_assets[0].asset_id))
+    raw["generation_segments"][0]["shot_keys"] = ["unknown_shot"]
+    tenant_id, product_id = uuid4(), uuid4()
+    provider = FakeModelProvider(
+        ModelInvocationResult(
+            raw,
+            "response-invalid-production",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-sol",
+        )
+    )
+    runtime, repository, audit, _ = service(
+        preparation(tenant_id, product_id),
+        provider,
+    )
+    payload = planning.semantic_content()
+    payload["production_request"] = payload.pop("request")
+    payload["production_context_digest"] = planning.context_digest
+    payload["concept_scene_keys"] = ["scene_one"]
+    model_context = ModelContext(
+        "instructions",
+        {},
+        (),
+        planning.context_digest,
+        schema_version=2,
+        capability_context=payload,
+        output_task="Return only production.production_plan.v2.",
+    )
+
+    async def resolve_context(_run):
+        return model_context
+
+    repository.resolve_context = resolve_context
+    requested = replace(
+        run(),
+        tenant_id=tenant_id,
+        product_id=product_id,
+        product_snapshot_id=planning.product_snapshot_id,
+        product_snapshot_digest=planning.product_snapshot_digest,
+        research_context_digest=planning.research_snapshot_digest,
+        context_digest=planning.context_digest,
+        input_context_digest=planning.context_digest,
+        selected_evidence=(),
+        agent_type="producer",
+        input_context_kind="production_planning.v2",
+        input_context_schema_version=2,
+        input_context_refs=({"kind": "production_context", "digest": planning.context_digest},),
+        model_profile_key="production_deep",
+        output_contract_key="production.production_plan",
+        output_contract_version=2,
+        reserved_cost=Decimal("0.32"),
+        max_total_tokens=32_000,
+    )
+    repository.runs[requested.id] = requested
+
+    failed = await runtime.execute(tenant_id, requested.id)
+
+    assert failed.failure_code == "PRODUCTION_PLAN_INVALID"
+    diagnostics = [
+        item for item in audit.values if item.action == "production.plan_validation.failed"
+    ]
+    assert len(diagnostics) == 1
+    assert diagnostics[0].safe_metadata.canonical_json == ('{"invariant":"SEGMENT_UNKNOWN_SHOT"}')
+    assert "unknown_shot" not in diagnostics[0].safe_metadata.canonical_json
+
+
+@pytest.mark.asyncio
+async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    creative_context = None
+
+    def model(invocation):
+        if invocation.output_contract_key == "research.research_snapshot":
+            return ModelInvocationResult(
+                output(invocation.untrusted_evidence[0]),
+                "research-response",
+                ModelUsage(100, 50, 150),
+                "openai",
+                "gpt-5.6-sol",
+            )
+        assert creative_context is not None
+        raw = creative_output(creative_context)
+        for concept in raw["concepts"]:
+            concept["supporting_research_refs"][0]["finding_key"] = (
+                creative_context.research_findings[0]["key"]
+            )
+        return ModelInvocationResult(
+            raw,
+            "creative-response",
+            ModelUsage(100, 50, 150),
+            "openai",
+            "gpt-5.6-sol",
+        )
+
+    provider = FakeModelProvider(model)
+    runtime, repository, _, _ = service(prepared, provider)
+    research = await runtime.request_researcher(
+        context(tenant_id), product_id=product_id, idempotency_key="replacement-research"
+    )
+    await runtime.execute(tenant_id, research.id)
+    research_snapshot = next(iter(repository.snapshots.values()))
+    repository.creative_prepared = creative_preparation(prepared, research_snapshot)
+    creative_context = build_creative_model_context(
+        repository.creative_prepared,
+        CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
+    )[0]
+    creative = await runtime.request_creative_strategist(
+        context(tenant_id),
+        product_id=product_id,
+        request=CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
+        idempotency_key="replacement-creative",
+    )
+    await runtime.execute(tenant_id, creative.id)
+    concept_set = next(
+        value for value in repository.snapshots.values() if hasattr(value, "concepts")
+    )
+    concept = concept_set.concepts[0]
+    approved = ApprovedCreativeConcept(
+        concept,
+        concept_set,
+        CreativeConceptDecision(
+            tenant_id,
+            product_id,
+            concept.id,
+            CreativeDecisionState.APPROVED_FOR_PRODUCTION,
+            uuid4(),
+        ),
+    )
+    cfg = producer_configuration()
+    repository.producer_prepared = ProducerPreparation(
+        ResolvedResearcher(uuid4(), uuid4(), uuid4(), 3, cfg.configuration_digest, cfg),
+        approved,
+        repository.creative_prepared.product_snapshot,
+        repository.creative_prepared.research_snapshot,
+        (),
+    )
+    pending = await runtime.request_producer(
+        context(tenant_id),
+        concept_id=concept.id,
+        request=ProductionPlanningRequest(),
+        idempotency_key="historical-producer",
+    )
+    route_value = initial_producer_route()
+    now = datetime.now(UTC)
+    historical = replace(
+        pending,
+        agent_version_id=uuid4(),
+        output_contract_version=1,
+        status=AgentRunStatus.FAILED,
+        started_at=now - timedelta(minutes=1),
+        completed_at=now,
+        executed_by_workload_id="local-live-agent-worker",
+        resolved_provider=route_value.provider,
+        resolved_model=route_value.model,
+        resolved_model_route_version=route_value.route_version,
+        pricing_version=route_value.pricing.version,
+        reasoning_effort=route_value.reasoning_effort,
+        max_output_tokens=route_value.max_output_tokens,
+        model_call_count=1,
+        input_tokens=4749,
+        output_tokens=5508,
+        total_tokens=10257,
+        estimated_cost=Decimal("0.129156"),
+        provider_response_id="resp_historical",
+        failure_code="MODEL_INVALID_OUTPUT",
+    )
+    repository.runs[pending.id] = historical
+    attempt = ModelAttempt(
+        tenant_id,
+        historical.id,
+        1,
+        "local-live-agent-worker",
+        route_value.route_version,
+        route_value.pricing.version,
+        route_value.provider,
+        route_value.model,
+        now - timedelta(minutes=2),
+        now + timedelta(minutes=10),
+        status=ModelAttemptStatus.SUCCEEDED,
+        provider_started_at=now - timedelta(minutes=1),
+        response_recorded_at=now,
+        finished_at=now,
+        provider_response_id="resp_historical",
+        input_tokens=4749,
+        output_tokens=5508,
+        total_tokens=10257,
+        estimated_cost=Decimal("0.129156"),
+        failure_code="MODEL_INVALID_OUTPUT",
+        provider_response_status=ProviderResponseStatus.COMPLETED,
+        usage_available=True,
+    )
+    repository.attempts[attempt.id] = attempt
+    transition_id = uuid4()
+
+    replacement = await runtime.request_producer_replacement(
+        context(tenant_id),
+        product_id=product_id,
+        failed_run_id=historical.id,
+        transition_id=transition_id,
+    )
+    replay = await runtime.request_producer_replacement(
+        context(tenant_id),
+        product_id=product_id,
+        failed_run_id=historical.id,
+        transition_id=transition_id,
+    )
+
+    assert replay.id == replacement.id
+    assert replacement.status is AgentRunStatus.PENDING
+    assert replacement.output_contract_version == 2
+    assert replacement.recovery_of_run_id == historical.id
+    assert replacement.agent_version_id != historical.agent_version_id
+    assert repository.runs[historical.id] == historical
+    assert repository.attempts[attempt.id] == attempt
+    assert len(provider.calls) == 2
 
 
 @pytest.mark.asyncio

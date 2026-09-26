@@ -35,6 +35,19 @@ class ProductionCreativeRefreshRequired(ProductionError):
 class InvalidProductionPlan(ProductionError):
     code = "PRODUCTION_PLAN_INVALID"
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: ProductionPlanInvalidReason | None = None,
+        metadata: Mapping[str, str | int | bool | None] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.diagnostic = ProductionPlanDiagnostic(
+            reason or ProductionPlanInvalidReason.DOMAIN_INVARIANT_INVALID,
+            metadata or {},
+        )
+
 
 class ProductionPricingChanged(ProductionError):
     code = "PRODUCTION_PRICING_CHANGED"
@@ -65,6 +78,45 @@ class SourceStrategy(StrEnum):
     GENERATE_IMAGE = "GENERATE_IMAGE"
     GENERATE_VIDEO = "GENERATE_VIDEO"
     MANUAL_CAPTURE = "MANUAL_CAPTURE"
+
+
+class ProductionPlanInvalidReason(StrEnum):
+    SCHEMA_INVALID = "SCHEMA_INVALID"
+    PARSE_INVALID = "PARSE_INVALID"
+    SCENE_ORDER_MISMATCH = "SCENE_ORDER_MISMATCH"
+    SCENE_ORDINAL_INVALID = "SCENE_ORDINAL_INVALID"
+    SCENE_KEY_INVALID = "SCENE_KEY_INVALID"
+    SCENE_CONTENT_INVALID = "SCENE_CONTENT_INVALID"
+    SHOT_KEY_INVALID = "SHOT_KEY_INVALID"
+    SHOT_SCENE_MISMATCH = "SHOT_SCENE_MISMATCH"
+    SHOT_ORDINAL_INVALID = "SHOT_ORDINAL_INVALID"
+    SHOT_KEY_DUPLICATE = "SHOT_KEY_DUPLICATE"
+    SHOT_SPEC_PROVIDER_BOUNDARY = "SHOT_SPEC_PROVIDER_BOUNDARY"
+    EXISTING_ASSET_UNAUTHORIZED = "EXISTING_ASSET_UNAUTHORIZED"
+    EXISTING_ASSET_BINDING_INVALID = "EXISTING_ASSET_BINDING_INVALID"
+    IMAGE_SPEC_STRATEGY_MISMATCH = "IMAGE_SPEC_STRATEGY_MISMATCH"
+    IMAGE_REFERENCE_ASSET_UNAUTHORIZED = "IMAGE_REFERENCE_ASSET_UNAUTHORIZED"
+    SEGMENT_KEY_INVALID = "SEGMENT_KEY_INVALID"
+    SEGMENT_SHOT_DUPLICATE = "SEGMENT_SHOT_DUPLICATE"
+    SEGMENT_DURATION_INVALID = "SEGMENT_DURATION_INVALID"
+    SEGMENT_SPEC_PROVIDER_BOUNDARY = "SEGMENT_SPEC_PROVIDER_BOUNDARY"
+    SEGMENT_REFERENCE_ASSET_UNAUTHORIZED = "SEGMENT_REFERENCE_ASSET_UNAUTHORIZED"
+    SEGMENT_UNKNOWN_SHOT = "SEGMENT_UNKNOWN_SHOT"
+    SEGMENT_MEDIA_STRATEGY_MISMATCH = "SEGMENT_MEDIA_STRATEGY_MISMATCH"
+    PLAN_DURATION_INVALID = "PLAN_DURATION_INVALID"
+    GENERATION_COUNT_EXCEEDED = "GENERATION_COUNT_EXCEEDED"
+    PRICING_DIMENSION_INVALID = "PRICING_DIMENSION_INVALID"
+    PLAN_DIGEST_MISMATCH = "PLAN_DIGEST_MISMATCH"
+    DOMAIN_INVARIANT_INVALID = "DOMAIN_INVARIANT_INVALID"
+
+
+@dataclass(frozen=True, slots=True)
+class ProductionPlanDiagnostic:
+    reason: ProductionPlanInvalidReason
+    metadata: Mapping[str, str | int | bool | None]
+
+    def safe_fields(self) -> dict[str, str | int | bool | None]:
+        return {"invariant": self.reason.value, **dict(self.metadata)}
 
 
 class MediaKind(StrEnum):
@@ -181,10 +233,17 @@ class ProductionShot:
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.shot_key) or self.ordinal < 1:
-            raise InvalidProductionPlan("shot identity is invalid")
+            raise InvalidProductionPlan(
+                "shot identity is invalid",
+                reason=ProductionPlanInvalidReason.SHOT_KEY_INVALID,
+                metadata={"shot_ordinal": self.ordinal},
+            )
         forbidden = {"provider", "model", "prompt", "seedance", "openai", "sunburst"}
         if forbidden.intersection(self.specification):
-            raise InvalidProductionPlan("shot specification must remain provider-neutral")
+            raise InvalidProductionPlan(
+                "shot specification must remain provider-neutral",
+                reason=ProductionPlanInvalidReason.SHOT_SPEC_PROVIDER_BOUNDARY,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,13 +259,27 @@ class ProductionScene:
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.scene_key):
-            raise InvalidProductionPlan("scene key is invalid")
+            raise InvalidProductionPlan(
+                "scene key is invalid", reason=ProductionPlanInvalidReason.SCENE_KEY_INVALID
+            )
         if self.ordinal < 1 or self.duration_seconds < 1 or not self.shots:
-            raise InvalidProductionPlan("scene must have duration and shots")
+            raise InvalidProductionPlan(
+                "scene must have duration and shots",
+                reason=ProductionPlanInvalidReason.SCENE_CONTENT_INVALID,
+                metadata={"scene_ordinal": self.ordinal},
+            )
         if any(shot.scene_key != self.scene_key for shot in self.shots):
-            raise InvalidProductionPlan("shot belongs to another scene")
+            raise InvalidProductionPlan(
+                "shot belongs to another scene",
+                reason=ProductionPlanInvalidReason.SHOT_SCENE_MISMATCH,
+                metadata={"scene_ordinal": self.ordinal},
+            )
         if [shot.ordinal for shot in self.shots] != list(range(1, len(self.shots) + 1)):
-            raise InvalidProductionPlan("shot ordinals must be contiguous")
+            raise InvalidProductionPlan(
+                "shot ordinals must be contiguous",
+                reason=ProductionPlanInvalidReason.SHOT_ORDINAL_INVALID,
+                metadata={"scene_ordinal": self.ordinal, "shot_count": len(self.shots)},
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,19 +294,43 @@ class GenerationSegment:
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", self.segment_key):
-            raise InvalidProductionPlan("generation segment key is invalid")
+            raise InvalidProductionPlan(
+                "generation segment key is invalid",
+                reason=ProductionPlanInvalidReason.SEGMENT_KEY_INVALID,
+            )
         if not self.shot_keys or len(set(self.shot_keys)) != len(self.shot_keys):
-            raise InvalidProductionPlan("generation segment requires unique shots")
+            raise InvalidProductionPlan(
+                "generation segment requires unique shots",
+                reason=ProductionPlanInvalidReason.SEGMENT_SHOT_DUPLICATE,
+                metadata={"shot_count": len(self.shot_keys)},
+            )
         if self.media_kind is MediaKind.VIDEO and (
             self.duration_seconds is None
             or not MIN_VIDEO_SECONDS <= self.duration_seconds <= MAX_VIDEO_SECONDS
         ):
-            raise InvalidProductionPlan("video segment duration is outside provider bounds")
+            raise InvalidProductionPlan(
+                "video segment duration is outside provider bounds",
+                reason=ProductionPlanInvalidReason.SEGMENT_DURATION_INVALID,
+                metadata={
+                    "media_kind": self.media_kind.value,
+                    "duration_seconds": self.duration_seconds,
+                },
+            )
         if self.media_kind is MediaKind.IMAGE and self.duration_seconds is not None:
-            raise InvalidProductionPlan("image segment cannot have a duration")
+            raise InvalidProductionPlan(
+                "image segment cannot have a duration",
+                reason=ProductionPlanInvalidReason.SEGMENT_DURATION_INVALID,
+                metadata={
+                    "media_kind": self.media_kind.value,
+                    "duration_seconds": self.duration_seconds,
+                },
+            )
         forbidden = {"provider", "model", "prompt", "endpoint", "api_key"}
         if forbidden.intersection(self.generation_spec):
-            raise InvalidProductionPlan("generation specification must remain provider-neutral")
+            raise InvalidProductionPlan(
+                "generation specification must remain provider-neutral",
+                reason=ProductionPlanInvalidReason.SEGMENT_SPEC_PROVIDER_BOUNDARY,
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,25 +372,53 @@ class ProductionPlan:
 
     def __post_init__(self) -> None:
         if not self.scenes:
-            raise InvalidProductionPlan("production plan requires scenes")
+            raise InvalidProductionPlan(
+                "production plan requires scenes",
+                reason=ProductionPlanInvalidReason.SCENE_CONTENT_INVALID,
+            )
         if [scene.ordinal for scene in self.scenes] != list(range(1, len(self.scenes) + 1)):
-            raise InvalidProductionPlan("scene ordinals must be contiguous")
+            raise InvalidProductionPlan(
+                "scene ordinals must be contiguous",
+                reason=ProductionPlanInvalidReason.SCENE_ORDINAL_INVALID,
+                metadata={"scene_count": len(self.scenes)},
+            )
         total = sum(scene.duration_seconds for scene in self.scenes)
         if not MIN_PLAN_SECONDS <= total <= MAX_PLAN_SECONDS:
-            raise InvalidProductionPlan("plan duration must be between 10 and 60 seconds")
+            raise InvalidProductionPlan(
+                "plan duration must be between 10 and 60 seconds",
+                reason=ProductionPlanInvalidReason.PLAN_DURATION_INVALID,
+                metadata={"duration_seconds": total},
+            )
         shots = [shot for scene in self.scenes for shot in scene.shots]
         shot_keys = [shot.shot_key for shot in shots]
         if len(set(shot_keys)) != len(shot_keys):
-            raise InvalidProductionPlan("shot keys must be unique")
+            raise InvalidProductionPlan(
+                "shot keys must be unique",
+                reason=ProductionPlanInvalidReason.SHOT_KEY_DUPLICATE,
+                metadata={"shot_count": len(shot_keys), "unique_shot_count": len(set(shot_keys))},
+            )
         segment_shots = [key for segment in self.generation_segments for key in segment.shot_keys]
         if any(key not in shot_keys for key in segment_shots) or len(set(segment_shots)) != len(
             segment_shots
         ):
-            raise InvalidProductionPlan("segments must reference unique plan shots")
+            reason = (
+                ProductionPlanInvalidReason.SEGMENT_UNKNOWN_SHOT
+                if any(key not in shot_keys for key in segment_shots)
+                else ProductionPlanInvalidReason.SEGMENT_SHOT_DUPLICATE
+            )
+            raise InvalidProductionPlan(
+                "segments must reference unique plan shots",
+                reason=reason,
+                metadata={"segment_shot_count": len(segment_shots)},
+            )
         video = [item for item in self.generation_segments if item.media_kind is MediaKind.VIDEO]
         images = [item for item in self.generation_segments if item.media_kind is MediaKind.IMAGE]
         if len(video) > MAX_VIDEO_SEGMENTS or len(images) > MAX_IMAGE_GENERATIONS:
-            raise InvalidProductionPlan("generation count exceeds bounded plan limits")
+            raise InvalidProductionPlan(
+                "generation count exceeds bounded plan limits",
+                reason=ProductionPlanInvalidReason.GENERATION_COUNT_EXCEEDED,
+                metadata={"video_count": len(video), "image_count": len(images)},
+            )
         expected_strategy = {
             MediaKind.IMAGE: SourceStrategy.GENERATE_IMAGE,
             MediaKind.VIDEO: SourceStrategy.GENERATE_VIDEO,
@@ -304,9 +429,15 @@ class ProductionPlan:
             for segment in self.generation_segments
             for key in segment.shot_keys
         ):
-            raise InvalidProductionPlan("segment media kind conflicts with shot source strategy")
+            raise InvalidProductionPlan(
+                "segment media kind conflicts with shot source strategy",
+                reason=ProductionPlanInvalidReason.SEGMENT_MEDIA_STRATEGY_MISMATCH,
+            )
         if self.semantic_digest != canonical_digest(self.semantic_content()):
-            raise InvalidProductionPlan("plan digest does not match semantic content")
+            raise InvalidProductionPlan(
+                "plan digest does not match semantic content",
+                reason=ProductionPlanInvalidReason.PLAN_DIGEST_MISMATCH,
+            )
 
     def semantic_content(self) -> dict[str, object]:
         return {

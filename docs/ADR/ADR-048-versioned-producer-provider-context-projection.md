@@ -48,9 +48,8 @@ version, full source digests, projection metadata, reference lists, and context 
 `production_planning.v1` runs retain the original complete Product/Research serialization and digest
 formula. Unsupported or mismatched versions fail closed; no historical row is backfilled.
 
-Post-response ProductionPlan validation is unchanged. It reconstructs the full immutable
-ProductionPlanningContext at runtime, preserves exact scene order, rejects unauthorized Assets,
-and retains the provider-neutral shot, segment, cost, and generation constraints.
+Post-response ProductionPlan validation is hardened separately by ADR-049. It reconstructs the
+full immutable ProductionPlanningContext at runtime and retains deterministic semantic authority.
 
 If fixed v2 context still exceeds the route envelope, admission commits only bounded numeric Audit
 diagnostics and creates no AgentRun, reservation, outbox event, ModelAttempt, or provider authority.
@@ -58,8 +57,10 @@ diagnostics and creates no AgentRun, reservation, outbox event, ModelAttempt, or
 ## Consequences
 
 The approved Creative strategy and all deterministic production safeguards remain intact while
-unrelated Product/Research growth no longer consumes Producer's envelope. The live incident fixture
-moves from 26,500 to 16,129 conservative input bytes without changing route or spend policy.
+unrelated Product/Research growth no longer consumes Producer's envelope. Under the original v1
+contract the incident fixture moved from 26,500 to 16,129 conservative input bytes. The hardened
+v2 output schema and instructions in ADR-049 raise the current conservative reconstruction to
+17,815 bytes, still within the unchanged 20,000-token input allowance.
 Future projection field changes require a new projection/context version and retained historical
-decoder. Operators must activate the immutable `producer_v4_context_v2` AgentVersion before a new
-Producer v2 request.
+decoder. `producer_v4_context_v2` remains immutable historical context authority; ADR-049 defines
+the successor output contract and activation path.

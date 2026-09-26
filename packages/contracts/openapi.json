@@ -3696,6 +3696,19 @@
         "title": "OverlayResponse",
         "type": "object"
       },
+      "ProducerReplacementStart": {
+        "additionalProperties": false,
+        "properties": {
+          "transition_id": {
+            "format": "uuid",
+            "title": "Transition Id",
+            "type": "string"
+          }
+        },
+        "required": ["transition_id"],
+        "title": "ProducerReplacementStart",
+        "type": "object"
+      },
       "ProducerRunStart": {
         "additionalProperties": false,
         "properties": {
@@ -13708,6 +13721,117 @@
           }
         },
         "summary": "List Runs",
+        "tags": ["production"]
+      }
+    },
+    "/v1/products/{product_id}/production/runs/{failed_run_id}/replacement": {
+      "post": {
+        "operationId": "replace_producer_v1_products__product_id__production_runs__failed_run_id__replacement_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "failed_run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Failed Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProducerReplacementStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replace Producer",
         "tags": ["production"]
       }
     },

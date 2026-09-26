@@ -50,7 +50,7 @@ Asset ID, capped at ten. Image bytes are materialized server-side only for the p
 keys, signed URLs, bytes, and provider prompts never enter Audit, events, logs, database context JSON,
 Temporal, or knowledge projection.
 
-New runs use `production_planning.v2` and the immutable `producer_v4_context_v2` prompt revision.
+New runs use `production_planning.v2` and the immutable `producer_v5_contract_v2` prompt revision.
 The complete approved CreativeConcept remains provider input and is the primary production
 authority. Product input is the explicit `producer_product.v1` allowlist: identity, bounded visual
 truth, exact referenced allowed claims, and complete production/publication safety constraints.
@@ -65,11 +65,17 @@ Fixed v2 context that exceeds the unchanged input allowance fails before reserva
 creation. Its Audit diagnostic contains numeric allowance/bounds, projection versions, section byte
 sizes, and reference counts only—never Product text, Research text, prompts, or model content.
 
-`production.production_plan.v1` is strict JSON Schema 2020-12. It preserves concept scene order and
-models provider-neutral shots with `USE_EXISTING_ASSET`, `GENERATE_IMAGE`, `GENERATE_VIDEO`, or
-`MANUAL_CAPTURE`. A `GenerationSegment` is the execution unit and may combine contiguous shots.
-V1 supports 9:16 short-form video, 10–60 second plans, at most eight generated images, and at most
-four video segments. Seedance segments are 4–30 seconds.
+`production.production_plan.v2` is strict JSON Schema 2020-12. Disjoint structural variants prevent
+contradictory shot source bindings and IMAGE/VIDEO duration shapes. Deterministic validation still
+owns frozen scene order, ordinals, shot/segment relationships, Asset authorization, provider
+neutrality, duration/count limits, pricing dimensions, and digest integrity. Rejections use stable
+`PRODUCTION_PLAN_INVALID` plus bounded finite Audit diagnostics; raw model output is never retained.
+Historical v1 contracts remain readable. See ADR-049.
+
+An eligible terminal v1 validation failure may be continued only through the explicit
+`make live-producer-replace` operator path. It creates one new pending v2 AgentRun with immutable
+lineage and current provenance; it does not call the provider. The original response usage/cost and
+zero unknown cost remain unchanged.
 
 Application code calculates cost. Approval is append-only and binds the plan digest, exact image and
 video route versions, pricing versions, maximum cost, and currency. This product decision does not

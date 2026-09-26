@@ -23,7 +23,11 @@ from creative_marketer.production.domain import (
     ProductionPlanDecision,
     ProductionPlanDecisionState,
 )
-from creative_marketer_api.production_routes import ProducerRunStart, create_production_router
+from creative_marketer_api.production_routes import (
+    ProducerReplacementStart,
+    ProducerRunStart,
+    create_production_router,
+)
 
 from .test_agent_runtime_domain import run
 from .test_production_service import service_fixture
@@ -49,6 +53,9 @@ class AgentService:
         if self.error:
             raise self.error
         return self.run
+
+    async def request_producer_replacement(self, _context, **values):
+        return replace(self.run, id=uuid4(), recovery_of_run_id=values["failed_run_id"])
 
     async def list_runs(self, _context, _product_id):
         return (self.run, replace(self.run, id=uuid4(), agent_type="orchestrator"))
@@ -127,6 +134,16 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
     started = await endpoint(value, "/v1/creative/concepts/{concept_id}/production/runs", "POST")(
         plan.context.concept_id, ProducerRunStart(idempotency_key="producer-browser"), context
     )
+    replacement = await endpoint(
+        value,
+        "/v1/products/{product_id}/production/runs/{failed_run_id}/replacement",
+        "POST",
+    )(
+        plan.product_id,
+        agent.run.id,
+        ProducerReplacementStart(transition_id=uuid4()),
+        context,
+    )
     listed = await endpoint(value, "/v1/products/{product_id}/production/plans", "GET")(
         plan.product_id, context
     )
@@ -145,6 +162,7 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
         production.jobs[0].id, context
     )
     assert started.id == agent.run.id
+    assert replacement.recovery_of_run_id == agent.run.id
     assert [item.id for item in runs] == [agent.run.id]
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value

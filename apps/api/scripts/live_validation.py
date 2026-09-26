@@ -122,6 +122,7 @@ async def _main() -> int:
             "preflight",
             "openai-smoke",
             "creative-replace",
+            "producer-replace",
             "image-smoke",
             "seedance-smoke",
             "e2e",
@@ -140,6 +141,8 @@ async def _main() -> int:
             return acceptance.openai_smoke(settings)
         if command == "creative-replace":
             return acceptance.replace_output_limited_creative(settings)
+        if command == "producer-replace":
+            return acceptance.replace_invalid_producer(settings)
         if command == "image-smoke":
             return acceptance.media_smoke(settings, "IMAGE")
         if command == "seedance-smoke":

@@ -409,9 +409,9 @@ def test_exact_live_incident_geometry_fails_v1_and_fits_v2_without_losing_author
         "research_gaps": 884,
         "selected_assets": 226,
     }
-    assert conservative_producer_input_token_bound(legacy) == 26_500
+    assert conservative_producer_input_token_bound(legacy) == 26_712
     assert conservative_producer_input_token_bound(legacy) > 20_000
-    assert conservative_producer_input_token_bound(projected) == 16_129
+    assert conservative_producer_input_token_bound(projected) == 17_815
     assert conservative_producer_input_token_bound(projected) <= 20_000
     assert _json_bytes(projected.capability_context["producer_product"]) == 731
     assert _json_bytes(projected.capability_context["approved_creative_concept"]) == 6_430

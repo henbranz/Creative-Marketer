@@ -425,6 +425,71 @@ def replace_output_limited_creative(settings: Settings, store: StateStore | None
     return 0
 
 
+def replace_invalid_producer(settings: Settings, store: StateStore | None = None) -> int:
+    """Explicitly admit one v2 successor; never execute the pending run here."""
+
+    api = api_for(settings)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved, create=False))
+    if state is None:
+        raise RuntimeError("LIVE_ACCEPTANCE_SESSION_NOT_STARTED")
+    if state.creative_concept_id is None or state.producer_run_id is None:
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_STAGE_NOT_READY")
+    if (
+        state.production_plan_id is not None
+        or state.image_job_ids
+        or state.video_job_ids
+        or state.assembly_plan_id is not None
+        or state.final_creative_id is not None
+    ):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_STAGE_ALREADY_ADVANCED")
+    failed = exact(
+        items(api, f"/v1/products/{product}/production/runs"),
+        state.producer_run_id,
+        "production_run",
+    )
+    if failed.get("recovery_of_run_id") is not None:
+        print(f"Producer replacement already bound: {failed['id']} ({failed['status']})")
+        return 0
+    if (
+        failed.get("status") != "FAILED"
+        or failed.get("failure_code") != "MODEL_INVALID_OUTPUT"
+        or failed.get("tenant_id") != state.tenant_id
+        or failed.get("product_id") != state.product_id
+        or failed.get("agent_type") != "producer"
+        or failed.get("output_contract_version") != 1
+        or Decimal(str(failed.get("unknown_cost", 0))) != 0
+    ):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REQUIRES_ELIGIBLE_FAILED_RUN")
+    replacement = api.request(
+        f"/v1/products/{product}/production/runs/{state.producer_run_id}/replacement",
+        method="POST",
+        body={"transition_id": state.session_id},
+    )
+    if not isinstance(replacement, dict):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_RESPONSE_INVALID")
+    replacement_id = valid_id(replacement.get("id"), "producer_replacement_run_id")
+    if (
+        replacement_id == state.producer_run_id
+        or replacement.get("recovery_of_run_id") != state.producer_run_id
+        or replacement.get("tenant_id") != state.tenant_id
+        or replacement.get("product_id") != state.product_id
+        or replacement.get("agent_type") != "producer"
+        or replacement.get("output_contract_version") != 2
+        or replacement.get("status") != "PENDING"
+        or replacement.get("agent_version_id") == failed.get("agent_version_id")
+    ):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_PROVENANCE_MISMATCH")
+    historical_id = state.producer_run_id
+    state.producer_run_id = replacement_id
+    saved.save(state)
+    print(f"Producer replacement requested and left PENDING: {replacement_id}")
+    print(f"Historical failed Producer retained: {historical_id}")
+    print("No provider execution was started by this command.")
+    return 0
+
+
 def created_id(response: Any, label: str) -> str:
     if not isinstance(response, dict):
         raise RuntimeError(f"LIVE_{label.upper()}_CREATE_RESPONSE_INVALID")

@@ -590,6 +590,65 @@ def test_live_creative_replacement_is_explicit_idempotent_and_preserves_history(
     assert not any(path.endswith("/research/runs") for method, path, _ in posts)
 
 
+def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    route = acceptance.initial_producer_route()
+    failed = recoverable_run(
+        PRODUCER,
+        route,
+        status="FAILED",
+        agent_type="producer",
+        failure_code="MODEL_INVALID_OUTPUT",
+        output_contract_version=1,
+        estimated_cost="0.129156",
+        unknown_cost="0",
+    )
+    replacement = recoverable_run(
+        SUCCESSOR,
+        route,
+        status="PENDING",
+        agent_type="producer",
+        recovery_of_run_id=PRODUCER,
+        output_contract_version=2,
+        agent_version_id=str(UUID(int=24)),
+        resolved_provider=None,
+        resolved_model=None,
+        model_route_version=None,
+        pricing_version=None,
+    )
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, replacement],
+            (
+                "POST",
+                f"/v1/products/{PRODUCT}/production/runs/{PRODUCER}/replacement",
+            ): replacement,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    assert acceptance.replace_invalid_producer(settings(), store) == 0
+    assert store.load().producer_run_id == SUCCESSOR
+    assert [call for call in fake.calls if call[0] == "POST"] == [
+        (
+            "POST",
+            f"/v1/products/{PRODUCT}/production/runs/{PRODUCER}/replacement",
+            {"transition_id": state.session_id},
+        )
+    ]
+    output = capsys.readouterr().out
+    assert "left PENDING" in output and "No provider execution" in output
+
+
 def test_live_status_preserves_historical_unknown_and_actual_costs_after_replacement(
     monkeypatch, tmp_path, capsys
 ) -> None:

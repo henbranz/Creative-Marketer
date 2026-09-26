@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
 from openai import APIStatusError, APITimeoutError
 
 import creative_marketer.production.infrastructure.seedance as seedance_module
@@ -53,6 +54,7 @@ from creative_marketer.production.domain import (
     ProductionPermissionDenied,
     ProductionPlanDecision,
     ProductionPlanDecisionState,
+    ProductionPlanInvalidReason,
     ProductionPlanningRequest,
 )
 from creative_marketer.production.infrastructure.openai_images import OpenAIImageProvider
@@ -385,7 +387,8 @@ def test_existing_asset_strategy_binding_fails_closed() -> None:
     shot = output["scenes"][0]["shots"][0]  # type: ignore[index]
     shot["source_strategy"] = "USE_EXISTING_ASSET"
     shot["image_generation_spec"] = None
-    with pytest.raises(InvalidProductionPlan, match="authorized frozen Asset"):
+    shot["existing_asset_id"] = str(uuid4())
+    with pytest.raises(InvalidProductionPlan, match="unauthorized Asset") as caught:
         validate_production_plan(
             output,
             tenant_id=uuid4(),
@@ -393,7 +396,9 @@ def test_existing_asset_strategy_binding_fails_closed() -> None:
             agent_run_id=uuid4(),
             context=planning,
             concept_scene_keys=("scene_one",),
+            contract_version=1,
         )
+    assert caught.value.diagnostic.reason is ProductionPlanInvalidReason.EXISTING_ASSET_UNAUTHORIZED
     output = valid_output(str(planning.selected_assets[0].asset_id))
     output["scenes"][0]["shots"][1]["existing_asset_id"] = str(  # type: ignore[index]
         planning.selected_assets[0].asset_id
@@ -406,7 +411,68 @@ def test_existing_asset_strategy_binding_fails_closed() -> None:
             agent_run_id=uuid4(),
             context=planning,
             concept_scene_keys=("scene_one",),
+            contract_version=1,
         )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("image-duration", ProductionPlanInvalidReason.SCHEMA_INVALID),
+        ("video-duration", ProductionPlanInvalidReason.SCHEMA_INVALID),
+        ("strategy-shape", ProductionPlanInvalidReason.SCHEMA_INVALID),
+        ("unknown-shot", ProductionPlanInvalidReason.SEGMENT_UNKNOWN_SHOT),
+        ("duplicate-shot", ProductionPlanInvalidReason.SCHEMA_INVALID),
+        ("media-mismatch", ProductionPlanInvalidReason.SEGMENT_MEDIA_STRATEGY_MISMATCH),
+        ("image-asset", ProductionPlanInvalidReason.IMAGE_REFERENCE_ASSET_UNAUTHORIZED),
+    ],
+)
+def test_v2_contract_and_semantic_invariants_are_safe(mutation, reason) -> None:
+    planning = context()
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+    if mutation == "image-duration":
+        output["generation_segments"][0]["duration_seconds"] = 4
+    elif mutation == "video-duration":
+        output["generation_segments"][1]["duration_seconds"] = None
+    elif mutation == "strategy-shape":
+        output["scenes"][0]["shots"][0]["source_strategy"] = "MANUAL_CAPTURE"
+    elif mutation == "unknown-shot":
+        output["generation_segments"][0]["shot_keys"] = ["unknown"]
+    elif mutation == "duplicate-shot":
+        output["generation_segments"][0]["shot_keys"] = ["shot_one", "shot_one"]
+    elif mutation == "media-mismatch":
+        output["generation_segments"][0]["shot_keys"] = ["shot_two"]
+        output["generation_segments"][1]["shot_keys"] = ["shot_one"]
+    else:
+        output["scenes"][0]["shots"][0]["image_generation_spec"]["reference_asset_ids"] = [
+            str(uuid4())
+        ]
+    with pytest.raises(InvalidProductionPlan) as caught:
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=("scene_one",),
+        )
+    assert caught.value.code == "PRODUCTION_PLAN_INVALID"
+    assert caught.value.diagnostic.reason is reason
+    assert set(caught.value.diagnostic.safe_fields()) <= {
+        "invariant",
+        "contract_version",
+        "schema_validator",
+        "path_depth",
+        "asset_id",
+    }
+
+
+def test_v1_remains_readable_while_v2_rejects_structural_drift() -> None:
+    planning = context()
+    output = valid_output(str(planning.selected_assets[0].asset_id))
+    output["generation_segments"][0]["duration_seconds"] = 4
+    assert Draft202012Validator(load_production_plan_schema(1)).is_valid(output)
+    assert not Draft202012Validator(load_production_plan_schema(2)).is_valid(output)
 
 
 @pytest.mark.asyncio

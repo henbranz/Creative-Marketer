@@ -1167,6 +1167,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/production/runs/{failed_run_id}/replacement": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Replace Producer */
+    post: operations["replace_producer_v1_products__product_id__production_runs__failed_run_id__replacement_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/publication-drafts": {
     parameters: {
       query?: never;
@@ -3247,6 +3264,14 @@ export interface components {
       style_token: string;
       /** Text */
       text: string;
+    };
+    /** ProducerReplacementStart */
+    ProducerReplacementStart: {
+      /**
+       * Transition Id
+       * Format: uuid
+       */
+      transition_id: string;
     };
     /** ProducerRunStart */
     ProducerRunStart: {
@@ -7172,6 +7197,46 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  replace_producer_v1_products__product_id__production_runs__failed_run_id__replacement_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+        failed_run_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ProducerReplacementStart"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentRunResponse"];
         };
       };
       /** @description Validation Error */
