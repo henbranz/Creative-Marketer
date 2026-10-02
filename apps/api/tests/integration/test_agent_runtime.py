@@ -99,7 +99,7 @@ from tests.integration.test_research_evidence import MemoryStore, StaticFetcher
 from tests.test_agent_runtime_application import configuration, creative_configuration
 from tests.test_agent_runtime_domain import output
 from tests.test_creative_strategy import output as creative_output
-from tests.test_production import valid_output as production_output
+from tests.test_production import valid_v3_output as production_output
 
 
 class IdentityProvider:
@@ -665,15 +665,9 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             assert isinstance(scene_keys, list) and scene_keys == ["scene_1", "scene_2", "scene_3"]
             assert isinstance(selected, list) and len(selected) == 1
             raw_plan = production_output(str(ready_asset.id))
-            first = raw_plan["scenes"][0]
-            first["scene_key"] = scene_keys[0]
-            for shot in first["shots"]:
-                shot["scene_key"] = scene_keys[0]
-            for ordinal, scene_key in enumerate(scene_keys[1:], 2):
+            for ordinal, _scene_key in enumerate(scene_keys[1:], 2):
                 raw_plan["scenes"].append(
                     {
-                        "scene_key": scene_key,
-                        "ordinal": ordinal,
                         "purpose": f"Preserve concept scene {ordinal}",
                         "duration_seconds": 5,
                         "message": "Approved product message",
@@ -682,8 +676,6 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                         "shots": [
                             {
                                 "shot_key": f"manual_{ordinal}",
-                                "scene_key": scene_key,
-                                "ordinal": 1,
                                 "visual_objective": "Manual supporting shot",
                                 "subject": "Product",
                                 "environment": "Studio",
