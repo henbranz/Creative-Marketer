@@ -57,7 +57,7 @@ def test_all_registered_openai_agent_schemas_compile_strictly(contract) -> None:
 
 def test_contract_registry_auto_enumerates_all_installed_versions() -> None:
     contracts = default_capability_registry().output_contracts()
-    assert len(contracts) == 8
+    assert len(contracts) == 9
     assert sum(contract.current for contract in contracts) == 6
     assert {(value.key, value.version) for value in contracts} == {
         ("research.research_snapshot", 1),
@@ -65,6 +65,7 @@ def test_contract_registry_auto_enumerates_all_installed_versions() -> None:
         ("creative.creative_concept_set", 1),
         ("production.production_plan", 1),
         ("production.production_plan", 2),
+        ("production.production_plan", 3),
         ("intelligence.intelligence_report", 1),
         ("commerce.operations_report", 1),
         ("orchestration.supervisor_report", 1),
@@ -73,7 +74,7 @@ def test_contract_registry_auto_enumerates_all_installed_versions() -> None:
 
 def test_offline_audit_reports_every_contract_without_provider_claim() -> None:
     rows = audit_contracts()
-    assert len(rows) == 8
+    assert len(rows) == 9
     assert all(row["local_result"] == "ACCEPTED" for row in rows)
     assert all(row["provider_count_result"] == "NOT_RUN" for row in rows)
     assert all(str(row["provider_schema_digest"]).startswith("sha256:") for row in rows)
@@ -104,6 +105,28 @@ def test_producer_v2_compiler_expands_exactly_six_partial_object_branches() -> N
             assert branch["additionalProperties"] is False
             assert branch["required"] == canonical["required"]
             assert set(branch["properties"]) == set(canonical["properties"])
+
+
+def test_producer_v3_is_full_and_excludes_application_derived_relationship_metadata() -> None:
+    contract = next(
+        value
+        for value in default_capability_registry().output_contracts()
+        if value.key == "production.production_plan" and value.version == 3
+    )
+    canonical_audit = audit_openai_schema(contract.schema)
+    assert canonical_audit.partial_object_branches == 0
+    scene = contract.schema["$defs"]["scene"]
+    shot = contract.schema["$defs"]["shot"]
+    assert {"scene_key", "ordinal"}.isdisjoint(scene["properties"])
+    assert {"scene_key", "ordinal"}.isdisjoint(shot["properties"])
+    assert "scene_key" not in scene["required"] and "ordinal" not in scene["required"]
+    assert "scene_key" not in shot["required"] and "ordinal" not in shot["required"]
+
+    compiled = compile_openai_strict_output_schema(
+        contract.schema, contract_key=contract.key, contract_version=contract.version
+    )
+    assert audit_openai_schema(compiled.schema).partial_object_branches == 0
+    assert compiled.schema["$defs"]["shot"]["properties"] == shot["properties"]
 
 
 @pytest.mark.parametrize(

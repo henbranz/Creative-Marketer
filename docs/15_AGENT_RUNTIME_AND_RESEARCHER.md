@@ -176,7 +176,9 @@ owns route, budget, attempt, provider, recovery, Audit, Outbox, and telemetry be
 
 Producer is the third installed capability. It reuses the same one-call lifecycle and recovery
 mechanism, but validates the AgentRun's immutable Production Plan contract version against frozen
-approved-Creative context. Current runs use v2; historical v1 runs retain their original schema.
+approved-Creative context. Current runs use provider contract v3 and deterministically materialize
+the unchanged internal ProductionPlan schema v2; historical provider v1/v2 runs retain their
+original schemas.
 New runs use the explicit `production_planning.v2` Product/Research projection from ADR-048 while
 retaining the complete approved CreativeConcept and full immutable source provenance. Historical
 Producer v1 runs retain their original full-snapshot context. Production domain rejections retain

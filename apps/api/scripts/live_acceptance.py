@@ -21,6 +21,7 @@ from creative_marketer.agent_runtime.application import (
 from creative_marketer.agent_runtime.domain import ModelRoute
 from creative_marketer.production.application import (
     OPENAI_IMAGE_MODEL,
+    PRODUCTION_CONTRACT_VERSION,
     SEEDANCE_MODEL,
     SeedancePricing,
     initial_producer_route,
@@ -426,7 +427,7 @@ def replace_output_limited_creative(settings: Settings, store: StateStore | None
 
 
 def replace_invalid_producer(settings: Settings, store: StateStore | None = None) -> int:
-    """Explicitly admit one v2 successor; never execute the pending run here."""
+    """Explicitly admit one contract-upgrade successor; never execute it here."""
 
     api = api_for(settings)
     product = str(settings.live_e2e_product_id)
@@ -452,13 +453,20 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
     if failed.get("recovery_of_run_id") is not None:
         print(f"Producer replacement already bound: {failed['id']} ({failed['status']})")
         return 0
+    failed_contract_version = failed.get("output_contract_version")
+    failed_failure_code = failed.get("failure_code")
+    if not isinstance(failed_contract_version, int):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REQUIRES_ELIGIBLE_FAILED_RUN")
+    eligible_contract_failure = (
+        failed_contract_version == 1 and failed_failure_code == "MODEL_INVALID_OUTPUT"
+    ) or (failed_contract_version >= 2 and failed_failure_code == "PRODUCTION_PLAN_INVALID")
     if (
         failed.get("status") != "FAILED"
-        or failed.get("failure_code") != "MODEL_INVALID_OUTPUT"
+        or not eligible_contract_failure
         or failed.get("tenant_id") != state.tenant_id
         or failed.get("product_id") != state.product_id
         or failed.get("agent_type") != "producer"
-        or failed.get("output_contract_version") != 1
+        or failed_contract_version >= PRODUCTION_CONTRACT_VERSION
         or Decimal(str(failed.get("unknown_cost", 0))) != 0
     ):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REQUIRES_ELIGIBLE_FAILED_RUN")
@@ -470,13 +478,16 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
     if not isinstance(replacement, dict):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_RESPONSE_INVALID")
     replacement_id = valid_id(replacement.get("id"), "producer_replacement_run_id")
+    replacement_contract_version = replacement.get("output_contract_version")
     if (
         replacement_id == state.producer_run_id
         or replacement.get("recovery_of_run_id") != state.producer_run_id
         or replacement.get("tenant_id") != state.tenant_id
         or replacement.get("product_id") != state.product_id
         or replacement.get("agent_type") != "producer"
-        or replacement.get("output_contract_version") != 2
+        or not isinstance(replacement_contract_version, int)
+        or replacement_contract_version != PRODUCTION_CONTRACT_VERSION
+        or replacement_contract_version <= failed_contract_version
         or replacement.get("status") != "PENDING"
         or replacement.get("agent_version_id") == failed.get("agent_version_id")
     ):

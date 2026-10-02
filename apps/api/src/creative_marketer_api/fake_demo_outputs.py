@@ -108,7 +108,7 @@ def production_output(invocation: object) -> dict[str, object]:
         "negative_constraints": ["No distortion"],
     }
     scenes = []
-    for ordinal, key in enumerate(sections["concept_scene_keys"], 1):
+    for ordinal, _key in enumerate(sections["concept_scene_keys"], 1):
         strategy = (
             "GENERATE_IMAGE"
             if ordinal == 1
@@ -118,8 +118,6 @@ def production_output(invocation: object) -> dict[str, object]:
         )
         scenes.append(
             {
-                "scene_key": key,
-                "ordinal": ordinal,
                 "purpose": ("Hook", "Proof", "Action")[ordinal - 1],
                 "duration_seconds": 5,
                 "message": "LOCAL DEMO product story",
@@ -129,8 +127,6 @@ def production_output(invocation: object) -> dict[str, object]:
                     {
                         **base,
                         "shot_key": f"local_demo_shot_{ordinal}",
-                        "scene_key": key,
-                        "ordinal": 1,
                         "source_strategy": strategy,
                         "existing_asset_id": None,
                         "image_generation_spec": image_spec if ordinal == 1 else None,

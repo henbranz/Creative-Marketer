@@ -36,8 +36,9 @@ from .domain import (
 )
 
 PRODUCTION_CONTRACT_KEY = "production.production_plan"
-PRODUCTION_CONTRACT_VERSION = 2
-PRODUCTION_HISTORICAL_CONTRACT_VERSIONS = frozenset({1, 2})
+PRODUCTION_CONTRACT_VERSION = 3
+PRODUCTION_HISTORICAL_CONTRACT_VERSIONS = frozenset({1, 2, 3})
+PRODUCTION_PLAN_SCHEMA_VERSION = 2
 SEEDANCE_MODEL = "dreamina-seedance-2-5-260628"
 SEEDANCE_ROUTE_VERSION = "byteplus-seedance-2.5-2026-08-17"
 SEEDANCE_PRICING_VERSION = "byteplus-enhanced-2026-08-17"
@@ -396,7 +397,18 @@ def validate_production_plan(
             "provider output cannot be parsed",
             reason=ProductionPlanInvalidReason.PARSE_INVALID,
         ) from None
-    if [str(item["scene_key"]) for item in raw_scenes] != list(concept_scene_keys):
+    if contract_version < 3 and [str(item["scene_key"]) for item in raw_scenes] != list(
+        concept_scene_keys
+    ):
+        raise InvalidProductionPlan(
+            "plan must preserve every CreativeConcept scene in order",
+            reason=ProductionPlanInvalidReason.SCENE_ORDER_MISMATCH,
+            metadata={
+                "expected_scene_count": len(concept_scene_keys),
+                "actual_scene_count": len(raw_scenes),
+            },
+        )
+    if contract_version >= 3 and len(raw_scenes) != len(concept_scene_keys):
         raise InvalidProductionPlan(
             "plan must preserve every CreativeConcept scene in order",
             reason=ProductionPlanInvalidReason.SCENE_ORDER_MISMATCH,
@@ -408,9 +420,16 @@ def validate_production_plan(
     selected_ids = {item.asset_id for item in context.selected_assets}
     scenes: list[ProductionScene] = []
     try:
-        for raw_scene in raw_scenes:
+        for scene_index, raw_scene in enumerate(raw_scenes):
+            scene_key = (
+                concept_scene_keys[scene_index]
+                if contract_version >= 3
+                else str(raw_scene["scene_key"])
+            )
+            scene_ordinal = scene_index + 1 if contract_version >= 3 else int(raw_scene["ordinal"])
             shots: list[ProductionShot] = []
-            for raw_shot in raw_scene["shots"]:
+            for shot_index, raw_shot in enumerate(raw_scene["shots"]):
+                shot_ordinal = shot_index + 1 if contract_version >= 3 else int(raw_shot["ordinal"])
                 strategy = SourceStrategy(raw_shot["source_strategy"])
                 existing = raw_shot["existing_asset_id"]
                 image_spec = raw_shot["image_generation_spec"]
@@ -419,7 +438,7 @@ def validate_production_plan(
                         raise InvalidProductionPlan(
                             "existing Asset binding conflicts with source strategy",
                             reason=ProductionPlanInvalidReason.EXISTING_ASSET_BINDING_INVALID,
-                            metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                            metadata={"shot_ordinal": shot_ordinal},
                         )
                     asset_id = UUID(str(existing))
                     if asset_id not in selected_ids:
@@ -432,13 +451,13 @@ def validate_production_plan(
                     raise InvalidProductionPlan(
                         "only existing-asset shots may bind existing_asset_id",
                         reason=ProductionPlanInvalidReason.EXISTING_ASSET_BINDING_INVALID,
-                        metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                        metadata={"shot_ordinal": shot_ordinal},
                     )
                 if (strategy is SourceStrategy.GENERATE_IMAGE) != (image_spec is not None):
                     raise InvalidProductionPlan(
                         "image generation strategy/specification mismatch",
                         reason=ProductionPlanInvalidReason.IMAGE_SPEC_STRATEGY_MISMATCH,
-                        metadata={"shot_ordinal": int(raw_shot["ordinal"])},
+                        metadata={"shot_ordinal": shot_ordinal},
                     )
                 if isinstance(image_spec, Mapping):
                     for value in image_spec["reference_asset_ids"]:
@@ -457,16 +476,16 @@ def validate_production_plan(
                 shots.append(
                     ProductionShot(
                         raw_shot["shot_key"],
-                        raw_shot["scene_key"],
-                        raw_shot["ordinal"],
+                        scene_key,
+                        shot_ordinal,
                         strategy,
                         specification,
                     )
                 )
             scenes.append(
                 ProductionScene(
-                    raw_scene["scene_key"],
-                    raw_scene["ordinal"],
+                    scene_key,
+                    scene_ordinal,
                     raw_scene["purpose"],
                     raw_scene["duration_seconds"],
                     raw_scene["message"],
@@ -568,12 +587,36 @@ def validate_production_plan(
         seedance.version,
         image.version,
     )
+    internal_schema_version = (
+        PRODUCTION_PLAN_SCHEMA_VERSION if contract_version >= 3 else contract_version
+    )
     semantic = {
-        "schema_version": contract_version,
+        "schema_version": internal_schema_version,
         "context_digest": context.context_digest,
         "strategy": output["strategy"],
         "format": output["format"],
-        "scenes": raw_scenes,
+        "scenes": [
+            {
+                "scene_key": scene.scene_key,
+                "ordinal": scene.ordinal,
+                "purpose": scene.purpose,
+                "duration_seconds": scene.duration_seconds,
+                "message": scene.message,
+                "voiceover": scene.voiceover,
+                "on_screen_text": scene.on_screen_text,
+                "shots": [
+                    {
+                        "shot_key": shot.shot_key,
+                        "scene_key": shot.scene_key,
+                        "ordinal": shot.ordinal,
+                        "source_strategy": shot.source_strategy.value,
+                        **dict(shot.specification),
+                    }
+                    for shot in scene.shots
+                ],
+            }
+            for scene in scenes
+        ],
         "generation_segments": raw_segments,
         "required_assets": output["required_assets"],
     }
@@ -590,7 +633,7 @@ def validate_production_plan(
         else (),
         cost,
         canonical_digest(semantic),
-        schema_version=contract_version,
+        schema_version=internal_schema_version,
     )
 
 

@@ -90,7 +90,7 @@ make openai-contract-audit
 make openai-contract-gate
 ```
 
-The second command is also offline and proves that all eight installed contract versions across the
+The second command is also offline and proves that all registry-installed contract versions across the
 six model-backed agent types serialize exclusively for the official input-token count endpoint. With
 separate operator approval, validate those synthetic contracts against OpenAI without generation:
 
@@ -174,6 +174,21 @@ and admits a fresh normal Creative run through the standard budget and context b
 session checkpoint records the prior Creative run only after tenant, Product, stage, and new-run
 provenance pass. Its deterministic transition identity makes repeated commands idempotent. Use
 `make live-e2e-status` to see both the current run and historical Creative/recovery cost lineage.
+
+If the session-bound Producer run has one authoritative completed response but failed deterministic
+plan validation on an older output contract, first deploy the migration/API and run
+`make producer-bootstrap` to activate the immutable v3 Producer. With every Agent worker stopped,
+use the existing governed continuation:
+
+```bash
+make live-producer-replace
+```
+
+The command verifies known usage/cost, zero unknown cost, no ProductionPlan, valid current frozen
+provenance, a strictly newer active supported contract/prompt, and no successor. It creates one v3
+run in `PENDING` with `recovery_of_run_id`; it does not execute a provider. Inspect status before
+starting one controlled Agent worker. Historical v1/v2 responses, diagnostics, and spend remain
+unchanged. See ADR-051.
 
 Review the exact Production Plan and cost in the UI. Human approval creates route-bound
 GenerationJobs. These commands inspect and continue that governed path; they never call a provider

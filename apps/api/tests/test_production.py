@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,index,unused-ignore"
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from decimal import Decimal
 from io import BytesIO
@@ -261,6 +262,23 @@ def valid_output(asset_id: str) -> dict[str, object]:
     }
 
 
+def valid_v3_output(asset_id: str) -> dict[str, object]:
+    output = valid_output(asset_id)
+    scenes = output["scenes"]
+    assert isinstance(scenes, list)
+    for scene in scenes:
+        assert isinstance(scene, dict)
+        scene.pop("scene_key")
+        scene.pop("ordinal")
+        shots = scene["shots"]
+        assert isinstance(shots, list)
+        for shot in shots:
+            assert isinstance(shot, dict)
+            shot.pop("scene_key")
+            shot.pop("ordinal")
+    return output
+
+
 def test_routes_pricing_contracts_and_selection() -> None:
     producer = initial_producer_route()
     with pytest.raises(AgentCapabilityUnavailable, match="unsupported"):
@@ -329,7 +347,7 @@ def test_context_freshness_round_trip_and_valid_plan() -> None:
     with pytest.raises(InvalidProductionPlan, match="malformed"):
         production_context_from_payload({**payload, "selected_assets": "not-a-list"}, DIGEST)
     plan = validate_production_plan(
-        valid_output(str(planning.selected_assets[0].asset_id)),
+        valid_v3_output(str(planning.selected_assets[0].asset_id)),
         tenant_id=uuid4(),
         product_id=uuid4(),
         agent_run_id=uuid4(),
@@ -339,6 +357,12 @@ def test_context_freshness_round_trip_and_valid_plan() -> None:
     assert plan.cost.estimated_max_video_cost == Decimal("5.544900")
     assert plan.cost.estimated_max_image_cost == Decimal("0.40")
     assert plan.cost.estimated_total_cost == Decimal("5.944900")
+    assert plan.schema_version == 2
+    assert [(scene.scene_key, scene.ordinal) for scene in plan.scenes] == [("scene_one", 1)]
+    assert [(shot.scene_key, shot.ordinal) for shot in plan.scenes[0].shots] == [
+        ("scene_one", 1),
+        ("scene_one", 2),
+    ]
     decision = ProductionPlanDecision(
         plan.tenant_id,
         plan.id,
@@ -402,6 +426,7 @@ def test_plan_validation_fails_closed(mutation: str) -> None:
             agent_run_id=uuid4(),
             context=planning,
             concept_scene_keys=["scene_one"],
+            contract_version=2,
         )
 
 
@@ -479,6 +504,7 @@ def test_v2_contract_and_semantic_invariants_are_safe(mutation, reason) -> None:
             agent_run_id=uuid4(),
             context=planning,
             concept_scene_keys=("scene_one",),
+            contract_version=2,
         )
     assert caught.value.code == "PRODUCTION_PLAN_INVALID"
     assert caught.value.diagnostic.reason is reason
@@ -497,6 +523,74 @@ def test_v1_remains_readable_while_v2_rejects_structural_drift() -> None:
     output["generation_segments"][0]["duration_seconds"] = 4
     assert Draft202012Validator(load_production_plan_schema(1)).is_valid(output)
     assert not Draft202012Validator(load_production_plan_schema(2)).is_valid(output)
+
+
+def test_v3_derives_all_relationship_metadata_from_frozen_order() -> None:
+    planning = context()
+    output = valid_v3_output(str(planning.selected_assets[0].asset_id))
+    first = output["scenes"][0]  # type: ignore[index]
+    first["duration_seconds"] = 6
+    second = deepcopy(first)
+    first["shots"] = first["shots"][:1]
+    second["purpose"] = "Reveal"
+    second["duration_seconds"] = 6
+    second["shots"][0]["shot_key"] = "shot_three"
+    second["shots"][1]["shot_key"] = "shot_four"
+    scenes = output["scenes"]
+    assert isinstance(scenes, list)
+    scenes.append(second)
+    output["generation_segments"][1]["shot_keys"] = ["shot_four"]  # type: ignore[index]
+
+    plan = validate_production_plan(
+        output,
+        tenant_id=uuid4(),
+        product_id=uuid4(),
+        agent_run_id=uuid4(),
+        context=planning,
+        concept_scene_keys=("scene_one", "scene_two"),
+    )
+
+    assert plan.schema_version == 2
+    assert [(scene.scene_key, scene.ordinal) for scene in plan.scenes] == [
+        ("scene_one", 1),
+        ("scene_two", 2),
+    ]
+    assert [scene.purpose for scene in plan.scenes] == ["Hook", "Reveal"]
+    assert [(shot.scene_key, shot.ordinal) for shot in plan.scenes[0].shots] == [("scene_one", 1)]
+    assert [(shot.scene_key, shot.ordinal) for shot in plan.scenes[1].shots] == [
+        ("scene_two", 1),
+        ("scene_two", 2),
+    ]
+
+
+@pytest.mark.parametrize("mutation", ["scene-count", "empty-shots", "metadata-override", "variant"])
+def test_v3_fails_closed_without_accepting_provider_relationship_metadata(mutation: str) -> None:
+    planning = context()
+    output = valid_v3_output(str(planning.selected_assets[0].asset_id))
+    if mutation == "scene-count":
+        concept_scene_keys: tuple[str, ...] = ("scene_one", "scene_two")
+        expected = ProductionPlanInvalidReason.SCENE_ORDER_MISMATCH
+    else:
+        concept_scene_keys = ("scene_one",)
+        expected = ProductionPlanInvalidReason.SCHEMA_INVALID
+        if mutation == "empty-shots":
+            output["scenes"][0]["shots"] = []  # type: ignore[index]
+        elif mutation == "metadata-override":
+            output["scenes"][0]["scene_key"] = "provider_owned"  # type: ignore[index]
+        else:
+            expected = ProductionPlanInvalidReason.IMAGE_SPEC_STRATEGY_MISMATCH
+            output["scenes"][0]["shots"][0]["source_strategy"] = "MANUAL_CAPTURE"  # type: ignore[index]
+
+    with pytest.raises(InvalidProductionPlan) as caught:
+        validate_production_plan(
+            output,
+            tenant_id=uuid4(),
+            product_id=uuid4(),
+            agent_run_id=uuid4(),
+            context=planning,
+            concept_scene_keys=concept_scene_keys,
+        )
+    assert caught.value.diagnostic.reason is expected
 
 
 @pytest.mark.parametrize(
@@ -635,7 +729,7 @@ def test_generation_job_unknown_and_lineage() -> None:
 def test_production_domain_invariants_fail_closed(monkeypatch) -> None:
     planning = context()
     plan = validate_production_plan(
-        valid_output(str(planning.selected_assets[0].asset_id)),
+        valid_v3_output(str(planning.selected_assets[0].asset_id)),
         tenant_id=uuid4(),
         product_id=uuid4(),
         agent_run_id=uuid4(),

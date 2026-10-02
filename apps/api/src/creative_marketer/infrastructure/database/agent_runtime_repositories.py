@@ -442,6 +442,16 @@ class SqlAlchemyAgentRunRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
+    async def has_production_plan(self, run_id: UUID) -> bool:
+        return (
+            await self._session.scalar(
+                select(production_plans.c.id)
+                .where(production_plans.c.agent_run_id == run_id)
+                .limit(1)
+            )
+            is not None
+        )
+
     async def prepare_researcher(self, product_id: UUID) -> ResearcherPreparation | None:
         requested_rows = (
             await self._session.execute(

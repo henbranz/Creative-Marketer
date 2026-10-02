@@ -1066,6 +1066,7 @@ class AgentRunRepository(Protocol):
     async def add(self, run: AgentRun) -> bool: ...
     async def get(self, run_id: UUID, *, for_update: bool = False) -> AgentRun | None: ...
     async def list_attempts(self, run_id: UUID) -> tuple[ModelAttempt, ...]: ...
+    async def has_production_plan(self, run_id: UUID) -> bool: ...
     async def list_for_product(self, product_id: UUID) -> tuple[AgentRun, ...]: ...
     async def lock_period_budgets(
         self, definition_id: UUID, period_starts: tuple[datetime, ...]
@@ -1600,7 +1601,7 @@ def build_producer_model_context(
                 "but do not grant Product claim authority. Preserve supplied safety constraints "
                 "and disclaimers. Plan media; never authorize or execute generation."
             )
-        else:
+        elif output_contract_version == 2:
             output_task = (
                 "Return only production.production_plan.v2. Execute the full approved "
                 "CreativeConcept without re-strategizing or re-researching it, and preserve every "
@@ -1617,6 +1618,29 @@ def build_producer_model_context(
                 "at most 8 image segments and 4 video segments, and all specifications "
                 "provider-neutral. Plan media; never authorize or execute generation."
             )
+        elif output_contract_version == 3:
+            output_task = (
+                "Return only production.production_plan.v3. Execute the full approved "
+                "CreativeConcept without re-strategizing or re-researching it, and return exactly "
+                "one scene array item for every concept_scene_keys item, in the same order. Do not "
+                "emit scene keys, scene ordinals, shot parent scene keys, or shot ordinals; "
+                "trusted application code derives them from array position and frozen "
+                "concept_scene_keys. "
+                "Every scene must contain at least one shot. Product facts are authorized only by "
+                "exact entries in producer_product.approved_claims; Research findings explain "
+                "approved rationale but do not grant Product claim authority. Preserve supplied "
+                "safety constraints and disclaimers. Use each shot key once globally and in at "
+                "most one generation segment. USE_EXISTING_ASSET may reference only "
+                "selected_assets; GENERATE_IMAGE requires an image specification; "
+                "GENERATE_VIDEO and MANUAL_CAPTURE forbid one. All image and segment reference "
+                "Asset UUIDs must come from selected_assets. IMAGE segments require null duration "
+                "and only GENERATE_IMAGE shots; VIDEO segments require 4-30 seconds and only "
+                "GENERATE_VIDEO shots. Keep total scene duration 10-60 seconds, at most 8 image "
+                "segments and 4 video segments, and all specifications provider-neutral. Plan "
+                "media; never authorize or execute generation."
+            )
+        else:
+            raise ValueError("unsupported Producer output contract version")
     else:
         raise ValueError("unsupported Producer context version")
     sections.pop("request", None)
@@ -1633,8 +1657,13 @@ def build_producer_model_context(
 
 
 def conservative_producer_input_token_bound(context: ModelContext) -> int:
-    contract_version = (
-        1 if "production.production_plan.v1" in context.output_task else PRODUCTION_CONTRACT_VERSION
+    contract_version = next(
+        (
+            version
+            for version in sorted(PRODUCTION_HISTORICAL_CONTRACT_VERSIONS)
+            if f"production.production_plan.v{version}" in context.output_task
+        ),
+        PRODUCTION_CONTRACT_VERSION,
     )
     document = {
         "system_instructions": context.system_instructions,
@@ -2680,7 +2709,7 @@ class AgentRunService:
         failed_run_id: UUID,
         transition_id: UUID,
     ) -> AgentRun:
-        """Admit one explicit successor for an authoritative v1 validation failure."""
+        """Admit one explicit successor for an authoritative contract validation failure."""
 
         if (
             context.membership_status is not MembershipStatus.ACTIVE
@@ -2704,9 +2733,18 @@ class AgentRunService:
                 or failed.agent_type != "producer"
                 or failed.status is not AgentRunStatus.FAILED
                 or failed.output_contract_key != PRODUCTION_CONTRACT_KEY
-                or failed.output_contract_version != 1
-                or failed.failure_code != "MODEL_INVALID_OUTPUT"
+                or failed.output_contract_version not in PRODUCTION_HISTORICAL_CONTRACT_VERSIONS
+                or failed.output_contract_version >= PRODUCTION_CONTRACT_VERSION
+                or (
+                    failed.output_contract_version == 1
+                    and failed.failure_code != "MODEL_INVALID_OUTPUT"
+                )
+                or (
+                    failed.output_contract_version >= 2
+                    and failed.failure_code != "PRODUCTION_PLAN_INVALID"
+                )
                 or failed.result_ref is not None
+                or await uow.runs.has_production_plan(failed_run_id)
             ):
                 raise ProducerReplacementNotAllowed(
                     "replacement requires the exact eligible failed Producer run"
@@ -2773,6 +2811,7 @@ class AgentRunService:
                 or preparation.producer.version_id == failed.agent_version_id
                 or cfg.output_contract_key != PRODUCTION_CONTRACT_KEY
                 or cfg.output_contract_version != PRODUCTION_CONTRACT_VERSION
+                or cfg.output_contract_version <= failed.output_contract_version
                 or cfg.prompt_revision != PRODUCER_PROMPT_REVISION
             ):
                 raise ProducerReplacementNotAllowed(

@@ -42,7 +42,7 @@ Compatibility is established through three distinct gates:
 2. admission-time compilation of the exact resolved contract before budget reservation, AgentRun,
    outbox, or worker state exists, with worker validation retained as defense in depth;
 3. an explicit operator-only provider gate using `POST /v1/responses/input_tokens` with synthetic
-   content for all eight installed contract versions across the six model-backed agents. It never
+   content for every registry-installed contract version across the six model-backed agents. It never
    calls `/v1/responses` and never generates output.
 
 Provider rejection at gate 2 uses `AGENT_PROVIDER_CONTRACT_UNSUPPORTED`, not an HTTP provider failure
@@ -56,6 +56,8 @@ no partial persistence is introduced here.
 
 - Static incompatibility cannot consume budget or create a pending/running lifecycle.
 - Producer v2 preserves its canonical conditional semantics and historical identity.
+- Producer v3 from ADR-051 requires no identity-specific transform and is included automatically by
+  registry enumeration; the installed set is now nine contract versions.
 - The provider count gate needs a credential and explicit approval but makes no generation request.
 - A compiler-revision persistence ADR and migration are required before those fields become durable
   forensic provenance.

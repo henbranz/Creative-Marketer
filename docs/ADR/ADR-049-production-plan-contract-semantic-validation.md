@@ -1,6 +1,6 @@
 # ADR-049 — Production Plan contract and semantic validation hardening
 
-Status: Accepted
+Status: Accepted; current-contract and replacement portions superseded by ADR-051
 
 ## Context
 
@@ -55,3 +55,7 @@ arbitrary model content. The historical failed run, provider response identity, 
 and zero unknown cost remain immutable. Operators must bootstrap/activate the new Producer version,
 create the explicit replacement while the worker is stopped, inspect it, and only then start one
 controlled worker execution.
+
+ADR-051 introduces provider contract v3 after a later live v2 response demonstrated that scene and
+shot relationship metadata must be application-derived. This ADR remains authoritative for v2
+history, semantic validation, diagnostics, and the original v1-to-v2 lineage.

@@ -61,7 +61,7 @@ class AgentService:
             self.run,
             id=uuid4(),
             recovery_of_run_id=values["failed_run_id"],
-            output_contract_version=2,
+            output_contract_version=3,
         )
 
     async def list_runs(self, _context, _product_id):
@@ -173,7 +173,7 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
     assert started.output_contract_version == 1
     assert replacement.recovery_of_run_id == agent.run.id
     assert replacement.output_contract_key == "production.production_plan"
-    assert replacement.output_contract_version == 2
+    assert replacement.output_contract_version == 3
     assert [item.id for item in runs] == [agent.run.id]
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value

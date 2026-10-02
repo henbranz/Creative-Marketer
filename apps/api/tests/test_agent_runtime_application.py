@@ -75,6 +75,7 @@ from creative_marketer.agent_runtime.domain import (
     ModelRouteUnavailable,
     ModelTimeout,
     ModelUsage,
+    ProducerReplacementNotAllowed,
     ProviderFailureReason,
     ProviderResponseStatus,
     RecoveryAgentUnavailable,
@@ -431,6 +432,7 @@ class MemoryRepository:
         self.attempts = {}
         self.reservations = []
         self.reconciliations = []
+        self.production_plan_run_ids = set()
         self.agent_available = True
         self.budget_available = True
         self.creative_prepared = None
@@ -448,6 +450,9 @@ class MemoryRepository:
                 key=lambda value: value.attempt_number,
             )
         )
+
+    async def has_production_plan(self, run_id):
+        return run_id in self.production_plan_run_ids
 
     async def prepare_researcher(self, product_id):
         return self.prepared if self.prepared.product_snapshot.product_id == product_id else None
@@ -2295,7 +2300,7 @@ async def test_invalid_production_plan_keeps_domain_code_and_safe_diagnostic() -
 
 
 @pytest.mark.asyncio
-async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() -> None:
+async def test_completed_v2_producer_failure_gets_one_explicit_v3_successor() -> None:
     tenant_id, product_id = uuid4(), uuid4()
     prepared = preparation(tenant_id, product_id)
     creative_context = None
@@ -2376,7 +2381,7 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
     historical = replace(
         pending,
         agent_version_id=uuid4(),
-        output_contract_version=1,
+        output_contract_version=2,
         status=AgentRunStatus.FAILED,
         started_at=now - timedelta(minutes=1),
         completed_at=now,
@@ -2393,7 +2398,7 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
         total_tokens=10257,
         estimated_cost=Decimal("0.129156"),
         provider_response_id="resp_historical",
-        failure_code="MODEL_INVALID_OUTPUT",
+        failure_code="PRODUCTION_PLAN_INVALID",
     )
     repository.runs[pending.id] = historical
     attempt = ModelAttempt(
@@ -2416,7 +2421,7 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
         output_tokens=5508,
         total_tokens=10257,
         estimated_cost=Decimal("0.129156"),
-        failure_code="MODEL_INVALID_OUTPUT",
+        failure_code="PRODUCTION_PLAN_INVALID",
         provider_response_status=ProviderResponseStatus.COMPLETED,
         usage_available=True,
     )
@@ -2438,11 +2443,52 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
 
     assert replay.id == replacement.id
     assert replacement.status is AgentRunStatus.PENDING
-    assert replacement.output_contract_version == 2
+    assert replacement.output_contract_version == 3
     assert replacement.recovery_of_run_id == historical.id
     assert replacement.agent_version_id != historical.agent_version_id
     assert repository.runs[historical.id] == historical
     assert repository.attempts[attempt.id] == attempt
+    assert len(provider.calls) == 2
+
+    async def rejected_candidate(*, unknown_cost=Decimal("0"), extra_attempt=False, has_plan=False):
+        candidate_id = uuid4()
+        response_id = f"resp_{candidate_id.hex}"
+        candidate = replace(
+            historical,
+            id=candidate_id,
+            idempotency_key=f"candidate-{candidate_id}",
+            provider_response_id=response_id,
+        )
+        candidate_attempt = replace(
+            attempt,
+            id=uuid4(),
+            agent_run_id=candidate_id,
+            provider_response_id=response_id,
+            unknown_cost=unknown_cost,
+        )
+        repository.runs[candidate_id] = candidate
+        repository.attempts[candidate_attempt.id] = candidate_attempt
+        if extra_attempt:
+            duplicate = replace(
+                candidate_attempt,
+                id=uuid4(),
+                attempt_number=2,
+                provider_response_id=f"{response_id}_duplicate",
+            )
+            repository.attempts[duplicate.id] = duplicate
+        if has_plan:
+            repository.production_plan_run_ids.add(candidate_id)
+        with pytest.raises(ProducerReplacementNotAllowed):
+            await runtime.request_producer_replacement(
+                context(tenant_id),
+                product_id=product_id,
+                failed_run_id=candidate_id,
+                transition_id=uuid4(),
+            )
+
+    await rejected_candidate(unknown_cost=Decimal("0.01"))
+    await rejected_candidate(extra_attempt=True)
+    await rejected_candidate(has_plan=True)
     assert len(provider.calls) == 2
 
     rejected = replace(
@@ -2488,7 +2534,7 @@ async def test_completed_v1_producer_failure_gets_one_explicit_v2_successor() ->
 
     assert recovery_successor.status is AgentRunStatus.PENDING
     assert recovery_successor.recovery_of_run_id == rejected.id
-    assert recovery_successor.output_contract_version == 2
+    assert recovery_successor.output_contract_version == 3
     assert repository.runs[historical.id] == historical
     assert repository.attempts[attempt.id] == attempt
     assert repository.runs[rejected.id] == rejected

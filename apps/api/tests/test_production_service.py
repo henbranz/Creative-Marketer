@@ -59,7 +59,7 @@ from creative_marketer.tool_execution.domain import (
 )
 
 from .test_production import context as planning_context
-from .test_production import valid_output
+from .test_production import valid_v3_output
 
 
 class Writer:
@@ -128,7 +128,7 @@ def execution_context(tenant_id, role=MembershipRole.OWNER):
 def service_fixture():
     context = planning_context()
     plan = validate_production_plan(
-        valid_output(str(context.selected_assets[0].asset_id)),
+        valid_v3_output(str(context.selected_assets[0].asset_id)),
         tenant_id=uuid4(),
         product_id=uuid4(),
         agent_run_id=uuid4(),

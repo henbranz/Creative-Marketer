@@ -612,12 +612,12 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
         tenant_id=UUID(TENANT),
         product_id=UUID(PRODUCT),
         agent_type="producer",
-        input_context_kind="production_planning.v1",
+        input_context_kind="production_planning.v2",
         selected_evidence=(),
         output_contract_key="production.production_plan",
-        output_contract_version=1,
+        output_contract_version=2,
         status=AgentRunStatus.FAILED,
-        failure_code="MODEL_INVALID_OUTPUT",
+        failure_code="PRODUCTION_PLAN_INVALID",
         estimated_cost=Decimal("0.129156"),
         unknown_cost=Decimal("0"),
     )
@@ -625,7 +625,7 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
         failed_run,
         id=UUID(SUCCESSOR),
         recovery_of_run_id=UUID(PRODUCER),
-        output_contract_version=2,
+        output_contract_version=3,
         status=AgentRunStatus.PENDING,
         failure_code=None,
         agent_version_id=UUID(int=24),
@@ -637,9 +637,9 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
     failed = _agent_run(failed_run).model_dump(mode="json")
     replacement = _agent_run(replacement_run).model_dump(mode="json")
     assert failed["output_contract_key"] == "production.production_plan"
-    assert failed["output_contract_version"] == 1
+    assert failed["output_contract_version"] == 2
     assert replacement["output_contract_key"] == "production.production_plan"
-    assert replacement["output_contract_version"] == 2
+    assert replacement["output_contract_version"] == 3
     fake = FakeApi(
         {
             ("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, replacement],
