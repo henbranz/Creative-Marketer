@@ -61,6 +61,12 @@ Producer has a strictly newer supported contract and current prompt revision. V1
 database trigger, unique lineage constraint, idempotency, active-run admission, and application
 checks all remain fail-closed. Creation never starts provider execution.
 
+Lineage may form a chain across known-failure recovery and contract upgrades. A predecessor's own
+`recovery_of_run_id` identifies its parent; it is not evidence that the predecessor already has a
+child. Operator tooling detects an existing successor only in the forward direction, where a run's
+`recovery_of_run_id` equals the exact predecessor ID. One valid child is adopted idempotently and
+multiple children fail closed; historical links are never flattened or rewritten.
+
 ## Repository-wide deterministic metadata audit
 
 Classification definitions:

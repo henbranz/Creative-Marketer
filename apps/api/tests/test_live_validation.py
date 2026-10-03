@@ -5,6 +5,7 @@ from dataclasses import replace
 from decimal import Decimal
 from io import BytesIO
 from types import SimpleNamespace
+from typing import cast
 from urllib.error import HTTPError
 from uuid import UUID
 
@@ -151,6 +152,45 @@ def recoverable_run(identifier, route, **changes):
     }
     value.update(changes)
     return value
+
+
+def producer_run(
+    identifier: str,
+    *,
+    contract_version: int,
+    status: AgentRunStatus,
+    failure_code: str | None,
+    recovery_of_run_id: str | None = None,
+    agent_version: int = 23,
+) -> dict[str, object]:
+    value = replace(
+        run(),
+        id=UUID(identifier),
+        tenant_id=UUID(TENANT),
+        product_id=UUID(PRODUCT),
+        requested_agent_definition_id=UUID(int=31),
+        resolved_agent_definition_id=UUID(int=32),
+        product_snapshot_id=UUID(int=33),
+        agent_type="producer",
+        input_context_kind="production_planning.v2",
+        selected_evidence=(),
+        model_profile_key="production_deep",
+        output_contract_key="production.production_plan",
+        output_contract_version=contract_version,
+        status=status,
+        failure_code=failure_code,
+        recovery_of_run_id=(None if recovery_of_run_id is None else UUID(recovery_of_run_id)),
+        estimated_cost=Decimal("0.119128") if status is AgentRunStatus.FAILED else Decimal("0"),
+        unknown_cost=Decimal("0"),
+        agent_version_id=UUID(int=agent_version),
+        resolved_provider=None if status is AgentRunStatus.PENDING else "openai",
+        resolved_model=None if status is AgentRunStatus.PENDING else "gpt-5.6-sol",
+        resolved_model_route_version=(
+            None if status is AgentRunStatus.PENDING else "producer-route"
+        ),
+        pricing_version=None if status is AgentRunStatus.PENDING else "producer-pricing",
+    )
+    return cast(dict[str, object], _agent_run(value).model_dump(mode="json"))
 
 
 def saved_state(store, **values):
@@ -642,7 +682,7 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
     assert replacement["output_contract_version"] == 3
     fake = FakeApi(
         {
-            ("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, replacement],
+            ("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed],
             (
                 "POST",
                 f"/v1/products/{PRODUCT}/production/runs/{PRODUCER}/replacement",
@@ -662,6 +702,246 @@ def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(
     ]
     output = capsys.readouterr().out
     assert "left PENDING" in output and "No provider execution" in output
+
+
+def test_live_producer_replacement_preserves_chained_parent_lineage(monkeypatch, tmp_path) -> None:
+    v1 = HISTORICAL
+    v2_no_response = UNRELATED
+    v2_failed = PRODUCER
+    v3_pending = SUCCESSOR
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=v2_failed,
+    )
+    runs = [
+        producer_run(
+            v1,
+            contract_version=1,
+            status=AgentRunStatus.FAILED,
+            failure_code="MODEL_INVALID_OUTPUT",
+            agent_version=21,
+        ),
+        producer_run(
+            v2_no_response,
+            contract_version=2,
+            status=AgentRunStatus.FAILED,
+            failure_code="MODEL_PROVIDER_BAD_REQUEST",
+            recovery_of_run_id=v1,
+            agent_version=22,
+        ),
+        producer_run(
+            v2_failed,
+            contract_version=2,
+            status=AgentRunStatus.FAILED,
+            failure_code="PRODUCTION_PLAN_INVALID",
+            recovery_of_run_id=v2_no_response,
+            agent_version=22,
+        ),
+    ]
+    successor = producer_run(
+        v3_pending,
+        contract_version=3,
+        status=AgentRunStatus.PENDING,
+        failure_code=None,
+        recovery_of_run_id=v2_failed,
+        agent_version=23,
+    )
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/production/runs"): runs,
+            (
+                "POST",
+                f"/v1/products/{PRODUCT}/production/runs/{v2_failed}/replacement",
+            ): successor,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    assert acceptance.replace_invalid_producer(settings(), store) == 0
+
+    assert store.load().producer_run_id == v3_pending
+    assert runs[2]["recovery_of_run_id"] == v2_no_response
+    assert successor["recovery_of_run_id"] == v2_failed
+    assert [call for call in fake.calls if call[0] == "POST"] == [
+        (
+            "POST",
+            f"/v1/products/{PRODUCT}/production/runs/{v2_failed}/replacement",
+            {"transition_id": state.session_id},
+        )
+    ]
+    assert not any("responses" in path for _method, path, _body in fake.calls)
+
+
+def test_live_producer_replacement_adopts_existing_child_idempotently(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    failed = producer_run(
+        PRODUCER,
+        contract_version=2,
+        status=AgentRunStatus.FAILED,
+        failure_code="PRODUCTION_PLAN_INVALID",
+        recovery_of_run_id=UNRELATED,
+        agent_version=22,
+    )
+    successor = producer_run(
+        SUCCESSOR,
+        contract_version=3,
+        status=AgentRunStatus.PENDING,
+        failure_code=None,
+        recovery_of_run_id=PRODUCER,
+        agent_version=23,
+    )
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, successor]})
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    assert acceptance.replace_invalid_producer(settings(), store) == 0
+    assert store.load().producer_run_id == SUCCESSOR
+    assert acceptance.replace_invalid_producer(settings(), store) == 0
+    assert all(method == "GET" for method, _path, _body in fake.calls)
+    output = capsys.readouterr().out
+    assert "was adopted" in output
+    assert "already bound" in output
+    assert output.count("No provider execution") == 1
+
+
+def test_live_producer_replacement_rejects_multiple_child_successors(monkeypatch, tmp_path) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    failed = producer_run(
+        PRODUCER,
+        contract_version=2,
+        status=AgentRunStatus.FAILED,
+        failure_code="PRODUCTION_PLAN_INVALID",
+        agent_version=22,
+    )
+    first = producer_run(
+        SUCCESSOR,
+        contract_version=3,
+        status=AgentRunStatus.PENDING,
+        failure_code=None,
+        recovery_of_run_id=PRODUCER,
+        agent_version=23,
+    )
+    second = producer_run(
+        str(UUID(int=12)),
+        contract_version=3,
+        status=AgentRunStatus.PENDING,
+        failure_code=None,
+        recovery_of_run_id=PRODUCER,
+        agent_version=24,
+    )
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, first, second]})
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    with pytest.raises(RuntimeError, match="LIVE_PRODUCER_REPLACEMENT_SUCCESSOR_AMBIGUOUS"):
+        acceptance.replace_invalid_producer(settings(), store)
+
+    assert store.load().producer_run_id == PRODUCER
+    assert all(method == "GET" for method, _path, _body in fake.calls)
+
+
+def test_live_producer_replacement_rejects_mismatched_existing_child(monkeypatch, tmp_path) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    failed = producer_run(
+        PRODUCER,
+        contract_version=2,
+        status=AgentRunStatus.FAILED,
+        failure_code="PRODUCTION_PLAN_INVALID",
+        agent_version=22,
+    )
+    mismatched = {
+        **producer_run(
+            SUCCESSOR,
+            contract_version=3,
+            status=AgentRunStatus.PENDING,
+            failure_code=None,
+            recovery_of_run_id=PRODUCER,
+            agent_version=23,
+        ),
+        "resolved_agent_definition_id": str(UUID(int=999)),
+    }
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/production/runs"): [failed, mismatched]})
+    monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
+
+    with pytest.raises(RuntimeError, match="LIVE_PRODUCER_REPLACEMENT_PROVENANCE_MISMATCH"):
+        acceptance.replace_invalid_producer(settings(), store)
+
+    assert store.load().producer_run_id == PRODUCER
+    assert all(method == "GET" for method, _path, _body in fake.calls)
+
+
+def test_recovery_successor_binding_remains_compatible_after_contract_upgrade(
+    tmp_path,
+) -> None:
+    store = acceptance.StateStore(tmp_path / "live-validation.json")
+    state = saved_state(store, producer_run_id=PRODUCER)
+    route = acceptance.initial_producer_route()
+    upgraded = recoverable_run(
+        PRODUCER,
+        route,
+        status="FAILED",
+        failure_code="MODEL_PROVIDER_BAD_REQUEST",
+        recovery_of_run_id=UNRELATED,
+        agent_type="producer",
+        prompt_revision="producer_v6_contract_v3",
+        input_context_kind="production_planning.v2",
+        model_profile_key=route.profile_key,
+        output_contract_key="production.production_plan",
+        output_contract_version=3,
+    )
+    rerun = {
+        **upgraded,
+        "id": SUCCESSOR,
+        "status": "PENDING",
+        "failure_code": None,
+        "recovery_of_run_id": PRODUCER,
+        "resolved_provider": None,
+        "resolved_model": None,
+        "model_route_version": None,
+        "pricing_version": None,
+    }
+    fake = FakeApi({("GET", f"/v1/products/{PRODUCT}/production/runs"): [upgraded, rerun]})
+
+    selected = acceptance.bind_recovery_successor(
+        fake,
+        PRODUCT,
+        state,
+        store,
+        "producer_run_id",
+        "production",
+        route,
+        "Producer",
+    )
+
+    assert selected["id"] == SUCCESSOR
+    assert store.load().producer_run_id == SUCCESSOR
+    assert selected["recovery_of_run_id"] == PRODUCER
+    assert upgraded["recovery_of_run_id"] == UNRELATED
 
 
 def test_live_status_preserves_historical_unknown_and_actual_costs_after_replacement(

@@ -21,6 +21,7 @@ from creative_marketer.agent_runtime.application import (
 from creative_marketer.agent_runtime.domain import ModelRoute
 from creative_marketer.production.application import (
     OPENAI_IMAGE_MODEL,
+    PRODUCTION_CONTRACT_KEY,
     PRODUCTION_CONTRACT_VERSION,
     SEEDANCE_MODEL,
     SeedancePricing,
@@ -270,6 +271,61 @@ RECOVERY_PROVENANCE_FIELDS = (
     "context_digest",
 )
 
+PRODUCER_UPGRADE_LINEAGE_FIELDS = (
+    "tenant_id",
+    "product_id",
+    "requested_agent_definition_id",
+    "resolved_agent_definition_id",
+    "agent_type",
+    "input_context_kind",
+    "input_context_schema_version",
+    "model_profile_key",
+    "output_contract_key",
+    "product_snapshot_id",
+    "product_snapshot_digest",
+    "research_context_digest",
+)
+PRODUCER_SUCCESSOR_STATUSES = {
+    "PENDING",
+    "RUNNING",
+    "SUCCEEDED",
+    "FAILED",
+    "CANCELLED",
+    "BLOCKED_BUDGET",
+}
+
+
+def validate_producer_upgrade_successor(
+    predecessor: dict[str, Any],
+    successor: dict[str, Any],
+    *,
+    require_pending: bool,
+) -> str:
+    """Validate the exposed immutable lineage of one Producer contract upgrade."""
+
+    predecessor_id = valid_id(predecessor.get("id"), "producer_predecessor_run_id")
+    successor_id = valid_id(successor.get("id"), "producer_replacement_run_id")
+    predecessor_contract_version = predecessor.get("output_contract_version")
+    successor_contract_version = successor.get("output_contract_version")
+    if (
+        successor_id == predecessor_id
+        or successor.get("recovery_of_run_id") != predecessor_id
+        or any(
+            successor.get(field) != predecessor.get(field)
+            for field in PRODUCER_UPGRADE_LINEAGE_FIELDS
+        )
+        or not isinstance(predecessor_contract_version, int)
+        or not isinstance(successor_contract_version, int)
+        or predecessor.get("output_contract_key") != PRODUCTION_CONTRACT_KEY
+        or successor_contract_version <= predecessor_contract_version
+        or successor_contract_version > PRODUCTION_CONTRACT_VERSION
+        or successor.get("agent_version_id") == predecessor.get("agent_version_id")
+        or successor.get("status") not in PRODUCER_SUCCESSOR_STATUSES
+        or (require_pending and successor.get("status") != "PENDING")
+    ):
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_PROVENANCE_MISMATCH")
+    return successor_id
+
 
 def bind_recovery_successor(
     api: LocalApi,
@@ -445,15 +501,27 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
         or state.final_creative_id is not None
     ):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_STAGE_ALREADY_ADVANCED")
-    failed = exact(
-        items(api, f"/v1/products/{product}/production/runs"),
-        state.producer_run_id,
-        "production_run",
-    )
-    if failed.get("recovery_of_run_id") is not None:
+    runs = items(api, f"/v1/products/{product}/production/runs")
+    failed = exact(runs, state.producer_run_id, "production_run")
+    failed_contract_version = failed.get("output_contract_version")
+    if (
+        failed_contract_version == PRODUCTION_CONTRACT_VERSION
+        and failed.get("recovery_of_run_id") is not None
+    ):
+        if (
+            failed.get("tenant_id") != state.tenant_id
+            or failed.get("product_id") != state.product_id
+            or failed.get("agent_type") != "producer"
+        ):
+            raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_PROVENANCE_MISMATCH")
+        predecessor = exact(
+            runs,
+            valid_id(failed.get("recovery_of_run_id"), "producer_predecessor_run_id"),
+            "production_run",
+        )
+        validate_producer_upgrade_successor(predecessor, failed, require_pending=False)
         print(f"Producer replacement already bound: {failed['id']} ({failed['status']})")
         return 0
-    failed_contract_version = failed.get("output_contract_version")
     failed_failure_code = failed.get("failure_code")
     if not isinstance(failed_contract_version, int):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REQUIRES_ELIGIBLE_FAILED_RUN")
@@ -466,10 +534,29 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
         or failed.get("tenant_id") != state.tenant_id
         or failed.get("product_id") != state.product_id
         or failed.get("agent_type") != "producer"
+        or failed.get("output_contract_key") != PRODUCTION_CONTRACT_KEY
         or failed_contract_version >= PRODUCTION_CONTRACT_VERSION
         or Decimal(str(failed.get("unknown_cost", 0))) != 0
     ):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REQUIRES_ELIGIBLE_FAILED_RUN")
+    successors = [
+        candidate
+        for candidate in runs
+        if candidate.get("recovery_of_run_id") == state.producer_run_id
+    ]
+    if len(successors) > 1:
+        raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_SUCCESSOR_AMBIGUOUS")
+    if successors:
+        successor_id = validate_producer_upgrade_successor(
+            failed, successors[0], require_pending=False
+        )
+        historical_id = state.producer_run_id
+        state.producer_run_id = successor_id
+        saved.save(state)
+        print(f"Producer replacement already existed and was adopted: {successor_id}")
+        print(f"Historical failed Producer retained: {historical_id}")
+        print("No provider execution was started by this command.")
+        return 0
     replacement = api.request(
         f"/v1/products/{product}/production/runs/{state.producer_run_id}/replacement",
         method="POST",
@@ -477,19 +564,11 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
     )
     if not isinstance(replacement, dict):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_RESPONSE_INVALID")
-    replacement_id = valid_id(replacement.get("id"), "producer_replacement_run_id")
+    replacement_id = validate_producer_upgrade_successor(failed, replacement, require_pending=True)
     replacement_contract_version = replacement.get("output_contract_version")
     if (
-        replacement_id == state.producer_run_id
-        or replacement.get("recovery_of_run_id") != state.producer_run_id
-        or replacement.get("tenant_id") != state.tenant_id
-        or replacement.get("product_id") != state.product_id
-        or replacement.get("agent_type") != "producer"
-        or not isinstance(replacement_contract_version, int)
+        not isinstance(replacement_contract_version, int)
         or replacement_contract_version != PRODUCTION_CONTRACT_VERSION
-        or replacement_contract_version <= failed_contract_version
-        or replacement.get("status") != "PENDING"
-        or replacement.get("agent_version_id") == failed.get("agent_version_id")
     ):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_PROVENANCE_MISMATCH")
     historical_id = state.producer_run_id

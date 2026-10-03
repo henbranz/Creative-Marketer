@@ -188,7 +188,10 @@ The command verifies known usage/cost, zero unknown cost, no ProductionPlan, val
 provenance, a strictly newer active supported contract/prompt, and no successor. It creates one v3
 run in `PENDING` with `recovery_of_run_id`; it does not execute a provider. Inspect status before
 starting one controlled Agent worker. Historical v1/v2 responses, diagnostics, and spend remain
-unchanged. See ADR-051.
+unchanged. Successor detection is directional: a non-null `recovery_of_run_id` on the failed run
+identifies its parent and does not block another strictly newer contract upgrade. The harness checks
+for children whose `recovery_of_run_id` equals the exact failed run ID, adopts one valid existing
+child idempotently, and fails closed if multiple children are exposed. See ADR-051.
 
 Review the exact Production Plan and cost in the UI. Human approval creates route-bound
 GenerationJobs. These commands inspect and continue that governed path; they never call a provider
