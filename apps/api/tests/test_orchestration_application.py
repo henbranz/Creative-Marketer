@@ -20,6 +20,7 @@ from creative_marketer.orchestration.application import (
     CyclePreflight,
     CycleReadinessEngine,
     ExperimentHandoff,
+    PipelineStateService,
     require_cycle_mutation,
 )
 from creative_marketer.orchestration.domain import (
@@ -39,6 +40,8 @@ from creative_marketer.orchestration.domain import (
 )
 from creative_marketer.orchestration.pipeline import (
     CreativePipelineState,
+    PipelineAction,
+    PipelineLocator,
     PipelineObservation,
     ProducerPipelineState,
     ResearchPipelineState,
@@ -129,6 +132,18 @@ def test_cycle_readiness_uses_authoritative_pipeline_action_before_stage_hint() 
     assert "RESTRATEGIZE_CREATIVE" in readiness.requirements[0].message
     assert "APPROVE_CONCEPT" not in readiness.requirements[0].message
 
+    approval = CycleReadinessEngine().cycle(
+        CanonicalCycleState(
+            sample_cycle(ctx, CycleStage.CREATIVE_STRATEGY),
+            pipeline=PipelineObservation(
+                uuid4(),
+                ResearchPipelineState.SUCCEEDED_CURRENT,
+                CreativePipelineState.SUCCEEDED,
+            ),
+        )
+    )
+    assert approval.allowed_actions == (SupervisorAction.APPROVE_CONCEPT,)
+
 
 def test_cycle_mutation_requires_active_owner_or_admin() -> None:
     ctx = context()
@@ -148,6 +163,7 @@ class MemoryRepository:
         self.reports: list[SupervisorReport] = []
         self.parent_cycle: CreativeCycle | None = None
         self.handoff: ExperimentHandoff | None = None
+        self.pipeline_observation: PipelineObservation | None = None
 
     async def preflight(self, product_id):
         return CyclePreflight(True, 96, uuid4(), "sha256:" + "b" * 64, 1, True)
@@ -218,6 +234,9 @@ class MemoryRepository:
     async def latest_supervisor_report(self, cycle_id):
         return self.reports[-1] if self.reports else None
 
+    async def observe_pipeline(self, locator):
+        return self.pipeline_observation
+
 
 class MemoryUow:
     def __init__(self, repository):
@@ -242,6 +261,25 @@ class MemoryUow:
 
     async def commit(self):
         self.commits += 1
+
+
+@pytest.mark.asyncio
+async def test_pipeline_state_service_resolves_or_fails_closed() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    service = PipelineStateService(lambda _tenant: MemoryUow(repository))
+    locator = PipelineLocator(uuid4())
+    repository.pipeline_observation = PipelineObservation(
+        locator.product_id,
+        ResearchPipelineState.NOT_STARTED,
+    )
+
+    resolved = await service.resolve_next_action(ctx, locator)
+
+    assert resolved.action is PipelineAction.RUN_RESEARCH
+    repository.pipeline_observation = None
+    with pytest.raises(CycleNotFound):
+        await service.resolve_next_action(ctx, locator)
 
 
 @pytest.mark.asyncio
@@ -314,6 +352,12 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
             CycleStage.RESEARCHING,
             {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.NOT_STARTED)},
             (None, "research"),
+        ),
+        (CycleStage.RESEARCHING, {}, (None, "needs_recovery")),
+        (
+            CycleStage.RESEARCHING,
+            {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.PENDING)},
+            (None, None),
         ),
         (
             CycleStage.CREATIVE_STRATEGY,
@@ -556,6 +600,27 @@ async def test_reconciler_marks_ambiguous_or_unrelated_work_as_needing_recovery(
 
 
 @pytest.mark.asyncio
+async def test_reconcile_handles_terminal_action_and_idle_paths() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    uow = MemoryUow(repository)
+    service = CreativeCycleService(lambda _tenant: uow, SimpleNamespace(), Runtime())
+
+    terminal = replace(sample_cycle(ctx), status=CycleStatus.CANCELLED)
+    repository.cycle = terminal
+    assert await service.reconcile(ctx, terminal.id) is terminal
+
+    researching = sample_cycle(ctx, CycleStage.RESEARCHING)
+    repository.cycle = researching
+    recovered = await service.reconcile(ctx, researching.id)
+    assert recovered.status is CycleStatus.NEEDS_RECOVERY
+
+    idle = sample_cycle(ctx, CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL)
+    repository.cycle = idle
+    assert await service.reconcile(ctx, idle.id) is idle
+
+
+@pytest.mark.asyncio
 async def test_service_fails_closed_for_missing_cycles_and_incomplete_start() -> None:
     ctx = context()
     repository = MemoryRepository(ctx)
@@ -603,6 +668,53 @@ async def test_start_refreshes_stale_snapshot_and_rejects_an_active_cycle() -> N
 
     with pytest.raises(CycleConflict):
         await service.start(ctx, created.product_id)
+
+
+@pytest.mark.asyncio
+async def test_start_fails_closed_for_partial_or_conflicting_experiment_lineage() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    uow = MemoryUow(repository)
+    service = CreativeCycleService(lambda _tenant: uow, SimpleNamespace(), Runtime())
+    product_id = uuid4()
+    parent_id = uuid4()
+    proposal_id = uuid4()
+
+    with pytest.raises(CycleNotReady, match="must be supplied together"):
+        await service.start(ctx, product_id, parent_cycle_id=parent_id)
+
+    existing = replace(
+        sample_cycle(ctx),
+        product_id=product_id,
+        parent_cycle_id=parent_id,
+        source_experiment_proposal_id=proposal_id,
+    )
+    repository.cycle = existing
+    assert (
+        await service.start(
+            ctx,
+            product_id,
+            parent_cycle_id=parent_id,
+            source_experiment_proposal_id=proposal_id,
+        )
+        is existing
+    )
+    with pytest.raises(CycleConflict, match="different child cycle"):
+        await service.start(
+            ctx,
+            uuid4(),
+            parent_cycle_id=parent_id,
+            source_experiment_proposal_id=proposal_id,
+        )
+
+    repository.cycle = None
+    with pytest.raises(CycleNotReady, match="lineage is unavailable"):
+        await service.start(
+            ctx,
+            product_id,
+            parent_cycle_id=parent_id,
+            source_experiment_proposal_id=proposal_id,
+        )
 
 
 @pytest.mark.asyncio
