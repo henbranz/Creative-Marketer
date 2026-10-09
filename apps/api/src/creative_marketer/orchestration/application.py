@@ -39,6 +39,13 @@ from .domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from .pipeline import (
+    NextPipelineAction,
+    PipelineAction,
+    PipelineLocator,
+    PipelineObservation,
+    PipelineStateResolver,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +87,7 @@ class CanonicalCycleState:
     intelligence_report_id: UUID | None = None
     experiment_proposal_id: UUID | None = None
     experiment_decided: bool = False
+    pipeline: PipelineObservation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +119,7 @@ class OrchestrationRepository(Protocol):
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None: ...
     async def add_supervisor_report(self, value: SupervisorReport) -> None: ...
     async def latest_supervisor_report(self, cycle_id: UUID) -> SupervisorReport | None: ...
+    async def observe_pipeline(self, locator: PipelineLocator) -> PipelineObservation | None: ...
 
 
 class OrchestrationUnitOfWork(Protocol):
@@ -230,7 +239,47 @@ class CycleReadinessEngine:
         stage = value.cycle.current_stage
         requirements: list[ReadinessRequirement] = []
         actions: tuple[SupervisorAction, ...] = ()
-        if stage is CycleStage.AWAITING_CONCEPT_APPROVAL:
+        pre_generation_stages = {
+            CycleStage.RESEARCHING,
+            CycleStage.CREATIVE_STRATEGY,
+            CycleStage.AWAITING_CONCEPT_APPROVAL,
+            CycleStage.PRODUCTION_PLANNING,
+            CycleStage.AWAITING_PRODUCTION_APPROVAL,
+        }
+        if value.pipeline is not None and stage in pre_generation_stages:
+            resolution = PipelineStateResolver().resolve(value.pipeline)
+            human_actions = {
+                PipelineAction.APPROVE_CREATIVE: SupervisorAction.APPROVE_CONCEPT,
+                PipelineAction.REVIEW_PRODUCTION_PLAN: SupervisorAction.APPROVE_PRODUCTION_PLAN,
+                PipelineAction.RECONCILE_RESEARCH_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
+                PipelineAction.RECONCILE_CREATIVE_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
+                PipelineAction.RECONCILE_PRODUCER_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
+            }
+            mapped = human_actions.get(resolution.action)
+            if mapped is not None:
+                actions = (mapped,)
+            waiting = resolution.action in {
+                PipelineAction.WAIT_FOR_RESEARCH,
+                PipelineAction.WAIT_FOR_CREATIVE,
+                PipelineAction.WAIT_FOR_PRODUCER,
+            }
+            requirements.append(
+                ReadinessRequirement(
+                    "pipeline_next_action",
+                    ReadinessState.WAITING
+                    if waiting or resolution.human_approval_required
+                    else ReadinessState.READY,
+                    (
+                        f"Next governed action: {resolution.action.value}."
+                        + (
+                            f" Blocking reason: {resolution.blocking_reason}."
+                            if resolution.blocking_reason
+                            else ""
+                        )
+                    ),
+                )
+            )
+        elif stage is CycleStage.AWAITING_CONCEPT_APPROVAL:
             requirements.append(
                 ReadinessRequirement(
                     "concept_approval", ReadinessState.WAITING, "Choose a concept for production."
@@ -324,10 +373,27 @@ class CycleReadinessEngine:
             if value.cycle.status
             in {CycleStatus.BLOCKED, CycleStatus.FAILED, CycleStatus.NEEDS_RECOVERY}
             else ReadinessState.WAITING
-            if actions
+            if actions or any(item.state is ReadinessState.WAITING for item in requirements)
             else ReadinessState.READY
         )
         return CycleReadiness(state, tuple(requirements), actions)
+
+
+@dataclass(slots=True)
+class PipelineStateService:
+    """Read-only application boundary for the governed pre-generation workflow."""
+
+    uow_factory: OrchestrationUnitOfWorkFactory
+    resolver: PipelineStateResolver = field(default_factory=PipelineStateResolver)
+
+    async def resolve_next_action(
+        self, context: ExecutionContext, locator: PipelineLocator
+    ) -> NextPipelineAction:
+        async with self.uow_factory(context.tenant_id) as uow:
+            observation = await uow.cycles.observe_pipeline(locator)
+        if observation is None:
+            raise CycleNotFound("Product pipeline was not found")
+        return self.resolver.resolve(observation)
 
 
 @dataclass(slots=True)
@@ -340,6 +406,7 @@ class CreativeCycleService:
     publication_workflows: PublicationWorkflowCoordinator | None = None
     measurement_workflows: MeasurementWorkflowCoordinator | None = None
     readiness_engine: CycleReadinessEngine = field(default_factory=CycleReadinessEngine)
+    pipeline_resolver: PipelineStateResolver = field(default_factory=PipelineStateResolver)
 
     async def preflight(self, context: ExecutionContext, product_id: UUID) -> CycleReadiness:
         async with self.uow_factory(context.tenant_id) as uow:
@@ -520,31 +587,58 @@ class CreativeCycleService:
             return CycleStage.CHECKING_READINESS, None
         if stage in {CycleStage.CHECKING_READINESS, CycleStage.BLOCKED}:
             return CycleStage.RESEARCHING, None
-        if stage is CycleStage.RESEARCHING:
-            if state.research_snapshot_id:
-                return CycleStage.CREATIVE_STRATEGY, None
-            if state.research_run is None:
+        if stage in {
+            CycleStage.RESEARCHING,
+            CycleStage.CREATIVE_STRATEGY,
+            CycleStage.AWAITING_CONCEPT_APPROVAL,
+            CycleStage.PRODUCTION_PLANNING,
+            CycleStage.AWAITING_PRODUCTION_APPROVAL,
+        }:
+            if state.pipeline is None:
+                return None, "needs_recovery"
+            resolution = self.pipeline_resolver.resolve(state.pipeline)
+            if resolution.action is PipelineAction.RUN_RESEARCH:
                 return None, "research"
-            if state.research_run.status.value == "FAILED":
-                return CycleStage.FAILED, None
-        if stage is CycleStage.CREATIVE_STRATEGY:
-            if state.concept_set_id:
-                return CycleStage.AWAITING_CONCEPT_APPROVAL, None
-            if state.creative_run is None:
+            if resolution.action is PipelineAction.RUN_CREATIVE:
+                if stage is CycleStage.RESEARCHING:
+                    return CycleStage.CREATIVE_STRATEGY, None
                 return None, "creative"
-            if state.creative_run.status.value == "FAILED":
-                return CycleStage.FAILED, None
-        if stage is CycleStage.AWAITING_CONCEPT_APPROVAL and state.approved_concept_id:
-            return CycleStage.PRODUCTION_PLANNING, None
-        if stage is CycleStage.PRODUCTION_PLANNING:
-            if state.production_plan_id:
-                return CycleStage.AWAITING_PRODUCTION_APPROVAL, None
-            if state.producer_run is None and state.approved_concept_id:
+            if resolution.action is PipelineAction.RUN_PRODUCER:
+                if stage is CycleStage.AWAITING_CONCEPT_APPROVAL:
+                    return CycleStage.PRODUCTION_PLANNING, None
                 return None, "producer"
-            if state.producer_run and state.producer_run.status.value == "FAILED":
-                return CycleStage.FAILED, None
-        if stage is CycleStage.AWAITING_PRODUCTION_APPROVAL and state.production_plan_approved:
-            return CycleStage.GENERATING_MEDIA, None
+            if resolution.action in {
+                PipelineAction.WAIT_FOR_RESEARCH,
+                PipelineAction.WAIT_FOR_CREATIVE,
+                PipelineAction.WAIT_FOR_PRODUCER,
+            }:
+                return None, None
+            if resolution.action is PipelineAction.APPROVE_CREATIVE:
+                return (
+                    CycleStage.AWAITING_CONCEPT_APPROVAL
+                    if stage is not CycleStage.AWAITING_CONCEPT_APPROVAL
+                    else None,
+                    None,
+                )
+            if resolution.action is PipelineAction.REVIEW_PRODUCTION_PLAN:
+                return (
+                    CycleStage.AWAITING_PRODUCTION_APPROVAL
+                    if stage is not CycleStage.AWAITING_PRODUCTION_APPROVAL
+                    else None,
+                    None,
+                )
+            if resolution.action is PipelineAction.READY_FOR_GENERATION:
+                return CycleStage.GENERATING_MEDIA, None
+            if resolution.action in {
+                PipelineAction.RECONCILE_RESEARCH_OUTCOME,
+                PipelineAction.RECONCILE_CREATIVE_OUTCOME,
+                PipelineAction.RECONCILE_PRODUCER_OUTCOME,
+            }:
+                return None, "needs_recovery"
+            # Paid retries, authority revalidation, and restrategy require an
+            # explicit operator transition. Preserve the exact resolver action as
+            # the blocker instead of misclassifying them as ambiguous outcomes.
+            return None, f"operator:{resolution.action.value}"
         if stage is CycleStage.GENERATING_MEDIA:
             if state.generation_outcome_unknown:
                 return None, "needs_recovery"
@@ -603,6 +697,22 @@ class CreativeCycleService:
                     current,
                     status=CycleStatus.NEEDS_RECOVERY,
                     failure_code="AMBIGUOUS_EXTERNAL_OUTCOME",
+                    cycle_version=current.cycle_version + 1,
+                )
+                if not await uow.cycles.update(changed, expected_version=current.cycle_version):
+                    raise CycleConflict("cycle changed during reconciliation")
+                await uow.commit()
+                return changed
+        if action.startswith("operator:"):
+            next_action = action.removeprefix("operator:")
+            async with self.uow_factory(context.tenant_id) as uow:
+                current = await uow.cycles.get(cycle.id, for_update=True)
+                assert current is not None
+                changed = replace(
+                    current,
+                    status=CycleStatus.BLOCKED,
+                    blocker_code=next_action,
+                    failure_code=None,
                     cycle_version=current.cycle_version + 1,
                 )
                 if not await uow.cycles.update(changed, expected_version=current.cycle_version):

@@ -37,6 +37,12 @@ from creative_marketer.orchestration.domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
+    PipelineObservation,
+    ProducerPipelineState,
+    ResearchPipelineState,
+)
 
 
 def context() -> ExecutionContext:
@@ -103,6 +109,25 @@ def test_cycle_readiness_handles_recovery_completion_and_active_work() -> None:
     assembly_readiness = CycleReadinessEngine().cycle(assembly)
     assert assembly_readiness.state is ReadinessState.WAITING
     assert assembly_readiness.allowed_actions == (SupervisorAction.PREPARE_FINAL_ASSEMBLY,)
+
+
+def test_cycle_readiness_uses_authoritative_pipeline_action_before_stage_hint() -> None:
+    ctx = context()
+    value = CanonicalCycleState(
+        sample_cycle(ctx, CycleStage.AWAITING_CONCEPT_APPROVAL),
+        pipeline=PipelineObservation(
+            uuid4(),
+            ResearchPipelineState.SUCCEEDED_CURRENT,
+            CreativePipelineState.REQUIRES_RESTRATEGY,
+        ),
+    )
+
+    readiness = CycleReadinessEngine().cycle(value)
+
+    assert readiness.state is ReadinessState.WAITING
+    assert readiness.allowed_actions == ()
+    assert "RESTRATEGIZE_CREATIVE" in readiness.requirements[0].message
+    assert "APPROVE_CONCEPT" not in readiness.requirements[0].message
 
 
 def test_cycle_mutation_requires_active_owner_or_admin() -> None:
@@ -276,41 +301,105 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
         (CycleStage.CHECKING_READINESS, {}, (CycleStage.RESEARCHING, None)),
         (
             CycleStage.RESEARCHING,
-            {"research_snapshot_id": uuid4()},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.NOT_STARTED,
+                )
+            },
             (CycleStage.CREATIVE_STRATEGY, None),
         ),
-        (CycleStage.RESEARCHING, {}, (None, "research")),
         (
             CycleStage.RESEARCHING,
-            {"research_run": SimpleNamespace(status=SimpleNamespace(value="FAILED"))},
-            (CycleStage.FAILED, None),
+            {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.NOT_STARTED)},
+            (None, "research"),
         ),
         (
             CycleStage.CREATIVE_STRATEGY,
-            {"concept_set_id": uuid4()},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.SUCCEEDED,
+                )
+            },
             (CycleStage.AWAITING_CONCEPT_APPROVAL, None),
         ),
-        (CycleStage.CREATIVE_STRATEGY, {}, (None, "creative")),
         (
             CycleStage.CREATIVE_STRATEGY,
-            {"creative_run": SimpleNamespace(status=SimpleNamespace(value="FAILED"))},
-            (CycleStage.FAILED, None),
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.NOT_STARTED,
+                )
+            },
+            (None, "creative"),
         ),
         (
             CycleStage.AWAITING_CONCEPT_APPROVAL,
-            {"approved_concept_id": uuid4()},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                )
+            },
             (CycleStage.PRODUCTION_PLANNING, None),
         ),
-        (CycleStage.PRODUCTION_PLANNING, {"approved_concept_id": uuid4()}, (None, "producer")),
         (
             CycleStage.PRODUCTION_PLANNING,
-            {"producer_run": SimpleNamespace(status=SimpleNamespace(value="FAILED"))},
-            (CycleStage.FAILED, None),
+            {
+                "approved_concept_id": uuid4(),
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.NOT_STARTED,
+                ),
+            },
+            (None, "producer"),
+        ),
+        (
+            CycleStage.PRODUCTION_PLANNING,
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED,
+                )
+            },
+            (CycleStage.AWAITING_PRODUCTION_APPROVAL, None),
         ),
         (
             CycleStage.AWAITING_PRODUCTION_APPROVAL,
-            {"production_plan_approved": True},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                )
+            },
             (CycleStage.GENERATING_MEDIA, None),
+        ),
+        (
+            CycleStage.RESEARCHING,
+            {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.OUTCOME_UNKNOWN)},
+            (None, "needs_recovery"),
+        ),
+        (
+            CycleStage.AWAITING_CONCEPT_APPROVAL,
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.REQUIRES_RESTRATEGY,
+                )
+            },
+            (None, "operator:RESTRATEGIZE_CREATIVE"),
         ),
         (
             CycleStage.GENERATING_MEDIA,
@@ -454,6 +543,16 @@ async def test_reconciler_marks_ambiguous_or_unrelated_work_as_needing_recovery(
     recovered = await service._start_action(ctx, CanonicalCycleState(cycle), "needs_recovery")
     assert recovered.status is CycleStatus.NEEDS_RECOVERY
     assert recovered.failure_code == "AMBIGUOUS_EXTERNAL_OUTCOME"
+
+    repository.cycle = cycle
+    blocked = await service._start_action(
+        ctx,
+        CanonicalCycleState(cycle),
+        "operator:RESTRATEGIZE_CREATIVE",
+    )
+    assert blocked.status is CycleStatus.BLOCKED
+    assert blocked.blocker_code == "RESTRATEGIZE_CREATIVE"
+    assert blocked.failure_code is None
 
 
 @pytest.mark.asyncio

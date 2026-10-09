@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import and_, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +17,7 @@ from creative_marketer.infrastructure.database.agent_runtime_repositories import
 )
 from creative_marketer.infrastructure.database.agent_runtime_schema import (
     agent_runs,
+    model_attempts,
     research_snapshots,
 )
 from creative_marketer.infrastructure.database.assembly_schema import (
@@ -34,6 +35,7 @@ from creative_marketer.infrastructure.database.catalog_schema import (
 )
 from creative_marketer.infrastructure.database.creative_schema import (
     concept_decisions,
+    concept_revalidations,
     concept_sets,
     concepts,
 )
@@ -77,6 +79,18 @@ from creative_marketer.orchestration.domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
+    PipelineFailureCategory,
+    PipelineLocator,
+    PipelineObservation,
+    ProducerPipelineState,
+    ResearchPipelineState,
+    classify_creative_failure,
+    classify_pipeline_failure,
+    classify_producer_failure,
+)
+from creative_marketer.production.application import PRODUCTION_CONTRACT_VERSION
 
 from .orchestration_schema import (
     creative_cycles,
@@ -89,6 +103,10 @@ from .orchestration_schema import (
 
 def _uuid(value: object) -> UUID | None:
     return UUID(str(value)) if value else None
+
+
+def _run_input_ref(run: AgentRun, kind: str) -> Mapping[str, object] | None:
+    return next((item for item in run.input_context_refs if item.get("kind") == kind), None)
 
 
 def _cycle(row: Mapping[str, Any]) -> CreativeCycle:
@@ -639,6 +657,17 @@ class SqlAlchemyOrchestrationRepository:
             product_knowledge_snapshots,
             product_knowledge_snapshots.c.product_id == cycle.product_id,
         )
+        pipeline = await self.observe_pipeline(
+            PipelineLocator(
+                cycle.product_id,
+                research_run.id if research_run else cycle.artifacts.research_run_id,
+                creative_run.id if creative_run else cycle.artifacts.creative_run_id,
+                approved_concept_id,
+                None,
+                producer_run.id if producer_run else cycle.artifacts.producer_run_id,
+                plan_id,
+            )
+        )
         return CanonicalCycleState(
             cycle,
             current_snapshot,
@@ -667,6 +696,404 @@ class SqlAlchemyOrchestrationRepository:
             report_id,
             proposal_id,
             decided,
+            pipeline,
+        )
+
+    async def observe_pipeline(self, locator: PipelineLocator) -> PipelineObservation | None:
+        """Project exact persisted authority into the pre-generation state machine.
+
+        RLS scopes every table. Optional IDs bind a live session without turning the
+        local checkpoint into authority; omitted IDs select the latest canonical row.
+        """
+
+        product_exists = await self.session.scalar(
+            select(products.c.id).where(products.c.id == locator.product_id)
+        )
+        if product_exists is None:
+            return None
+
+        async def run(kind: str, identifier: UUID | None) -> AgentRun | None:
+            if identifier is not None:
+                value = await SqlAlchemyAgentRunRepository(self.session).get(identifier)
+                if (
+                    value is None
+                    or value.product_id != locator.product_id
+                    or value.agent_type != kind
+                ):
+                    return None
+                return value
+            if not locator.use_latest_when_unbound:
+                return None
+            run_id = await self.session.scalar(
+                select(agent_runs.c.id)
+                .where(
+                    agent_runs.c.product_id == locator.product_id,
+                    agent_runs.c.agent_type == kind,
+                )
+                .order_by(agent_runs.c.created_at.desc(), agent_runs.c.id.desc())
+                .limit(1)
+            )
+            return (
+                await SqlAlchemyAgentRunRepository(self.session).get(run_id)
+                if run_id is not None
+                else None
+            )
+
+        async def attempt(value: AgentRun) -> Mapping[str, Any] | None:
+            row = (
+                (
+                    await self.session.execute(
+                        select(model_attempts)
+                        .where(model_attempts.c.agent_run_id == value.id)
+                        .order_by(model_attempts.c.attempt_number.desc())
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            return cast(Mapping[str, Any], row) if row else None
+
+        research_run = await run("researcher", locator.research_run_id)
+        if locator.research_run_id is not None and research_run is None:
+            return None
+        research_snapshot = None
+        research_state = ResearchPipelineState.NOT_STARTED
+        blocking_reason: str | None = None
+        if research_run is not None:
+            if research_run.status.value == "PENDING":
+                research_state = ResearchPipelineState.PENDING
+            elif research_run.status.value == "RUNNING":
+                research_state = ResearchPipelineState.RUNNING
+            elif research_run.status.value == "SUCCEEDED":
+                research_snapshot = (
+                    (
+                        await self.session.execute(
+                            select(research_snapshots)
+                            .where(research_snapshots.c.agent_run_id == research_run.id)
+                            .order_by(research_snapshots.c.created_at.desc())
+                            .limit(1)
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if research_snapshot is None:
+                    research_state = ResearchPipelineState.FAILED_RESPONSE
+                    blocking_reason = "RESEARCH_SUCCESS_MISSING_SNAPSHOT"
+                else:
+                    snapshot = await SqlAlchemyAgentRunRepository(self.session).get_snapshot(
+                        research_snapshot["id"]
+                    )
+                    freshness = (
+                        await SqlAlchemyAgentRunRepository(self.session).snapshot_freshness(
+                            snapshot
+                        )
+                        if snapshot is not None
+                        else "stale"
+                    )
+                    research_state = (
+                        ResearchPipelineState.SUCCEEDED_CURRENT
+                        if freshness == "current"
+                        else ResearchPipelineState.SUCCEEDED_EXPIRED
+                    )
+            else:
+                item = await attempt(research_run)
+                category = classify_pipeline_failure(
+                    research_run.operational_status,
+                    str(item["status"]) if item is not None else None,
+                )
+                research_state = {
+                    PipelineFailureCategory.BEFORE_PROVIDER: (
+                        ResearchPipelineState.FAILED_BEFORE_PROVIDER
+                    ),
+                    PipelineFailureCategory.NO_RESPONSE: (ResearchPipelineState.FAILED_NO_RESPONSE),
+                    PipelineFailureCategory.RESPONSE: ResearchPipelineState.FAILED_RESPONSE,
+                    PipelineFailureCategory.OUTCOME_UNKNOWN: (
+                        ResearchPipelineState.OUTCOME_UNKNOWN
+                    ),
+                }[category]
+
+        observation = PipelineObservation(
+            locator.product_id,
+            research_state,
+            research_run_id=research_run.id if research_run else None,
+            research_snapshot_id=research_snapshot["id"] if research_snapshot else None,
+            blocking_reason=blocking_reason,
+        )
+        if research_state is not ResearchPipelineState.SUCCEEDED_CURRENT:
+            return observation
+        assert research_snapshot is not None
+
+        creative_run = await run("creative_strategist", locator.creative_run_id)
+        if locator.creative_run_id is not None and creative_run is None:
+            return None
+        creative_state = CreativePipelineState.NOT_STARTED
+        concept_id: UUID | None = None
+        revalidation_id: UUID | None = None
+        concept_set = None
+        decision = None
+        if creative_run is not None:
+            if creative_run.status.value == "PENDING":
+                creative_state = CreativePipelineState.PENDING
+            elif creative_run.status.value == "RUNNING":
+                creative_state = CreativePipelineState.RUNNING
+            elif creative_run.status.value == "FAILED":
+                item = await attempt(creative_run)
+                creative_state = classify_creative_failure(
+                    classify_pipeline_failure(
+                        creative_run.operational_status,
+                        str(item["status"]) if item is not None else None,
+                    ),
+                    str(item["provider_failure_reason"])
+                    if item is not None and item.get("provider_failure_reason") is not None
+                    else None,
+                )
+            elif creative_run.status.value == "SUCCEEDED":
+                concept_set = (
+                    (
+                        await self.session.execute(
+                            select(concept_sets)
+                            .where(concept_sets.c.agent_run_id == creative_run.id)
+                            .order_by(concept_sets.c.created_at.desc())
+                            .limit(1)
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+                if concept_set is None:
+                    creative_state = CreativePipelineState.FAILED
+                    blocking_reason = "CREATIVE_SUCCESS_MISSING_CONCEPT_SET"
+                else:
+                    concept_id = locator.concept_id
+                    if concept_id is None:
+                        concept_id = await self.session.scalar(
+                            select(concept_decisions.c.concept_id)
+                            .join(
+                                concepts,
+                                and_(
+                                    concepts.c.id == concept_decisions.c.concept_id,
+                                    concepts.c.tenant_id == concept_decisions.c.tenant_id,
+                                ),
+                            )
+                            .where(
+                                concepts.c.concept_set_id == concept_set["id"],
+                                concept_decisions.c.state == "APPROVED_FOR_PRODUCTION",
+                            )
+                            .order_by(concept_decisions.c.created_at.desc())
+                            .limit(1)
+                        )
+                    if concept_id is None:
+                        creative_state = CreativePipelineState.SUCCEEDED
+                    else:
+                        belongs = await self.session.scalar(
+                            select(concepts.c.id).where(
+                                concepts.c.id == concept_id,
+                                concepts.c.concept_set_id == concept_set["id"],
+                            )
+                        )
+                        if belongs is None:
+                            return None
+                        decision = (
+                            (
+                                await self.session.execute(
+                                    select(concept_decisions)
+                                    .where(concept_decisions.c.concept_id == concept_id)
+                                    .order_by(
+                                        concept_decisions.c.created_at.desc(),
+                                        concept_decisions.c.id.desc(),
+                                    )
+                                    .limit(1)
+                                )
+                            )
+                            .mappings()
+                            .one_or_none()
+                        )
+                        if decision is None or decision["state"] == "SHORTLISTED":
+                            creative_state = CreativePipelineState.APPROVAL_REQUIRED
+                        elif decision["state"] == "REJECTED":
+                            creative_state = CreativePipelineState.REJECTED
+                        elif concept_set["research_snapshot_id"] == research_snapshot["id"]:
+                            creative_state = CreativePipelineState.APPROVED_FOR_PRODUCTION
+                        else:
+                            query = select(concept_revalidations).where(
+                                concept_revalidations.c.concept_id == concept_id,
+                                concept_revalidations.c.current_research_snapshot_id
+                                == research_snapshot["id"],
+                                concept_revalidations.c.original_decision_id == decision["id"],
+                            )
+                            if locator.creative_revalidation_id is not None:
+                                query = query.where(
+                                    concept_revalidations.c.id == locator.creative_revalidation_id
+                                )
+                            revalidation = (
+                                (
+                                    await self.session.execute(
+                                        query.order_by(
+                                            concept_revalidations.c.created_at.desc()
+                                        ).limit(1)
+                                    )
+                                )
+                                .mappings()
+                                .one_or_none()
+                            )
+                            if revalidation is None:
+                                creative_state = CreativePipelineState.STALE_RESEARCH
+                            else:
+                                revalidation_id = revalidation["id"]
+                                creative_state = CreativePipelineState(revalidation["result"])
+            else:
+                creative_state = CreativePipelineState.FAILED
+                blocking_reason = f"CREATIVE_RUN_{creative_run.status.value}"
+
+        observation = PipelineObservation(
+            locator.product_id,
+            research_state,
+            creative_state,
+            research_run_id=research_run.id if research_run else None,
+            research_snapshot_id=research_snapshot["id"] if research_snapshot else None,
+            creative_run_id=creative_run.id if creative_run else None,
+            concept_id=concept_id,
+            creative_revalidation_id=revalidation_id,
+            blocking_reason=blocking_reason,
+        )
+        if creative_state not in {
+            CreativePipelineState.APPROVED_FOR_PRODUCTION,
+            CreativePipelineState.REVALIDATED_FOR_PRODUCTION,
+        }:
+            return observation
+
+        producer_run = await run("producer", locator.producer_run_id)
+        if locator.producer_run_id is not None and producer_run is None:
+            return None
+        producer_state = ProducerPipelineState.NOT_STARTED
+        plan_id: UUID | None = None
+        producer_authority_current = True
+        if producer_run is not None:
+            selected_concept_digest = await self.session.scalar(
+                select(concepts.c.semantic_digest).where(concepts.c.id == concept_id)
+            )
+
+            concept_ref = _run_input_ref(producer_run, "approved_concept")
+            producer_matches_concept = (
+                concept_ref is not None
+                and concept_ref.get("id") == str(concept_id)
+                and concept_ref.get("digest") == selected_concept_digest
+            )
+            if not producer_matches_concept:
+                # An explicitly bound run with different lineage is an invalid locator.
+                # A product-level lookup simply has no Producer for the selected Concept yet.
+                if locator.producer_run_id is not None:
+                    return None
+                producer_run = None
+
+        if producer_run is not None:
+            research_ref = _run_input_ref(producer_run, "research_snapshot")
+            product_ref = _run_input_ref(producer_run, "product_snapshot")
+            revalidation_ref = _run_input_ref(producer_run, "creative_concept_revalidation")
+            producer_authority_current = (
+                research_ref is not None
+                and research_ref.get("id") == str(research_snapshot["id"])
+                and product_ref is not None
+                and product_ref.get("id") == str(research_snapshot["product_snapshot_id"])
+                and (
+                    (
+                        creative_state is CreativePipelineState.REVALIDATED_FOR_PRODUCTION
+                        and revalidation_ref is not None
+                        and revalidation_ref.get("id") == str(revalidation_id)
+                    )
+                    or (
+                        creative_state is CreativePipelineState.APPROVED_FOR_PRODUCTION
+                        and revalidation_ref is None
+                    )
+                )
+            )
+            if producer_run.status.value in {"PENDING", "RUNNING"}:
+                producer_state = ProducerPipelineState.PENDING
+                if producer_run.status.value == "RUNNING":
+                    producer_state = ProducerPipelineState.RUNNING
+                if not producer_authority_current:
+                    blocking_reason = "PRODUCER_AUTHORITY_CHANGED_DURING_EXECUTION"
+            elif producer_run.status.value == "FAILED":
+                item = await attempt(producer_run)
+                producer_state = classify_producer_failure(
+                    classify_pipeline_failure(
+                        producer_run.operational_status,
+                        str(item["status"]) if item is not None else None,
+                    ),
+                    producer_run.failure_code,
+                    producer_run.output_contract_version,
+                    PRODUCTION_CONTRACT_VERSION,
+                )
+            elif producer_run.status.value == "SUCCEEDED":
+                if not producer_authority_current:
+                    producer_state = (
+                        ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED
+                        if producer_run.output_contract_version < PRODUCTION_CONTRACT_VERSION
+                        else ProducerPipelineState.PRODUCTION_PLAN_INVALID
+                    )
+                    blocking_reason = "PRODUCER_OUTPUT_USES_HISTORICAL_AUTHORITY"
+                else:
+                    plan_query = select(production_plans).where(
+                        production_plans.c.agent_run_id == producer_run.id
+                    )
+                    if locator.production_plan_id is not None:
+                        plan_query = plan_query.where(
+                            production_plans.c.id == locator.production_plan_id
+                        )
+                    plan = (
+                        (
+                            await self.session.execute(
+                                plan_query.order_by(production_plans.c.created_at.desc()).limit(1)
+                            )
+                        )
+                        .mappings()
+                        .one_or_none()
+                    )
+                    if plan is None:
+                        producer_state = ProducerPipelineState.SUCCEEDED
+                        blocking_reason = "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN"
+                    else:
+                        plan_id = plan["id"]
+                        plan_decision = (
+                            (
+                                await self.session.execute(
+                                    select(plan_decisions)
+                                    .where(plan_decisions.c.production_plan_id == plan_id)
+                                    .order_by(
+                                        plan_decisions.c.created_at.desc(),
+                                        plan_decisions.c.id.desc(),
+                                    )
+                                    .limit(1)
+                                )
+                            )
+                            .mappings()
+                            .one_or_none()
+                        )
+                        if plan_decision is None:
+                            producer_state = ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED
+                        elif plan_decision["state"] == "APPROVED_FOR_GENERATION":
+                            producer_state = ProducerPipelineState.APPROVED_FOR_GENERATION
+                        else:
+                            producer_state = ProducerPipelineState.PRODUCTION_PLAN_REJECTED
+            else:
+                producer_state = ProducerPipelineState.FAILED_RESPONSE
+                blocking_reason = f"PRODUCER_RUN_{producer_run.status.value}"
+
+        return PipelineObservation(
+            locator.product_id,
+            research_state,
+            creative_state,
+            producer_state,
+            research_run.id if research_run else None,
+            research_snapshot["id"] if research_snapshot else None,
+            creative_run.id if creative_run else None,
+            concept_id,
+            revalidation_id,
+            producer_run.id if producer_run else None,
+            plan_id,
+            blocking_reason,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

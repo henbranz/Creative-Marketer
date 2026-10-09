@@ -25,7 +25,16 @@ from creative_marketer.orchestration.domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
+    NextPipelineAction,
+    PipelineAction,
+    PipelineStage,
+    ProducerPipelineState,
+    ResearchPipelineState,
+)
 from creative_marketer_api.orchestration_routes import (
+    PipelineLocatorRequest,
     StartCycleRequest,
     create_orchestration_router,
 )
@@ -121,14 +130,32 @@ class Service:
             id=uuid4(), status=SimpleNamespace(value="PENDING"), agent_type="supervisor"
         )
 
+    async def resolve_next_action(self, *_args):
+        self.reject()
+        return NextPipelineAction(
+            PipelineStage.RESEARCH,
+            PipelineAction.RUN_RESEARCH,
+            None,
+            True,
+            True,
+            True,
+            ResearchPipelineState.NOT_STARTED,
+            CreativePipelineState.NOT_STARTED,
+            ProducerPipelineState.NOT_STARTED,
+        )
+
 
 @pytest.mark.asyncio
 async def test_orchestration_handlers_render_full_cycle_and_safe_errors() -> None:
     ctx = context(uuid4())
     service = Service(ctx)
-    router = create_orchestration_router(None, None, service, "test", None)
+    router = create_orchestration_router(None, None, service, service, "test", None)
     product_id = service.cycle.product_id
     assert (await endpoint(router, "readiness")(product_id, ctx)).state == "READY"
+    next_action = await endpoint(router, "next_pipeline_action")(
+        product_id, PipelineLocatorRequest(), ctx
+    )
+    assert next_action.next_action == "RUN_RESEARCH"
     started = await endpoint(router, "start")(product_id, StartCycleRequest(), ctx)
     assert started.provider_mode == "DEMO_FAKE"
     next_cycle = await endpoint(router, "start_from_experiment")(uuid4(), ctx)
@@ -172,7 +199,7 @@ async def test_orchestration_authentication_dependency_fails_closed(failure, sta
         async def authenticate(self, _credential):
             raise failure
 
-    router = create_orchestration_router(Authenticator(), None, None, "test", None)
+    router = create_orchestration_router(Authenticator(), None, None, None, "test", None)
     route = cast(
         APIRoute,
         next(route for route in router.routes if getattr(route, "name", None) == "readiness"),

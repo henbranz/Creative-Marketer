@@ -18,6 +18,7 @@ from creative_marketer.agent_governance.domain import (
 from creative_marketer.agent_runtime.application import (
     CommercePreparation,
     CreativePreparation,
+    CreativeRestrategyAuthority,
     IntelligencePreparation,
     ProducerPreparation,
     ResearcherPreparation,
@@ -776,6 +777,91 @@ class SqlAlchemyAgentRunRepository:
             )
         return CreativePreparation(
             strategist, product, research, freshness, completeness, approved_experiment
+        )
+
+    async def creative_restrategy_authority(
+        self, concept_id: UUID
+    ) -> CreativeRestrategyAuthority | None:
+        lineage = (
+            await self._session.execute(
+                select(
+                    concepts.c.id,
+                    concepts.c.semantic_digest,
+                    concept_sets.c.agent_run_id,
+                    concepts.c.product_id,
+                )
+                .join(
+                    concept_sets,
+                    and_(
+                        concept_sets.c.id == concepts.c.concept_set_id,
+                        concept_sets.c.tenant_id == concepts.c.tenant_id,
+                    ),
+                )
+                .where(concepts.c.id == concept_id)
+            )
+        ).first()
+        if lineage is None:
+            return None
+        item = lineage._mapping
+        decision = (
+            await self._session.execute(
+                select(concept_decisions)
+                .where(concept_decisions.c.concept_id == concept_id)
+                .order_by(concept_decisions.c.created_at.desc(), concept_decisions.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if decision is None:
+            return None
+        current_research_id = await self._session.scalar(
+            select(research_snapshots.c.id)
+            .where(research_snapshots.c.product_id == item["product_id"])
+            .order_by(research_snapshots.c.created_at.desc(), research_snapshots.c.id.desc())
+            .limit(1)
+        )
+        if current_research_id is None:
+            return None
+        d = decision._mapping
+        if d["state"] == CreativeDecisionState.REJECTED.value:
+            return CreativeRestrategyAuthority(
+                concept_id,
+                item["semantic_digest"],
+                item["agent_run_id"],
+                "creative_decision",
+                d["id"],
+                None,
+                current_research_id,
+            )
+        if d["state"] != CreativeDecisionState.APPROVED_FOR_PRODUCTION.value:
+            return None
+        revalidation = (
+            await self._session.execute(
+                select(concept_revalidations)
+                .where(
+                    concept_revalidations.c.concept_id == concept_id,
+                    concept_revalidations.c.original_decision_id == d["id"],
+                    concept_revalidations.c.current_research_snapshot_id == current_research_id,
+                    concept_revalidations.c.result
+                    == CreativeRevalidationResult.REQUIRES_RESTRATEGY.value,
+                )
+                .order_by(
+                    concept_revalidations.c.created_at.desc(),
+                    concept_revalidations.c.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        if revalidation is None:
+            return None
+        value = revalidation._mapping
+        return CreativeRestrategyAuthority(
+            concept_id,
+            item["semantic_digest"],
+            item["agent_run_id"],
+            "creative_revalidation",
+            value["id"],
+            value["semantic_digest"],
+            current_research_id,
         )
 
     async def prepare_intelligence(self, product_id: UUID) -> IntelligencePreparation | None:

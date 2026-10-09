@@ -74,7 +74,7 @@ from creative_marketer.observability.configuration import (
 from creative_marketer.observability.logging import configure_structured_logging, correlation_scope
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
-from creative_marketer.orchestration.application import CreativeCycleService
+from creative_marketer.orchestration.application import CreativeCycleService, PipelineStateService
 from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
@@ -398,6 +398,7 @@ def create_app(
                 workflow_coordinator,
                 workflow_coordinator,
             ),
+            PipelineStateService(SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory)),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

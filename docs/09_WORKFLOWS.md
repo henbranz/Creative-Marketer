@@ -129,6 +129,29 @@ Refresh when:
 - scheduled cadence
 - new market/product context
 
+## Authoritative pre-generation state machine
+
+Research through Production Plan approval is resolved by one application-owned deterministic state
+table. API routes, the durable Creative Cycle, workers, and live tooling do not carry independent
+transition rules.
+
+```text
+Research not started/failed/stale
+  -> run, recover, reconcile, or refresh Research
+  -> run/recover Creative
+  -> approve a Concept
+  -> deterministically revalidate if Research authority changed
+  -> restrategize from current Research when rejected or materially changed
+  -> run/recover/contract-upgrade Producer
+  -> review the Production Plan
+  -> READY_FOR_GENERATION
+```
+
+Waiting states never authorize a duplicate run. Unknown provider outcomes require reconciliation and
+do not permit provider execution. Revalidation and human decisions are non-provider actions. A fresh
+restrategy run freezes lineage to the historical Concept and trigger while leaving the successful
+historical Creative run immutable. See ADR-053.
+
 ## Failure Handling
 
 Every durable workflow should define:

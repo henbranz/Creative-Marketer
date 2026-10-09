@@ -47,6 +47,7 @@ class CreativeRunStart(Contract):
     concept_count: int = Field(default=5, ge=3, le=5)
     channel_intent: ChannelIntent = ChannelIntent.ORGANIC_SHORT_FORM
     approved_experiment_proposal_id: UUID | None = None
+    restrategy_of_concept_id: UUID | None = None
 
 
 class CreativeReplacementStart(Contract):
@@ -237,6 +238,7 @@ def create_creative_router(
                 request=CreativeStrategyRequest(value.concept_count, value.channel_intent),
                 idempotency_key=value.idempotency_key,
                 approved_experiment_proposal_id=value.approved_experiment_proposal_id,
+                restrategy_of_concept_id=value.restrategy_of_concept_id,
             )
             return _agent_run(run)
         except (AgentRuntimeError, CreativeError, ValueError) as error:

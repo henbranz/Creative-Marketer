@@ -44,6 +44,7 @@ from creative_marketer.orchestration.domain import (
     StepStatus,
     SupervisorContextManifest,
 )
+from creative_marketer.orchestration.pipeline import PipelineLocator, ResearchPipelineState
 from scripts.bootstrap_supervisor import SUPERVISOR_PLATFORM_TEMPLATE_ID
 from tests.integration.test_catalog import (
     brand_body,
@@ -204,7 +205,14 @@ async def test_orchestration_persistence_is_tenant_scoped_append_only_and_replay
         assert stored_report is not None and stored_report.agent_run_id == requested.id
         canonical = await uow.cycles.canonical_state(stored)
         assert canonical.current_product_snapshot_id == cycle.product_snapshot_id
+        pipeline = await uow.cycles.observe_pipeline(PipelineLocator(product_id))
+        assert pipeline is not None
+        assert pipeline.research is ResearchPipelineState.NOT_STARTED
+        assert await uow.cycles.observe_pipeline(PipelineLocator(uuid4())) is None
         changed = replace(stored, cycle_version=2, current_stage=CycleStage.CHECKING_READINESS)
         assert await uow.cycles.update(changed, expected_version=1)
         assert not await uow.cycles.update(changed, expected_version=1)
         await uow.commit()
+
+    async with factory(uuid4()) as other_tenant_uow:
+        assert await other_tenant_uow.cycles.observe_pipeline(PipelineLocator(product_id)) is None

@@ -240,14 +240,19 @@ reported as reserved/unknown, never as zero.
 make live-e2e
 ```
 
-This resumable command uses the same APIs and workers. It does not mutate the real Product, bypass
-a Concept/Production/Assembly approval, or create a parallel implementation. Complete human
-decisions in the UI and re-run. After media is ready, create/review Final Assembly in the UI, run
-the command again: it requests the deterministic AssemblyPlan through the existing API when all
-sources are ready. Keep the Assembly worker running, preview the final MP4, approve it for
-publishing, and run `make obsidian-sync` (or keep `make obsidian-watch` active). The command returns
-success only after the current Sol-linked FinalCreative is approved for publishing; browser
-playback and Obsidian projection remain explicit operator checks.
+`make live-e2e` is now a read-only inspection of the authoritative Research → Creative → Producer
+state machine. It reports exactly one next action, bounded blocking reason, provider-cost flag,
+human-approval flag, provider-execution permission, and the three typed states. It never starts a
+worker, creates an AgentRun, calls a provider, approves an artifact, creates media/assembly work, or
+mutates the live session/database. Optional session UUIDs only bind the projection to the selected
+history; PostgreSQL remains authoritative.
+
+When it reports `REQUIRES_RESTRATEGY`, start a new Creative run through the normal Creative API with
+`restrategy_of_concept_id` set to the exact historical Concept and a new bounded idempotency key.
+Admission verifies the current rejected decision or `REQUIRES_RESTRATEGY` authority and current
+Research, and freezes both in the new run. When it reports `READY_FOR_GENERATION`, the pre-generation
+acceptance path is complete. Image, video, and assembly remain separate explicit commands and are not
+part of this state inspection. See ADR-053.
 
 At any point, `make live-e2e-status` reports safe stage status and cost for only the exact persisted
 AgentRuns and GenerationJobs. It prints no credentials. Assembly and final acceptance are likewise

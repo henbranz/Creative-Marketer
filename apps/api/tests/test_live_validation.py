@@ -240,6 +240,10 @@ def test_missing_snapshot_is_created_before_new_researcher_run(monkeypatch, tmp_
         {
             ("GET", f"/v1/products/{PRODUCT}"): workspace(snapshot_revision=None),
             ("POST", f"/v1/products/{PRODUCT}/snapshots"): created_snapshot(),
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): {
+                "next_action": "RUN_RESEARCH",
+                "blocking_reason": None,
+            },
             ("POST", f"/v1/products/{PRODUCT}/research/runs"): {"id": RESEARCH},
         }
     )
@@ -251,6 +255,19 @@ def test_missing_snapshot_is_created_before_new_researcher_run(monkeypatch, tmp_
     assert fake.calls == [
         ("GET", f"/v1/products/{PRODUCT}", None),
         ("POST", f"/v1/products/{PRODUCT}/snapshots", None),
+        (
+            "POST",
+            f"/v1/products/{PRODUCT}/pipeline/next-action",
+            {
+                "research_run_id": None,
+                "creative_run_id": None,
+                "concept_id": None,
+                "creative_revalidation_id": None,
+                "producer_run_id": None,
+                "production_plan_id": None,
+                "use_latest_when_unbound": False,
+            },
+        ),
         (
             "POST",
             f"/v1/products/{PRODUCT}/research/runs",
@@ -438,19 +455,13 @@ def test_historical_approved_concept_is_ignored(monkeypatch, tmp_path) -> None:
     fake = FakeApi(
         {
             ("GET", f"/v1/products/{PRODUCT}"): workspace(),
-            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
-                succeeded(RESEARCH, acceptance.initial_researcher_route())
-            ],
-            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): [
-                succeeded(CREATIVE, acceptance.initial_creative_strategist_route())
-            ],
-            ("GET", f"/v1/products/{PRODUCT}/creative/concept-sets"): [
-                {
-                    "agent_run_id": HISTORICAL,
-                    "concepts": [{"id": CONCEPT, "decision_state": "APPROVED_FOR_PRODUCTION"}],
-                },
-                {"agent_run_id": CREATIVE, "concepts": []},
-            ],
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): {
+                "next_action": "APPROVE_CREATIVE",
+                "blocking_reason": "CREATIVE_CONCEPT_SELECTION_REQUIRED",
+                "research_run_id": RESEARCH,
+                "creative_run_id": CREATIVE,
+                "concept_id": None,
+            },
         }
     )
     monkeypatch.setattr(acceptance, "api_for", lambda _settings: fake)
@@ -722,6 +733,79 @@ def test_live_deterministic_revalidation_binds_current_research_without_generati
     assert state is not None and state.creative_revalidation_id == REVALIDATION
     posts = [(path, body) for method, path, body in fake.calls if method == "POST"]
     assert posts == [(f"/v1/creative/concepts/{CONCEPT}/revalidate", None)]
+
+
+def test_live_e2e_only_reports_authoritative_next_action(monkeypatch, tmp_path, capsys) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    before = store.path.read_text()
+    response = {
+        "current_stage": "CREATIVE_REVALIDATION",
+        "next_action": "REVALIDATE_CREATIVE",
+        "blocking_reason": "APPROVED_CREATIVE_USES_HISTORICAL_RESEARCH",
+        "provider_cost": False,
+        "human_approval_required": True,
+        "provider_execution_permitted": False,
+        "research_state": "SUCCEEDED_CURRENT",
+        "creative_state": "STALE_RESEARCH",
+        "producer_state": "NOT_STARTED",
+    }
+    fake = FakeApi({("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): response})
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.e2e(settings(), store) == 0
+
+    assert store.path.read_text() == before
+    assert fake.calls == [
+        (
+            "POST",
+            f"/v1/products/{PRODUCT}/pipeline/next-action",
+            {
+                "research_run_id": RESEARCH,
+                "creative_run_id": CREATIVE,
+                "concept_id": CONCEPT,
+                "creative_revalidation_id": None,
+                "producer_run_id": PRODUCER,
+                "production_plan_id": None,
+                "use_latest_when_unbound": False,
+            },
+        )
+    ]
+    output = capsys.readouterr().out
+    assert "Next action: REVALIDATE_CREATIVE" in output
+    assert "Provider cost: no" in output
+    assert "No provider, worker, generation, or database mutation" in output
+
+
+def test_live_e2e_without_checkpoint_inspects_latest_product_state(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    response = {
+        "current_stage": "RESEARCH",
+        "next_action": "WAIT_FOR_RESEARCH",
+        "blocking_reason": "RESEARCH_RUN_PENDING",
+        "provider_cost": False,
+        "human_approval_required": False,
+        "provider_execution_permitted": False,
+        "research_state": "PENDING",
+        "creative_state": "NOT_STARTED",
+        "producer_state": "NOT_STARTED",
+    }
+    fake = FakeApi({("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): response})
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.e2e(settings(), store) == 0
+
+    assert not store.path.exists()
+    assert fake.calls[0][2]["use_latest_when_unbound"] is True
+    assert "Next action: WAIT_FOR_RESEARCH" in capsys.readouterr().out
 
 
 def test_live_producer_replacement_requires_revalidation_after_research_refresh(

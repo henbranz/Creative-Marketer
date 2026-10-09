@@ -961,6 +961,17 @@ class CreativePreparation:
 
 
 @dataclass(frozen=True, slots=True)
+class CreativeRestrategyAuthority:
+    concept_id: UUID
+    concept_digest: str
+    historical_creative_run_id: UUID
+    trigger_kind: str
+    trigger_id: UUID
+    trigger_digest: str | None
+    current_research_snapshot_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
 class ProducerPreparation:
     producer: ResolvedResearcher
     approved: ApprovedCreativeConcept
@@ -1057,6 +1068,9 @@ class AgentRunRepository(Protocol):
     async def prepare_creative(
         self, product_id: UUID, experiment_proposal_id: UUID | None = None
     ) -> CreativePreparation | None: ...
+    async def creative_restrategy_authority(
+        self, concept_id: UUID
+    ) -> CreativeRestrategyAuthority | None: ...
     async def prepare_producer(self, concept_id: UUID) -> ProducerPreparation | None: ...
     async def prepare_intelligence(self, product_id: UUID) -> IntelligencePreparation | None: ...
     async def prepare_commerce(self, product_id: UUID) -> CommercePreparation | None: ...
@@ -2129,6 +2143,7 @@ class AgentRunService:
         request: CreativeStrategyRequest,
         idempotency_key: str,
         approved_experiment_proposal_id: UUID | None = None,
+        restrategy_of_concept_id: UUID | None = None,
     ) -> AgentRun:
         if (
             context.membership_status is not MembershipStatus.ACTIVE
@@ -2137,6 +2152,8 @@ class AgentRunService:
             raise AgentRunDenied("starting a billed AgentRun requires owner or admin")
         if not idempotency_key.strip() or len(idempotency_key) > 128:
             raise ValueError("idempotency key is required and bounded")
+        if approved_experiment_proposal_id is not None and restrategy_of_concept_id is not None:
+            raise AgentRunNotReady("Creative run cannot combine experiment and restrategy lineage")
         now = datetime.now(UTC)
         async with self.uow_factory(context.tenant_id) as uow:
             replay = await uow.runs.get_by_idempotency(idempotency_key)
@@ -2149,6 +2166,14 @@ class AgentRunService:
                     ),
                     None,
                 )
+                bound_restrategy = next(
+                    (
+                        item
+                        for item in replay.input_context_refs
+                        if item.get("kind") == "creative_restrategy"
+                    ),
+                    None,
+                )
                 if (
                     replay.product_id != product_id
                     or replay.agent_type != "creative_strategist"
@@ -2158,6 +2183,12 @@ class AgentRunService:
                         else None
                     )
                     != (str(bound_experiment["id"]) if bound_experiment else None)
+                    or (str(restrategy_of_concept_id) if restrategy_of_concept_id else None)
+                    != (
+                        str(bound_restrategy["concept_id"])
+                        if bound_restrategy is not None
+                        else None
+                    )
                 ):
                     raise AgentRunNotReady("idempotency key is bound to another request")
                 return replay
@@ -2170,6 +2201,18 @@ class AgentRunService:
                 raise AgentRunNotReady(
                     "Product snapshot V2, current Research, or active Creative "
                     "Strategist is missing"
+                )
+            restrategy = (
+                await uow.runs.creative_restrategy_authority(restrategy_of_concept_id)
+                if restrategy_of_concept_id is not None
+                else None
+            )
+            if restrategy_of_concept_id is not None and (
+                restrategy is None
+                or restrategy.current_research_snapshot_id != preparation.research_snapshot.id
+            ):
+                raise AgentRunNotReady(
+                    "Creative restrategy requires a current rejected or mismatched authority"
                 )
             if preparation.brief_completeness < 80:
                 raise CreativeBriefIncomplete("Product Brief must be at least 80% complete")
@@ -2249,7 +2292,27 @@ class AgentRunService:
                 input_context_kind="creative_strategy.v1",
                 input_context_schema_version=1,
                 input_context_digest=creative_context.context_digest,
-                input_context_refs=creative_context.refs(),
+                input_context_refs=(
+                    creative_context.refs()
+                    if restrategy is None
+                    else (
+                        *creative_context.refs(),
+                        {
+                            "kind": "creative_restrategy",
+                            "concept_id": str(restrategy.concept_id),
+                            "concept_digest": restrategy.concept_digest,
+                            "historical_creative_run_id": str(
+                                restrategy.historical_creative_run_id
+                            ),
+                            "trigger_kind": restrategy.trigger_kind,
+                            "trigger_id": str(restrategy.trigger_id),
+                            "trigger_digest": restrategy.trigger_digest,
+                            "current_research_snapshot_id": str(
+                                restrategy.current_research_snapshot_id
+                            ),
+                        },
+                    )
+                ),
                 max_total_tokens=cfg.run_budget_policy.max_total_tokens,
                 created_at=now,
             )
@@ -2291,6 +2354,9 @@ class AgentRunService:
                             "channel_intent": request.channel_intent.value,
                             "experiment_proposal_id": str(approved_experiment_proposal_id)
                             if approved_experiment_proposal_id
+                            else None,
+                            "restrategy_of_concept_id": str(restrategy_of_concept_id)
+                            if restrategy_of_concept_id
                             else None,
                         }
                     ),

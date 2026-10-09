@@ -24,8 +24,16 @@ from creative_marketer.identity.application.errors import (
 )
 from creative_marketer.identity.application.identity_resolution import ResolveTenantExecutionContext
 from creative_marketer.identity.application.ports import UnitOfWorkFactory
-from creative_marketer.orchestration.application import CreativeCycleService
+from creative_marketer.orchestration.application import CreativeCycleService, PipelineStateService
 from creative_marketer.orchestration.domain import CreativeCycle, OrchestrationError
+from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
+    PipelineAction,
+    PipelineLocator,
+    PipelineStage,
+    ProducerPipelineState,
+    ResearchPipelineState,
+)
 
 
 class Contract(BaseModel):
@@ -35,6 +43,35 @@ class Contract(BaseModel):
 class StartCycleRequest(Contract):
     parent_cycle_id: UUID | None = None
     source_experiment_proposal_id: UUID | None = None
+
+
+class PipelineLocatorRequest(Contract):
+    research_run_id: UUID | None = None
+    creative_run_id: UUID | None = None
+    concept_id: UUID | None = None
+    creative_revalidation_id: UUID | None = None
+    producer_run_id: UUID | None = None
+    production_plan_id: UUID | None = None
+    use_latest_when_unbound: bool = True
+
+
+class NextPipelineActionResponse(Contract):
+    current_stage: PipelineStage
+    next_action: PipelineAction
+    blocking_reason: str | None
+    provider_cost: bool
+    human_approval_required: bool
+    provider_execution_permitted: bool
+    research_state: ResearchPipelineState
+    creative_state: CreativePipelineState
+    producer_state: ProducerPipelineState
+    research_run_id: UUID | None
+    research_snapshot_id: UUID | None
+    creative_run_id: UUID | None
+    concept_id: UUID | None
+    creative_revalidation_id: UUID | None
+    producer_run_id: UUID | None
+    production_plan_id: UUID | None
 
 
 class RequirementResponse(Contract):
@@ -206,6 +243,7 @@ def create_orchestration_router(
     authenticator: AuthenticationPort,
     identity_uow: UnitOfWorkFactory,
     service: CreativeCycleService,
+    pipeline: PipelineStateService,
     environment: str,
     audit: IdentityAuditService,
 ) -> APIRouter:
@@ -248,6 +286,48 @@ def create_orchestration_router(
     )
     async def readiness(product_id: UUID, ctx: Context) -> ReadinessResponse:
         return _readiness(await service.preflight(ctx, product_id))
+
+    @router.post(
+        "/products/{product_id}/pipeline/next-action",
+        response_model=NextPipelineActionResponse,
+    )
+    async def next_pipeline_action(
+        product_id: UUID, request: PipelineLocatorRequest, ctx: Context
+    ) -> NextPipelineActionResponse:
+        try:
+            value = await pipeline.resolve_next_action(
+                ctx,
+                PipelineLocator(
+                    product_id,
+                    request.research_run_id,
+                    request.creative_run_id,
+                    request.concept_id,
+                    request.creative_revalidation_id,
+                    request.producer_run_id,
+                    request.production_plan_id,
+                    request.use_latest_when_unbound,
+                ),
+            )
+            return NextPipelineActionResponse(
+                current_stage=value.stage,
+                next_action=value.action,
+                blocking_reason=value.blocking_reason,
+                provider_cost=value.costs_money,
+                human_approval_required=value.human_approval_required,
+                provider_execution_permitted=value.provider_execution_permitted,
+                research_state=value.research_state,
+                creative_state=value.creative_state,
+                producer_state=value.producer_state,
+                research_run_id=value.research_run_id,
+                research_snapshot_id=value.research_snapshot_id,
+                creative_run_id=value.creative_run_id,
+                concept_id=value.concept_id,
+                creative_revalidation_id=value.creative_revalidation_id,
+                producer_run_id=value.producer_run_id,
+                production_plan_id=value.production_plan_id,
+            )
+        except OrchestrationError as error:
+            raise problem(error) from error
 
     @router.post(
         "/products/{product_id}/creative-cycles",

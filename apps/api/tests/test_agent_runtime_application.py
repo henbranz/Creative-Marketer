@@ -21,6 +21,7 @@ from creative_marketer.agent_runtime.application import (
     AgentRunRecoveryService,
     AgentRunService,
     CreativePreparation,
+    CreativeRestrategyAuthority,
     CreativeStrategistCapability,
     IntelligencePreparation,
     ModelProviderRegistry,
@@ -436,6 +437,7 @@ class MemoryRepository:
         self.agent_available = True
         self.budget_available = True
         self.creative_prepared = None
+        self.restrategy_authority = None
         self.producer_prepared = None
         self.intelligence_prepared = None
         self.supervisor_prepared = None
@@ -463,6 +465,15 @@ class MemoryRepository:
         return (
             self.creative_prepared
             if self.creative_prepared.product_snapshot.product_id == product_id
+            else None
+        )
+
+    async def creative_restrategy_authority(self, concept_id):
+        if self.restrategy_authority is None:
+            return None
+        return (
+            self.restrategy_authority
+            if self.restrategy_authority.concept_id == concept_id
             else None
         )
 
@@ -1839,6 +1850,74 @@ async def test_creative_request_preflight_fails_closed_and_reuses_active_run() -
     with pytest.raises(AgentRunNotReady):
         await runtime.request_creative_strategist(
             context(tenant_id), product_id=uuid4(), request=request, idempotency_key="pending"
+        )
+
+
+@pytest.mark.asyncio
+async def test_creative_restrategy_starts_fresh_run_with_immutable_lineage() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    prepared = preparation(tenant_id, product_id)
+    selected = select_evidence_blocks(prepared.evidence)
+    historical_research_run = replace(
+        run(),
+        tenant_id=tenant_id,
+        product_id=product_id,
+        product_snapshot_id=prepared.product_snapshot.id,
+        product_snapshot_digest=prepared.product_snapshot.digest,
+        research_context_digest=prepared.manifest.digest,
+    )
+    snapshot = parse_research_output(
+        output(selected[0]), run=historical_research_run, selected_blocks=selected
+    )
+    runtime, repository, _, _ = service(
+        prepared, FakeModelProvider(lambda _invocation: pytest.fail("provider must not execute"))
+    )
+    repository.creative_prepared = creative_preparation(prepared, snapshot)
+    concept_id = uuid4()
+    historical_creative_run_id = uuid4()
+    authority = CreativeRestrategyAuthority(
+        concept_id,
+        "sha256:" + "1" * 64,
+        historical_creative_run_id,
+        "creative_revalidation",
+        uuid4(),
+        "sha256:" + "2" * 64,
+        repository.creative_prepared.research_snapshot.id,
+    )
+    repository.restrategy_authority = authority
+
+    requested = await runtime.request_creative_strategist(
+        context(tenant_id),
+        product_id=product_id,
+        request=CreativeStrategyRequest(5, ChannelIntent.ORGANIC_SHORT_FORM),
+        idempotency_key="restrategy-current-authority",
+        restrategy_of_concept_id=concept_id,
+    )
+    lineage = next(
+        item for item in requested.input_context_refs if item["kind"] == "creative_restrategy"
+    )
+
+    assert requested.status is AgentRunStatus.PENDING
+    assert requested.id != historical_creative_run_id
+    assert lineage == {
+        "kind": "creative_restrategy",
+        "concept_id": str(concept_id),
+        "concept_digest": authority.concept_digest,
+        "historical_creative_run_id": str(historical_creative_run_id),
+        "trigger_kind": "creative_revalidation",
+        "trigger_id": str(authority.trigger_id),
+        "trigger_digest": authority.trigger_digest,
+        "current_research_snapshot_id": str(authority.current_research_snapshot_id),
+    }
+
+    repository.restrategy_authority = None
+    with pytest.raises(AgentRunNotReady, match="current rejected or mismatched authority"):
+        await runtime.request_creative_strategist(
+            context(tenant_id),
+            product_id=product_id,
+            request=CreativeStrategyRequest(5, ChannelIntent.ORGANIC_SHORT_FORM),
+            idempotency_key="restrategy-without-authority",
+            restrategy_of_concept_id=concept_id,
         )
 
 

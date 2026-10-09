@@ -833,6 +833,27 @@ def bound_plan(
     return plan
 
 
+def resolve_live_pipeline(api: LocalApi, product: str, state: LiveState | None) -> dict[str, Any]:
+    value = api.request(
+        f"/v1/products/{product}/pipeline/next-action",
+        method="POST",
+        body={
+            "research_run_id": state.researcher_run_id if state else None,
+            "creative_run_id": state.creative_run_id if state else None,
+            "concept_id": state.creative_concept_id if state else None,
+            "creative_revalidation_id": state.creative_revalidation_id if state else None,
+            "producer_run_id": state.producer_run_id if state else None,
+            "production_plan_id": state.production_plan_id if state else None,
+            # A checkpoint binds exact immutable lineage. Without one, inspect the
+            # product's latest canonical state instead of reporting a false start.
+            "use_latest_when_unbound": state is None,
+        },
+    )
+    if not isinstance(value, dict) or not isinstance(value.get("next_action"), str):
+        raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
+    return value
+
+
 def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
     if settings.model_provider_backend != "openai":
         raise RuntimeError("LIVE_MODEL_PROVIDER_NOT_ENABLED")
@@ -848,87 +869,132 @@ def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
     saved = store or StateStore()
     state = cast(LiveState, session(api, product, saved))
     prepare_product_snapshot(api, product)
-    stages: tuple[tuple[str, str, ModelRoute, str, str, dict[str, Any]], ...] = (
-        (
+    resolution = resolve_live_pipeline(api, product, state)
+    action = str(resolution["next_action"])
+
+    # Bind only authority returned for the exact session locator. The API resolver,
+    # not this dispatcher, decides which transition is valid.
+    changed = False
+    for field_name, response_name in (
+        ("researcher_run_id", "research_run_id"),
+        ("creative_run_id", "creative_run_id"),
+        ("creative_concept_id", "concept_id"),
+        ("creative_revalidation_id", "creative_revalidation_id"),
+        ("producer_run_id", "producer_run_id"),
+        ("production_plan_id", "production_plan_id"),
+    ):
+        identifier = resolution.get(response_name)
+        current = getattr(state, field_name)
+        if current is None and identifier is not None:
+            setattr(state, field_name, valid_id(identifier, response_name))
+            changed = True
+        elif current is not None and identifier is not None and current != str(identifier):
+            raise RuntimeError("LIVE_PIPELINE_RESOLUTION_PROVENANCE_MISMATCH")
+    if changed:
+        saved.save(state)
+
+    if action == "RUN_RESEARCH":
+        return advance_run(
+            api,
+            product,
+            state,
+            saved,
             "researcher_run_id",
             "research",
             initial_researcher_route(),
             "Researcher",
             f"/v1/products/{product}/research/runs",
-            {},
-        ),
-        (
+            {"idempotency_key": f"live-research-{state.session_id}"},
+        )
+    if action == "WAIT_FOR_RESEARCH":
+        return (
+            advance_run(
+                api,
+                product,
+                state,
+                saved,
+                "researcher_run_id",
+                "research",
+                initial_researcher_route(),
+                "Researcher",
+                f"/v1/products/{product}/research/runs",
+                {},
+            )
+            or 3
+        )
+    if action == "RUN_CREATIVE":
+        return advance_run(
+            api,
+            product,
+            state,
+            saved,
             "creative_run_id",
             "creative",
             initial_creative_strategist_route(),
             "Creative Strategist",
             f"/v1/products/{product}/creative/runs",
-            {"concept_count": 5, "channel_intent": "ORGANIC_SHORT_FORM"},
-        ),
-    )
-    for field_name, kind, route, label, path, extra in stages:
-        body = {"idempotency_key": f"live-{kind}-{state.session_id}", **extra}
-        result = advance_run(api, product, state, saved, field_name, kind, route, label, path, body)
-        if result:
-            return result
-    concept_sets = [
-        s
-        for s in items(api, f"/v1/products/{product}/creative/concept-sets")
-        if s.get("agent_run_id") == state.creative_run_id
-    ]
-    concepts = [concept for value in concept_sets for concept in value.get("concepts", [])]
-    if state.creative_concept_id is None:
-        approved = next(
-            (c for c in concepts if c.get("decision_state") == "APPROVED_FOR_PRODUCTION"), None
+            {
+                "idempotency_key": f"live-creative-{state.session_id}",
+                "concept_count": 5,
+                "channel_intent": "ORGANIC_SHORT_FORM",
+            },
         )
-        if approved is None:
-            print("PAUSED: approve a Concept from this session's Creative Concept Set in the UI.")
-            return 3
-        state.creative_concept_id = valid_id(approved.get("id"), "creative_concept_id")
-        saved.save(state)
-    approved = exact(concepts, state.creative_concept_id, "creative_concept")
-    if approved.get("decision_state") != "APPROVED_FOR_PRODUCTION":
-        print("PAUSED: the session-bound Creative Concept is not approved for production.")
-        return 3
-    if state.researcher_history_run_ids:
-        if state.creative_revalidation_id is None:
-            print(
-                "PAUSED: run make live-creative-revalidate before Producer after Research refresh."
-            )
-            return 3
-        revalidation = exact(
-            items(
+    if action == "WAIT_FOR_CREATIVE":
+        return (
+            advance_run(
                 api,
-                f"/v1/creative/concepts/{state.creative_concept_id}/revalidations",
-            ),
-            state.creative_revalidation_id,
-            "creative_revalidation",
+                product,
+                state,
+                saved,
+                "creative_run_id",
+                "creative",
+                initial_creative_strategist_route(),
+                "Creative Strategist",
+                f"/v1/products/{product}/creative/runs",
+                {},
+            )
+            or 3
         )
-        if revalidation.get("result") != "REVALIDATED_FOR_PRODUCTION":
-            print("PAUSED: Creative Concept requires a fresh Creative Strategist run.")
-            return 3
-    result = advance_run(
-        api,
-        product,
-        state,
-        saved,
-        "producer_run_id",
-        "production",
-        initial_producer_route(),
-        "Producer",
-        f"/v1/creative/concepts/{state.creative_concept_id}/production/runs",
-        {"idempotency_key": f"live-production-{state.session_id}"},
-    )
-    if result:
-        return result
-    plan = bound_plan(api, product, state, saved)
-    if plan is None:
-        print("Production Plan is not materialized yet. Re-run after the worker completes.")
-        return 3
-    if plan.get("concept_id") != state.creative_concept_id:
-        raise RuntimeError("LIVE_SESSION_PRODUCTION_PLAN_CONCEPT_MISMATCH")
-    print(f"Production Plan bound to session: {plan['id']}")
-    return 0
+    if action == "RUN_PRODUCER":
+        if state.creative_concept_id is None:
+            raise RuntimeError("LIVE_PIPELINE_RESOLUTION_CONCEPT_MISSING")
+        return advance_run(
+            api,
+            product,
+            state,
+            saved,
+            "producer_run_id",
+            "production",
+            initial_producer_route(),
+            "Producer",
+            f"/v1/creative/concepts/{state.creative_concept_id}/production/runs",
+            {"idempotency_key": f"live-production-{state.session_id}"},
+        )
+    if action == "WAIT_FOR_PRODUCER":
+        return (
+            advance_run(
+                api,
+                product,
+                state,
+                saved,
+                "producer_run_id",
+                "production",
+                initial_producer_route(),
+                "Producer",
+                f"/v1/products/{product}/production/runs",
+                {},
+            )
+            or 3
+        )
+    if action == "READY_FOR_GENERATION":
+        print("Research, Creative approval, Producer, and Production Plan approval are complete.")
+        print("Media generation was not started.")
+        return 0
+
+    print(f"PAUSED: authoritative next action is {action}.")
+    print(f"Blocking reason: {resolution.get('blocking_reason') or 'none'}")
+    print("No provider execution was started.")
+    return 3
 
 
 def bound_jobs(
@@ -1057,18 +1123,49 @@ def assembly(api: LocalApi, state: LiveState, store: StateStore) -> int:
 
 
 def e2e(settings: Settings, store: StateStore | None = None) -> int:
-    print("Live E2E uses the existing governed APIs and workers.")
+    """Inspect the authoritative pre-generation state machine without causing effects."""
+
     saved = store or StateStore()
-    result = openai_smoke(settings, saved)
-    if result:
-        return result
-    for kind in ("IMAGE", "VIDEO"):
-        result = media_smoke(settings, kind, saved)
-        if result:
-            return result
-    api = api_for(settings)
-    state = cast(LiveState, session(api, str(settings.live_e2e_product_id), saved))
-    return assembly(api, state, saved)
+    api = api_for(settings, paid=False)
+    product = str(settings.live_e2e_product_id)
+    state = session(api, product, saved, create=False)
+    result = resolve_live_pipeline(api, product, state)
+    if not isinstance(result, dict):
+        raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
+    required = {
+        "current_stage",
+        "next_action",
+        "provider_cost",
+        "human_approval_required",
+        "provider_execution_permitted",
+        "research_state",
+        "creative_state",
+        "producer_state",
+    }
+    if not required.issubset(result) or any(
+        not isinstance(result[key], bool)
+        for key in (
+            "provider_cost",
+            "human_approval_required",
+            "provider_execution_permitted",
+        )
+    ):
+        raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
+    print(f"Current stage: {result['current_stage']}")
+    print(f"Next action: {result['next_action']}")
+    print(f"Blocking reason: {result.get('blocking_reason') or 'none'}")
+    print(f"Provider cost: {'yes' if result['provider_cost'] else 'no'}")
+    print(f"Human approval required: {'yes' if result['human_approval_required'] else 'no'}")
+    print(
+        f"Provider execution permitted: {'yes' if result['provider_execution_permitted'] else 'no'}"
+    )
+    print(
+        "State: "
+        f"Research={result['research_state']} / "
+        f"Creative={result['creative_state']} / Producer={result['producer_state']}"
+    )
+    print("No provider, worker, generation, or database mutation was started.")
+    return 0
 
 
 def reset_session(store: StateStore | None = None) -> int:

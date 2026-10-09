@@ -1167,6 +1167,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/pipeline/next-action": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Next Pipeline Action */
+    post: operations["next_pipeline_action_v1_products__product_id__pipeline_next_action_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/production/plans": {
     parameters: {
       query?: never;
@@ -2799,6 +2816,24 @@ export interface components {
      */
     CreativeDecisionState:
       "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED";
+    /**
+     * CreativePipelineState
+     * @enum {string}
+     */
+    CreativePipelineState:
+      | "NOT_STARTED"
+      | "PENDING"
+      | "RUNNING"
+      | "SUCCEEDED"
+      | "FAILED"
+      | "OUTPUT_LIMITED"
+      | "OUTCOME_UNKNOWN"
+      | "APPROVAL_REQUIRED"
+      | "APPROVED_FOR_PRODUCTION"
+      | "REJECTED"
+      | "STALE_RESEARCH"
+      | "REVALIDATED_FOR_PRODUCTION"
+      | "REQUIRES_RESTRATEGY";
     /** CreativeReplacementStart */
     CreativeReplacementStart: {
       /**
@@ -2839,6 +2874,8 @@ export interface components {
       concept_count: number;
       /** Idempotency Key */
       idempotency_key: string;
+      /** Restrategy Of Concept Id */
+      restrategy_of_concept_id?: string | null;
     };
     /** CurrentActorResponse */
     CurrentActorResponse: {
@@ -3347,6 +3384,36 @@ export interface components {
      * @enum {string}
      */
     MediaKind: "IMAGE" | "VIDEO";
+    /** NextPipelineActionResponse */
+    NextPipelineActionResponse: {
+      /** Blocking Reason */
+      blocking_reason: string | null;
+      /** Concept Id */
+      concept_id: string | null;
+      /** Creative Revalidation Id */
+      creative_revalidation_id: string | null;
+      /** Creative Run Id */
+      creative_run_id: string | null;
+      creative_state: components["schemas"]["CreativePipelineState"];
+      current_stage: components["schemas"]["PipelineStage"];
+      /** Human Approval Required */
+      human_approval_required: boolean;
+      next_action: components["schemas"]["PipelineAction"];
+      /** Producer Run Id */
+      producer_run_id: string | null;
+      producer_state: components["schemas"]["ProducerPipelineState"];
+      /** Production Plan Id */
+      production_plan_id: string | null;
+      /** Provider Cost */
+      provider_cost: boolean;
+      /** Provider Execution Permitted */
+      provider_execution_permitted: boolean;
+      /** Research Run Id */
+      research_run_id: string | null;
+      /** Research Snapshot Id */
+      research_snapshot_id: string | null;
+      research_state: components["schemas"]["ResearchPipelineState"];
+    };
     /** ObservationResponse */
     ObservationResponse: {
       /**
@@ -3390,6 +3457,87 @@ export interface components {
       /** Text */
       text: string;
     };
+    /**
+     * PipelineAction
+     * @enum {string}
+     */
+    PipelineAction:
+      | "RUN_RESEARCH"
+      | "WAIT_FOR_RESEARCH"
+      | "REFRESH_RESEARCH"
+      | "RETRY_RESEARCH"
+      | "RERUN_RESEARCH"
+      | "RECONCILE_RESEARCH_OUTCOME"
+      | "RUN_CREATIVE"
+      | "WAIT_FOR_CREATIVE"
+      | "RERUN_CREATIVE"
+      | "RECONCILE_CREATIVE_OUTCOME"
+      | "REPLACE_OUTPUT_LIMITED_CREATIVE"
+      | "APPROVE_CREATIVE"
+      | "REVALIDATE_CREATIVE"
+      | "RESTRATEGIZE_CREATIVE"
+      | "RUN_PRODUCER"
+      | "WAIT_FOR_PRODUCER"
+      | "RETRY_PRODUCER"
+      | "RERUN_PRODUCER"
+      | "RECONCILE_PRODUCER_OUTCOME"
+      | "UPGRADE_PRODUCER_CONTRACT"
+      | "REVIEW_PRODUCTION_PLAN"
+      | "READY_FOR_GENERATION";
+    /** PipelineLocatorRequest */
+    PipelineLocatorRequest: {
+      /** Concept Id */
+      concept_id?: string | null;
+      /** Creative Revalidation Id */
+      creative_revalidation_id?: string | null;
+      /** Creative Run Id */
+      creative_run_id?: string | null;
+      /** Producer Run Id */
+      producer_run_id?: string | null;
+      /** Production Plan Id */
+      production_plan_id?: string | null;
+      /** Research Run Id */
+      research_run_id?: string | null;
+      /**
+       * Use Latest When Unbound
+       * @default true
+       */
+      use_latest_when_unbound: boolean;
+    };
+    /**
+     * PipelineStage
+     * @enum {string}
+     */
+    PipelineStage:
+      | "RESEARCH"
+      | "RESEARCH_RECOVERY"
+      | "CREATIVE"
+      | "CREATIVE_RECOVERY"
+      | "CREATIVE_APPROVAL"
+      | "CREATIVE_AUTHORITY_REFRESH"
+      | "CREATIVE_REVALIDATION"
+      | "CREATIVE_RESTRATEGY"
+      | "PRODUCER"
+      | "PRODUCER_RECOVERY"
+      | "PRODUCTION_PLAN_REVIEW"
+      | "READY_FOR_GENERATION";
+    /**
+     * ProducerPipelineState
+     * @enum {string}
+     */
+    ProducerPipelineState:
+      | "NOT_STARTED"
+      | "PENDING"
+      | "RUNNING"
+      | "SUCCEEDED"
+      | "FAILED_NO_RESPONSE"
+      | "FAILED_RESPONSE"
+      | "OUTCOME_UNKNOWN"
+      | "PRODUCTION_PLAN_INVALID"
+      | "CONTRACT_UPGRADE_REQUIRED"
+      | "PRODUCTION_PLAN_REVIEW_REQUIRED"
+      | "PRODUCTION_PLAN_REJECTED"
+      | "APPROVED_FOR_GENERATION";
     /** ProducerReplacementStart */
     ProducerReplacementStart: {
       /**
@@ -4091,6 +4239,20 @@ export interface components {
       /** Statement */
       statement: string;
     };
+    /**
+     * ResearchPipelineState
+     * @enum {string}
+     */
+    ResearchPipelineState:
+      | "NOT_STARTED"
+      | "PENDING"
+      | "RUNNING"
+      | "SUCCEEDED_CURRENT"
+      | "SUCCEEDED_EXPIRED"
+      | "FAILED_BEFORE_PROVIDER"
+      | "FAILED_NO_RESPONSE"
+      | "FAILED_RESPONSE"
+      | "OUTCOME_UNKNOWN";
     /** ResearchSnapshotResponse */
     ResearchSnapshotResponse: {
       /**
@@ -7331,6 +7493,45 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["creative_marketer_api__measurement_routes__SnapshotResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  next_pipeline_action_v1_products__product_id__pipeline_next_action_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["PipelineLocatorRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["NextPipelineActionResponse"];
         };
       };
       /** @description Validation Error */

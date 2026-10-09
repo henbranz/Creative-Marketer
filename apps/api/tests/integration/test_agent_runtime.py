@@ -71,6 +71,9 @@ from creative_marketer.infrastructure.database.knowledge_projection import (
     SqlAlchemyCanonicalKnowledgeReader,
     SqlAlchemyKnowledgeProjectionStore,
 )
+from creative_marketer.infrastructure.database.orchestration_uow import (
+    SqlAlchemyOrchestrationUnitOfWorkFactory,
+)
 from creative_marketer.infrastructure.database.production_authority import (
     MediaWorkloadIdentity,
     SqlAlchemyGenerationAuthority,
@@ -81,6 +84,12 @@ from creative_marketer.infrastructure.database.production_uow import (
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.knowledge.application import KnowledgeGraphProjector
 from creative_marketer.knowledge.domain import KnowledgeNodeType
+from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
+    PipelineLocator,
+    ProducerPipelineState,
+    ResearchPipelineState,
+)
 from creative_marketer.production.application import initial_media_router, initial_producer_route
 from creative_marketer.production.domain import (
     MediaKind,
@@ -745,10 +754,20 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         ModelProviderRegistry({"openai": provider}),
         IdentityProvider(),
     )
+    orchestration = SqlAlchemyOrchestrationUnitOfWorkFactory(sessions)
+
+    async def observe(**bindings):
+        async with orchestration(context.tenant_id) as uow:
+            return await uow.cycles.observe_pipeline(PipelineLocator(product.id, **bindings))
+
     research_run = await runtime.request_researcher(
         context, product_id=product.id, idempotency_key="creative-research"
     )
     await runtime.execute(context.tenant_id, research_run.id)
+    research_observation = await observe(research_run_id=research_run.id)
+    assert research_observation is not None
+    assert research_observation.research is ResearchPipelineState.SUCCEEDED_CURRENT
+    assert research_observation.creative is CreativePipelineState.NOT_STARTED
     async with uows(context.tenant_id) as uow:
         prepared = await uow.runs.prepare_creative(product.id)
         assert prepared is not None
@@ -763,11 +782,23 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         request=CreativeStrategyRequest(3, ChannelIntent.TIKTOK),
         idempotency_key="creative-run",
     )
+    pending_creative = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+    )
+    assert pending_creative is not None
+    assert pending_creative.creative is CreativePipelineState.PENDING
     completed = await runtime.execute(context.tenant_id, creative_run.id)
     assert completed.status is AgentRunStatus.SUCCEEDED
     creative = CreativeService(SqlAlchemyCreativeUnitOfWorkFactory(sessions))
     sets = await creative.list_sets(context, product.id)
     assert len(sets) == 1 and len(sets[0].concepts) == 3
+    generated_creative = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+    )
+    assert generated_creative is not None
+    assert generated_creative.creative is CreativePipelineState.SUCCEEDED
     concept = sets[0].concepts[0]
     decision = await creative.decide(
         context, concept.id, CreativeDecisionState.APPROVED_FOR_PRODUCTION
@@ -781,6 +812,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     replay = await creative.revalidate(context, concept.id)
     assert replay.id == revalidation.id
     assert await creative.list_revalidations(context, concept.id) == (revalidation,)
+    approved_creative = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+        concept_id=concept.id,
+    )
+    assert approved_creative is not None
+    assert approved_creative.creative is CreativePipelineState.APPROVED_FOR_PRODUCTION
+    assert approved_creative.producer is ProducerPipelineState.NOT_STARTED
 
     producer = await CreateTenantAgentDefinition(agent_registry_factory)(
         context, agent_key="producer", agent_type="producer"
@@ -816,6 +855,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         request=ProductionPlanningRequest(),
         idempotency_key="producer-run",
     )
+    pending_producer = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+        concept_id=concept.id,
+        producer_run_id=producer_run.id,
+    )
+    assert pending_producer is not None
+    assert pending_producer.producer is ProducerPipelineState.PENDING
     assert producer_run.input_context_kind == "production_planning.v2"
     assert producer_run.input_context_schema_version == 2
     assert producer_run.input_context_digest == producer_model.context_digest
@@ -867,6 +914,15 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     plans = await production.list_plans(context, product.id)
     assert len(plans) == 1
     plan = (await production.get_plan(context, plans[0].plan.id)).plan
+    review_required = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+        concept_id=concept.id,
+        producer_run_id=producer_run.id,
+        production_plan_id=plan.id,
+    )
+    assert review_required is not None
+    assert review_required.producer is ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED
     authority = SqlAlchemyGenerationAuthority(
         sessions,
         reference_store,  # type: ignore[arg-type]
@@ -878,6 +934,15 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
         context, plan.id, ProductionPlanDecisionState.APPROVED_FOR_GENERATION
     )
     assert approved_plan.decision is not None
+    ready = await observe(
+        research_run_id=research_run.id,
+        creative_run_id=creative_run.id,
+        concept_id=concept.id,
+        producer_run_id=producer_run.id,
+        production_plan_id=plan.id,
+    )
+    assert ready is not None
+    assert ready.producer is ProducerPipelineState.APPROVED_FOR_GENERATION
     jobs = await production.list_jobs(context, plan.id)
     assert len(jobs) == 2
     assert (await production.get_job(context, jobs[0].id)).production_plan_id == plan.id
