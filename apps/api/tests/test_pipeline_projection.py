@@ -1,12 +1,13 @@
 # mypy: disable-error-code="no-untyped-def,arg-type"
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 
-from creative_marketer.agent_runtime.domain import AgentRunStatus
+from creative_marketer.agent_runtime.domain import AgentRun, AgentRunStatus
 from creative_marketer.infrastructure.database.agent_runtime_repositories import (
     SqlAlchemyAgentRunRepository,
 )
@@ -14,7 +15,9 @@ from creative_marketer.infrastructure.database.orchestration_repositories import
     SqlAlchemyOrchestrationRepository,
 )
 from creative_marketer.orchestration.pipeline import (
+    CreativePipelineState,
     PipelineLocator,
+    ProducerPipelineState,
     ResearchPipelineState,
 )
 from tests.test_agent_runtime_domain import run
@@ -48,6 +51,37 @@ class _Session:
         return _MappingResult(self.rows.pop(0))
 
 
+def _repository(monkeypatch, session: _Session, *runs: AgentRun):
+    by_id = {value.id: value for value in runs}
+
+    async def get(_repository, identifier):
+        return by_id.get(identifier)
+
+    async def get_snapshot(_repository, _identifier):
+        return SimpleNamespace()
+
+    async def snapshot_freshness(_repository, _snapshot):
+        return "current"
+
+    monkeypatch.setattr(SqlAlchemyAgentRunRepository, "get", get)
+    monkeypatch.setattr(SqlAlchemyAgentRunRepository, "get_snapshot", get_snapshot)
+    monkeypatch.setattr(
+        SqlAlchemyAgentRunRepository,
+        "snapshot_freshness",
+        snapshot_freshness,
+    )
+    return SqlAlchemyOrchestrationRepository(cast(Any, session))
+
+
+def _agent_run(product_id, agent_type: str, status: AgentRunStatus) -> AgentRun:
+    return replace(
+        run(),
+        product_id=product_id,
+        agent_type=agent_type,
+        status=status,
+    )
+
+
 @pytest.mark.asyncio
 async def test_failed_research_projection_uses_latest_persisted_attempt(monkeypatch) -> None:
     product_id = uuid4()
@@ -74,6 +108,343 @@ async def test_failed_research_projection_uses_latest_persisted_attempt(monkeypa
     assert observation.research is ResearchPipelineState.FAILED_NO_RESPONSE
     assert observation.research_run_id == failed.id
     assert not session.scalars and not session.rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "rows", "expected", "reason"),
+    [
+        (AgentRunStatus.RUNNING, [], ResearchPipelineState.RUNNING, None),
+        (
+            AgentRunStatus.SUCCEEDED,
+            [None],
+            ResearchPipelineState.FAILED_RESPONSE,
+            "RESEARCH_SUCCESS_MISSING_SNAPSHOT",
+        ),
+    ],
+)
+async def test_research_projection_handles_running_and_missing_snapshot(
+    monkeypatch,
+    status: AgentRunStatus,
+    rows: list[dict[str, object] | None],
+    expected: ResearchPipelineState,
+    reason: str | None,
+) -> None:
+    product_id = uuid4()
+    research = _agent_run(product_id, "researcher", status)
+    session = _Session(scalars=[product_id], rows=rows)
+    repository = _repository(monkeypatch, session, research)
+
+    observation = await repository.observe_pipeline(
+        PipelineLocator(product_id, research_run_id=research.id)
+    )
+
+    assert observation is not None
+    assert observation.research is expected
+    assert observation.blocking_reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "extra_rows", "concept_id", "expected"),
+    [
+        (AgentRunStatus.RUNNING, [], None, CreativePipelineState.RUNNING),
+        (
+            AgentRunStatus.FAILED,
+            [{"status": "FAILED_RESPONSE", "provider_failure_reason": "MAX_OUTPUT_TOKENS"}],
+            None,
+            CreativePipelineState.OUTPUT_LIMITED,
+        ),
+        (AgentRunStatus.CANCELLED, [], None, CreativePipelineState.FAILED),
+        (AgentRunStatus.SUCCEEDED, [None], None, CreativePipelineState.FAILED),
+        (
+            AgentRunStatus.SUCCEEDED,
+            [
+                {"id": uuid4(), "research_snapshot_id": uuid4()},
+                None,
+            ],
+            uuid4(),
+            CreativePipelineState.APPROVAL_REQUIRED,
+        ),
+        (
+            AgentRunStatus.SUCCEEDED,
+            [
+                {"id": uuid4(), "research_snapshot_id": uuid4()},
+                {"id": uuid4(), "state": "REJECTED"},
+            ],
+            uuid4(),
+            CreativePipelineState.REJECTED,
+        ),
+    ],
+)
+async def test_creative_projection_preserves_each_governed_runtime_state(
+    monkeypatch,
+    status: AgentRunStatus,
+    extra_rows: list[dict[str, object] | None],
+    concept_id,
+    expected: CreativePipelineState,
+) -> None:
+    product_id = uuid4()
+    snapshot_id = uuid4()
+    research = _agent_run(product_id, "researcher", AgentRunStatus.SUCCEEDED)
+    creative = _agent_run(product_id, "creative_strategist", status)
+    rows: list[dict[str, object] | None] = [
+        {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+        *extra_rows,
+    ]
+    scalars: list[object] = [product_id]
+    if concept_id is not None:
+        assert rows[1] is not None
+        rows[1]["research_snapshot_id"] = snapshot_id
+        scalars.append(concept_id)
+    session = _Session(scalars=scalars, rows=rows)
+    repository = _repository(monkeypatch, session, research, creative)
+
+    observation = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+        )
+    )
+
+    assert observation is not None
+    assert observation.creative is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("revalidation_row", "expected"),
+    [
+        (None, CreativePipelineState.STALE_RESEARCH),
+        (
+            {"id": uuid4(), "result": "REQUIRES_RESTRATEGY"},
+            CreativePipelineState.REQUIRES_RESTRATEGY,
+        ),
+    ],
+)
+async def test_creative_projection_requires_explicit_current_revalidation(
+    monkeypatch,
+    revalidation_row: dict[str, object] | None,
+    expected: CreativePipelineState,
+) -> None:
+    product_id = uuid4()
+    snapshot_id = uuid4()
+    concept_id = uuid4()
+    revalidation_id = uuid4()
+    research = _agent_run(product_id, "researcher", AgentRunStatus.SUCCEEDED)
+    creative = _agent_run(product_id, "creative_strategist", AgentRunStatus.SUCCEEDED)
+    session = _Session(
+        scalars=[product_id, concept_id],
+        rows=[
+            {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+            {"id": uuid4(), "research_snapshot_id": uuid4()},
+            {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
+            revalidation_row,
+        ],
+    )
+    repository = _repository(monkeypatch, session, research, creative)
+
+    observation = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+            creative_revalidation_id=revalidation_id,
+        )
+    )
+
+    assert observation is not None
+    assert observation.creative is expected
+
+
+def _producer_refs(
+    concept_id,
+    concept_digest: str,
+    research_snapshot_id,
+    product_snapshot_id,
+    *,
+    current_authority: bool,
+) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "kind": "approved_concept",
+            "id": str(concept_id),
+            "digest": concept_digest,
+        },
+        {
+            "kind": "research_snapshot",
+            "id": str(research_snapshot_id if current_authority else uuid4()),
+        },
+        {"kind": "product_snapshot", "id": str(product_snapshot_id)},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "current_authority", "tail_rows", "expected", "reason"),
+    [
+        (
+            AgentRunStatus.RUNNING,
+            False,
+            [],
+            ProducerPipelineState.RUNNING,
+            "PRODUCER_AUTHORITY_CHANGED_DURING_EXECUTION",
+        ),
+        (
+            AgentRunStatus.FAILED,
+            True,
+            [{"status": "FAILED_RESPONSE"}],
+            ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED,
+            None,
+        ),
+        (
+            AgentRunStatus.SUCCEEDED,
+            True,
+            [None],
+            ProducerPipelineState.SUCCEEDED,
+            "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN",
+        ),
+        (
+            AgentRunStatus.SUCCEEDED,
+            False,
+            [],
+            ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED,
+            "PRODUCER_OUTPUT_USES_HISTORICAL_AUTHORITY",
+        ),
+        (
+            AgentRunStatus.SUCCEEDED,
+            True,
+            [
+                {"id": uuid4()},
+                {"state": "REJECTED"},
+            ],
+            ProducerPipelineState.PRODUCTION_PLAN_REJECTED,
+            None,
+        ),
+        (
+            AgentRunStatus.CANCELLED,
+            True,
+            [],
+            ProducerPipelineState.FAILED_RESPONSE,
+            "PRODUCER_RUN_CANCELLED",
+        ),
+    ],
+)
+async def test_producer_projection_preserves_failure_and_authority_states(
+    monkeypatch,
+    status: AgentRunStatus,
+    current_authority: bool,
+    tail_rows: list[dict[str, object] | None],
+    expected: ProducerPipelineState,
+    reason: str | None,
+) -> None:
+    product_id = uuid4()
+    snapshot_id = uuid4()
+    concept_set_id = uuid4()
+    concept_id = uuid4()
+    concept_digest = "sha256:" + "c" * 64
+    research = _agent_run(product_id, "researcher", AgentRunStatus.SUCCEEDED)
+    creative = _agent_run(product_id, "creative_strategist", AgentRunStatus.SUCCEEDED)
+    producer = replace(
+        _agent_run(product_id, "producer", status),
+        output_contract_key="production.production_plan",
+        output_contract_version=1,
+        failure_code="PRODUCTION_PLAN_INVALID" if status is AgentRunStatus.FAILED else None,
+        input_context_refs=_producer_refs(
+            concept_id,
+            concept_digest,
+            snapshot_id,
+            research.product_snapshot_id,
+            current_authority=current_authority,
+        ),
+    )
+    session = _Session(
+        scalars=[product_id, concept_id, concept_digest],
+        rows=[
+            {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+            {"id": concept_set_id, "research_snapshot_id": snapshot_id},
+            {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
+            *tail_rows,
+        ],
+    )
+    repository = _repository(monkeypatch, session, research, creative, producer)
+
+    observation = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+            producer_run_id=producer.id,
+        )
+    )
+
+    assert observation is not None
+    assert observation.producer is expected
+    assert observation.blocking_reason == reason
+
+
+@pytest.mark.asyncio
+async def test_producer_projection_rejects_missing_or_cross_lineage_bound_run(monkeypatch) -> None:
+    product_id = uuid4()
+    snapshot_id = uuid4()
+    concept_id = uuid4()
+    concept_digest = "sha256:" + "d" * 64
+    research = _agent_run(product_id, "researcher", AgentRunStatus.SUCCEEDED)
+    creative = _agent_run(product_id, "creative_strategist", AgentRunStatus.SUCCEEDED)
+    missing_producer_id = uuid4()
+    session = _Session(
+        scalars=[product_id, concept_id],
+        rows=[
+            {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+            {"id": uuid4(), "research_snapshot_id": snapshot_id},
+            {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
+        ],
+    )
+    repository = _repository(monkeypatch, session, research, creative)
+    missing = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+            producer_run_id=missing_producer_id,
+        )
+    )
+    assert missing is None
+
+    cross_lineage = replace(
+        _agent_run(product_id, "producer", AgentRunStatus.PENDING),
+        input_context_refs=_producer_refs(
+            uuid4(),
+            concept_digest,
+            snapshot_id,
+            research.product_snapshot_id,
+            current_authority=True,
+        ),
+    )
+    session = _Session(
+        scalars=[product_id, concept_id, concept_digest],
+        rows=[
+            {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+            {"id": uuid4(), "research_snapshot_id": snapshot_id},
+            {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
+        ],
+    )
+    repository = _repository(monkeypatch, session, research, creative, cross_lineage)
+    mismatched = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+            producer_run_id=cross_lineage.id,
+        )
+    )
+    assert mismatched is None
 
 
 @pytest.mark.asyncio
