@@ -148,6 +148,9 @@ async def test_orchestration_persistence_is_tenant_scoped_append_only_and_replay
         preflight = await uow.cycles.preflight(product_id)
         assert preflight.product_exists and preflight.brief_completeness == 100
         assert await uow.cycles.active_for_product(product_id) is None
+        assert await uow.cycles.parent_for_experiment(uuid4()) is None
+        assert await uow.cycles.child_for_experiment(uuid4()) is None
+        assert await uow.cycles.experiment_handoff(uuid4()) is None
         await uow.cycles.add(cycle)
         await uow.cycles.add_transition(transition)
         await uow.cycles.add_step(step)

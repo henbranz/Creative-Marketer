@@ -763,11 +763,25 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     research_run = await runtime.request_researcher(
         context, product_id=product.id, idempotency_key="creative-research"
     )
+    pending_research = await observe(research_run_id=research_run.id)
+    assert pending_research is not None
+    assert pending_research.research is ResearchPipelineState.PENDING
     await runtime.execute(context.tenant_id, research_run.id)
     research_observation = await observe(research_run_id=research_run.id)
     assert research_observation is not None
     assert research_observation.research is ResearchPipelineState.SUCCEEDED_CURRENT
     assert research_observation.creative is CreativePipelineState.NOT_STARTED
+    assert await observe(research_run_id=uuid4()) is None
+    assert (
+        await observe(
+            research_run_id=research_run.id,
+            creative_run_id=uuid4(),
+        )
+        is None
+    )
+    no_fallback = await observe(use_latest_when_unbound=False)
+    assert no_fallback is not None
+    assert no_fallback.research is ResearchPipelineState.NOT_STARTED
     async with uows(context.tenant_id) as uow:
         prepared = await uow.runs.prepare_creative(product.id)
         assert prepared is not None
@@ -799,6 +813,14 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     )
     assert generated_creative is not None
     assert generated_creative.creative is CreativePipelineState.SUCCEEDED
+    assert (
+        await observe(
+            research_run_id=research_run.id,
+            creative_run_id=creative_run.id,
+            concept_id=uuid4(),
+        )
+        is None
+    )
     concept = sets[0].concepts[0]
     decision = await creative.decide(
         context, concept.id, CreativeDecisionState.APPROVED_FOR_PRODUCTION

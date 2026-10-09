@@ -239,8 +239,34 @@ def test_attempt_history_is_classified_without_unsafe_retry(
 
 def test_output_limit_and_producer_contract_failures_are_bounded() -> None:
     assert (
+        classify_creative_failure(PipelineFailureCategory.OUTCOME_UNKNOWN, None)
+        is CreativePipelineState.OUTCOME_UNKNOWN
+    )
+    assert (
         classify_creative_failure(PipelineFailureCategory.RESPONSE, "MAX_OUTPUT_TOKENS")
         is CreativePipelineState.OUTPUT_LIMITED
+    )
+    assert (
+        classify_creative_failure(PipelineFailureCategory.RESPONSE, None)
+        is CreativePipelineState.FAILED
+    )
+    assert (
+        classify_producer_failure(
+            PipelineFailureCategory.BEFORE_PROVIDER,
+            None,
+            2,
+            2,
+        )
+        is ProducerPipelineState.FAILED_NO_RESPONSE
+    )
+    assert (
+        classify_producer_failure(
+            PipelineFailureCategory.NO_RESPONSE,
+            None,
+            2,
+            2,
+        )
+        is ProducerPipelineState.FAILED_NO_RESPONSE
     )
     assert (
         classify_producer_failure(
@@ -268,4 +294,13 @@ def test_output_limit_and_producer_contract_failures_are_bounded() -> None:
             3,
         )
         is ProducerPipelineState.OUTCOME_UNKNOWN
+    )
+    assert (
+        classify_producer_failure(
+            PipelineFailureCategory.RESPONSE,
+            "PROVIDER_REJECTED",
+            2,
+            2,
+        )
+        is ProducerPipelineState.FAILED_RESPONSE
     )
