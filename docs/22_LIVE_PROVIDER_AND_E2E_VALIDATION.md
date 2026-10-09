@@ -178,7 +178,33 @@ provenance pass. Its deterministic transition identity makes repeated commands i
 If the session-bound Producer run has one authoritative completed response but failed deterministic
 plan validation on an older output contract, first deploy the migration/API and run
 `make producer-bootstrap` to activate the immutable v3 Producer. With every Agent worker stopped,
-use the existing governed continuation:
+first confirm that the approved Concept's Research authority is still current. If it expired,
+request one governed Research refresh:
+
+```bash
+make live-research-refresh
+```
+
+This creates a new pending Researcher AgentRun and retains the prior successful Researcher ID in
+session history. It does not execute the run itself and never resets the session. Start the live
+Agent worker only as a separately controlled paid action, then inspect until the refresh succeeds.
+No Creative or Producer run starts automatically.
+
+With the fresh ResearchSnapshot current, stop the worker and run the no-provider deterministic
+transition:
+
+```bash
+make live-creative-revalidate
+make live-e2e-status
+```
+
+`REVALIDATED_FOR_PRODUCTION` means every exact referenced finding assertion is unchanged and Product
+authority is identical. Citation identities may have refreshed. `REQUIRES_RESTRATEGY` stops the
+continuation and requires a fresh Creative Strategist run; it never weakens Product claim or
+Research validation. Status shows the current Researcher, historical Research lineage, original
+Research authority, current Research authority, and revalidation result. See ADR-052.
+
+Only after successful revalidation, use the existing governed continuation:
 
 ```bash
 make live-producer-replace

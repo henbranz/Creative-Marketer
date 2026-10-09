@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID, uuid4
 
-from creative_marketer.agent_runtime.domain import canonical_digest
+from creative_marketer.agent_runtime.domain import Finding, canonical_digest
 
 MAX_CONCEPTS = 5
 MIN_CONCEPTS = 3
@@ -66,6 +66,10 @@ class CreativeDecisionConflict(CreativeError):
     code = "CREATIVE_DECISION_CONFLICT"
 
 
+class CreativeRevalidationNotReady(CreativeError):
+    code = "CREATIVE_REVALIDATION_NOT_READY"
+
+
 class ChannelIntent(StrEnum):
     ORGANIC_SHORT_FORM = "ORGANIC_SHORT_FORM"
     TIKTOK = "TIKTOK"
@@ -99,6 +103,22 @@ class CreativeDecisionState(StrEnum):
     SHORTLISTED = "SHORTLISTED"
     APPROVED_FOR_PRODUCTION = "APPROVED_FOR_PRODUCTION"
     REJECTED = "REJECTED"
+
+
+class CreativeRevalidationResult(StrEnum):
+    REVALIDATED_FOR_PRODUCTION = "REVALIDATED_FOR_PRODUCTION"
+    REQUIRES_RESTRATEGY = "REQUIRES_RESTRATEGY"
+
+
+class CreativeRevalidationReason(StrEnum):
+    RESEARCH_FINDING_MISSING = "RESEARCH_FINDING_MISSING"
+    RESEARCH_FINDING_CATEGORY_CHANGED = "RESEARCH_FINDING_CATEGORY_CHANGED"
+    RESEARCH_FINDING_STATEMENT_CHANGED = "RESEARCH_FINDING_STATEMENT_CHANGED"
+    RESEARCH_FINDING_CONFIDENCE_CHANGED = "RESEARCH_FINDING_CONFIDENCE_CHANGED"
+    RESEARCH_FINDING_SCOPE_CHANGED = "RESEARCH_FINDING_SCOPE_CHANGED"
+    RESEARCH_FINDING_IMPLICATION_CHANGED = "RESEARCH_FINDING_IMPLICATION_CHANGED"
+    PRODUCT_AUTHORITY_CHANGED = "PRODUCT_AUTHORITY_CHANGED"
+    PRODUCT_CLAIM_REFERENCE_INVALID = "PRODUCT_CLAIM_REFERENCE_INVALID"
 
 
 @dataclass(frozen=True, slots=True)
@@ -335,6 +355,92 @@ class CreativeConceptDecision:
             raise ValueError("decision reason code is invalid")
         if self.note is not None and len(self.note) > 1000:
             raise ValueError("decision note is too long")
+
+
+def research_finding_assertion_digest(finding: Finding) -> str:
+    """Digest only the assertion a Concept relied on, intentionally excluding citations."""
+
+    return canonical_digest(
+        {
+            "key": finding.key,
+            "category": finding.category.value,
+            "statement": finding.statement,
+            "confidence": finding.confidence.value,
+            "scope": finding.scope,
+            "implication": finding.implication,
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RevalidatedFindingAssertion:
+    finding_key: str
+    original_assertion_digest: str
+    current_assertion_digest: str | None
+
+    def primitive(self) -> dict[str, str | None]:
+        return {
+            "finding_key": self.finding_key,
+            "original_assertion_digest": self.original_assertion_digest,
+            "current_assertion_digest": self.current_assertion_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeConceptRevalidation:
+    tenant_id: UUID
+    product_id: UUID
+    concept_id: UUID
+    concept_digest: str
+    original_concept_set_id: UUID
+    original_research_snapshot_id: UUID
+    original_research_snapshot_digest: str
+    current_research_snapshot_id: UUID
+    current_research_snapshot_digest: str
+    product_snapshot_id: UUID
+    product_snapshot_digest: str
+    original_decision_id: UUID
+    result: CreativeRevalidationResult
+    reason_codes: tuple[CreativeRevalidationReason, ...]
+    referenced_finding_assertions: tuple[RevalidatedFindingAssertion, ...]
+    created_by: UUID
+    semantic_digest: str
+    id: UUID = field(default_factory=uuid4)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if len(set(self.reason_codes)) != len(self.reason_codes):
+            raise ValueError("revalidation reason codes must be unique")
+        if self.result is CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION:
+            if self.reason_codes or any(
+                item.current_assertion_digest != item.original_assertion_digest
+                for item in self.referenced_finding_assertions
+            ):
+                raise ValueError("successful revalidation cannot contain authority mismatches")
+        elif not self.reason_codes:
+            raise ValueError("restrategy revalidation requires at least one reason")
+        if self.semantic_digest != canonical_digest(self.semantic_content()):
+            raise ValueError("revalidation digest does not match immutable authority")
+
+    def semantic_content(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "concept_id": str(self.concept_id),
+            "concept_digest": self.concept_digest,
+            "original_concept_set_id": str(self.original_concept_set_id),
+            "original_research_snapshot_id": str(self.original_research_snapshot_id),
+            "original_research_snapshot_digest": self.original_research_snapshot_digest,
+            "current_research_snapshot_id": str(self.current_research_snapshot_id),
+            "current_research_snapshot_digest": self.current_research_snapshot_digest,
+            "product_snapshot_id": str(self.product_snapshot_id),
+            "product_snapshot_digest": self.product_snapshot_digest,
+            "original_decision_id": str(self.original_decision_id),
+            "result": self.result.value,
+            "reason_codes": [item.value for item in self.reason_codes],
+            "referenced_finding_assertions": [
+                item.primitive() for item in self.referenced_finding_assertions
+            ],
+        }
 
 
 @dataclass(frozen=True, slots=True)

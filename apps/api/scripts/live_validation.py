@@ -121,6 +121,8 @@ async def _main() -> int:
         choices=(
             "preflight",
             "openai-smoke",
+            "research-refresh",
+            "creative-revalidate",
             "creative-replace",
             "producer-replace",
             "image-smoke",
@@ -139,6 +141,10 @@ async def _main() -> int:
     try:
         if command == "openai-smoke":
             return acceptance.openai_smoke(settings)
+        if command == "research-refresh":
+            return acceptance.refresh_research(settings)
+        if command == "creative-revalidate":
+            return acceptance.revalidate_creative_concept(settings)
         if command == "creative-replace":
             return acceptance.replace_output_limited_creative(settings)
         if command == "producer-replace":

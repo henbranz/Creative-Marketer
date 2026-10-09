@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-event-type": "creative.concept.revalidated.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "revalidation_id",
+    "concept_id",
+    "product_id",
+    "current_research_snapshot_id",
+    "result",
+    "semantic_digest"
+  ],
+  "properties": {
+    "revalidation_id": {"type": "string", "format": "uuid"},
+    "concept_id": {"type": "string", "format": "uuid"},
+    "product_id": {"type": "string", "format": "uuid"},
+    "current_research_snapshot_id": {"type": "string", "format": "uuid"},
+    "result": {
+      "type": "string",
+      "enum": ["REVALIDATED_FOR_PRODUCTION", "REQUIRES_RESTRATEGY"]
+    },
+    "semantic_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

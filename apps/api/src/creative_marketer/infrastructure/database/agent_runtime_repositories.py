@@ -80,10 +80,14 @@ from creative_marketer.creative.domain import (
     ChannelIntent,
     CreativeConcept,
     CreativeConceptDecision,
+    CreativeConceptRevalidation,
     CreativeConceptSet,
     CreativeDecisionState,
+    CreativeRevalidationReason,
+    CreativeRevalidationResult,
     CreativeStrategyContext,
     CreativeStrategyRequest,
+    RevalidatedFindingAssertion,
     product_claim_refs,
 )
 from creative_marketer.infrastructure.database.agent_governance_repositories import _configuration
@@ -127,6 +131,7 @@ from creative_marketer.infrastructure.database.commerce_schema import (
 )
 from creative_marketer.infrastructure.database.creative_schema import (
     concept_decisions,
+    concept_revalidations,
     concept_sets,
     concepts,
 )
@@ -1753,11 +1758,79 @@ class SqlAlchemyAgentRunRepository:
         if (
             p["id"] != concept_set.product_snapshot_id
             or p["digest"] != concept_set.product_snapshot_digest
-            or research.id != concept_set.research_snapshot_id
-            or research.semantic_digest != concept_set.research_snapshot_digest
             or await self.snapshot_freshness(research) != "current"
         ):
             return None
+        original_research_row = (
+            await self._session.execute(
+                select(research_snapshots).where(
+                    research_snapshots.c.id == concept_set.research_snapshot_id
+                )
+            )
+        ).first()
+        if original_research_row is None:
+            return None
+        original_research = _snapshot(original_research_row)
+        revalidation: CreativeConceptRevalidation | None = None
+        original_path = (
+            research.id == concept_set.research_snapshot_id
+            and research.semantic_digest == concept_set.research_snapshot_digest
+        )
+        if not original_path:
+            revalidation_row = (
+                await self._session.execute(
+                    select(concept_revalidations)
+                    .where(
+                        concept_revalidations.c.concept_id == concept_id,
+                        concept_revalidations.c.concept_digest == concept.semantic_digest,
+                        concept_revalidations.c.original_concept_set_id == concept_set.id,
+                        concept_revalidations.c.original_research_snapshot_id
+                        == concept_set.research_snapshot_id,
+                        concept_revalidations.c.original_research_snapshot_digest
+                        == concept_set.research_snapshot_digest,
+                        concept_revalidations.c.current_research_snapshot_id == research.id,
+                        concept_revalidations.c.current_research_snapshot_digest
+                        == research.semantic_digest,
+                        concept_revalidations.c.product_snapshot_id == p["id"],
+                        concept_revalidations.c.product_snapshot_digest == p["digest"],
+                        concept_revalidations.c.original_decision_id == decision.id,
+                        concept_revalidations.c.result
+                        == CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION.value,
+                    )
+                    .order_by(
+                        concept_revalidations.c.created_at.desc(),
+                        concept_revalidations.c.id.desc(),
+                    )
+                    .limit(1)
+                )
+            ).first()
+            if revalidation_row is None:
+                return None
+            r = revalidation_row._mapping
+            revalidation = CreativeConceptRevalidation(
+                r["tenant_id"],
+                r["product_id"],
+                r["concept_id"],
+                r["concept_digest"],
+                r["original_concept_set_id"],
+                r["original_research_snapshot_id"],
+                r["original_research_snapshot_digest"],
+                r["current_research_snapshot_id"],
+                r["current_research_snapshot_digest"],
+                r["product_snapshot_id"],
+                r["product_snapshot_digest"],
+                r["original_decision_id"],
+                CreativeRevalidationResult(r["result"]),
+                tuple(CreativeRevalidationReason(item) for item in r["reason_codes"]),
+                tuple(
+                    RevalidatedFindingAssertion(**item)
+                    for item in r["referenced_finding_assertions"]
+                ),
+                r["created_by"],
+                r["semantic_digest"],
+                r["id"],
+                r["created_at"],
+            )
         product = ProductKnowledgeSnapshot(
             id=p["id"],
             tenant_id=p["tenant_id"],
@@ -1802,6 +1875,8 @@ class SqlAlchemyAgentRunRepository:
             product,
             research,
             manifest,
+            original_research if revalidation is not None else None,
+            revalidation,
         )
 
     async def get_by_idempotency(self, idempotency_key: str) -> AgentRun | None:
@@ -2695,6 +2770,24 @@ class SqlAlchemyAgentRunRepository:
                 ),
                 None,
             )
+            origin_research_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "creative_origin_research_snapshot"
+                ),
+                None,
+            )
+            revalidation_ref = next(
+                (
+                    item
+                    for item in run.input_context_refs
+                    if item.get("kind") == "creative_concept_revalidation"
+                ),
+                None,
+            )
+            if (origin_research_ref is None) != (revalidation_ref is None):
+                raise ValueError("Producer revalidation provenance is incomplete")
             if None in (concept_ref, research_ref, assets_ref, request_ref):
                 raise ValueError("Producer run context references are incomplete")
             if run.input_context_schema_version == PRODUCER_CONTEXT_VERSION and None in (
@@ -2796,6 +2889,50 @@ class SqlAlchemyAgentRunRepository:
                 created_by=s["created_by"],
                 created_at=s["created_at"],
             )
+            original_research: ResearchSnapshot | None = None
+            revalidation: CreativeConceptRevalidation | None = None
+            if origin_research_ref is not None and revalidation_ref is not None:
+                original_research = await self.get_snapshot(UUID(str(origin_research_ref["id"])))
+                revalidation_row = (
+                    await self._session.execute(
+                        select(concept_revalidations).where(
+                            concept_revalidations.c.id == UUID(str(revalidation_ref["id"]))
+                        )
+                    )
+                ).one()
+                r = revalidation_row._mapping
+                revalidation = CreativeConceptRevalidation(
+                    r["tenant_id"],
+                    r["product_id"],
+                    r["concept_id"],
+                    r["concept_digest"],
+                    r["original_concept_set_id"],
+                    r["original_research_snapshot_id"],
+                    r["original_research_snapshot_digest"],
+                    r["current_research_snapshot_id"],
+                    r["current_research_snapshot_digest"],
+                    r["product_snapshot_id"],
+                    r["product_snapshot_digest"],
+                    r["original_decision_id"],
+                    CreativeRevalidationResult(r["result"]),
+                    tuple(CreativeRevalidationReason(item) for item in r["reason_codes"]),
+                    tuple(
+                        RevalidatedFindingAssertion(**item)
+                        for item in r["referenced_finding_assertions"]
+                    ),
+                    r["created_by"],
+                    r["semantic_digest"],
+                    r["id"],
+                    r["created_at"],
+                )
+                if (
+                    original_research is None
+                    or original_research.semantic_digest != origin_research_ref["digest"]
+                    or revalidation.semantic_digest != revalidation_ref["digest"]
+                    or revalidation.result
+                    is not CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION
+                ):
+                    raise ValueError("Producer revalidation provenance digest mismatch")
             raw_assets = assets_ref.get("assets", ())
             asset_manifest = tuple(raw_assets) if isinstance(raw_assets, (list, tuple)) else ()
             producer_preparation = ProducerPreparation(
@@ -2811,6 +2948,8 @@ class SqlAlchemyAgentRunRepository:
                 product,
                 research,
                 tuple(dict(item) for item in asset_manifest if isinstance(item, Mapping)),
+                original_research,
+                revalidation,
             )
             planning_digest = (
                 str(production_context_ref["digest"])
@@ -2833,6 +2972,16 @@ class SqlAlchemyAgentRunRepository:
                         "target_format": request_ref["target_format"],
                         "aspect_ratio": request_ref["aspect_ratio"],
                     },
+                    **(
+                        {
+                            "original_research_snapshot_id": origin_research_ref["id"],
+                            "original_research_snapshot_digest": origin_research_ref["digest"],
+                            "creative_revalidation_id": revalidation_ref["id"],
+                            "creative_revalidation_digest": revalidation_ref["digest"],
+                        }
+                        if origin_research_ref is not None and revalidation_ref is not None
+                        else {}
+                    ),
                 },
                 planning_digest,
             )

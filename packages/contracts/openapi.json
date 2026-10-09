@@ -2071,6 +2071,120 @@
         "title": "CreativeConceptResponse",
         "type": "object"
       },
+      "CreativeConceptRevalidationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_digest": {
+            "title": "Concept Digest",
+            "type": "string"
+          },
+          "concept_id": {
+            "format": "uuid",
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "format": "uuid",
+            "title": "Created By",
+            "type": "string"
+          },
+          "current_research_snapshot_digest": {
+            "title": "Current Research Snapshot Digest",
+            "type": "string"
+          },
+          "current_research_snapshot_id": {
+            "format": "uuid",
+            "title": "Current Research Snapshot Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "original_concept_set_id": {
+            "format": "uuid",
+            "title": "Original Concept Set Id",
+            "type": "string"
+          },
+          "original_decision_id": {
+            "format": "uuid",
+            "title": "Original Decision Id",
+            "type": "string"
+          },
+          "original_research_snapshot_digest": {
+            "title": "Original Research Snapshot Digest",
+            "type": "string"
+          },
+          "original_research_snapshot_id": {
+            "format": "uuid",
+            "title": "Original Research Snapshot Id",
+            "type": "string"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "product_snapshot_digest": {
+            "title": "Product Snapshot Digest",
+            "type": "string"
+          },
+          "product_snapshot_id": {
+            "format": "uuid",
+            "title": "Product Snapshot Id",
+            "type": "string"
+          },
+          "reason_codes": {
+            "items": {
+              "$ref": "#/components/schemas/CreativeRevalidationReason"
+            },
+            "title": "Reason Codes",
+            "type": "array"
+          },
+          "referenced_finding_assertions": {
+            "items": {
+              "$ref": "#/components/schemas/RevalidatedFindingAssertionResponse"
+            },
+            "title": "Referenced Finding Assertions",
+            "type": "array"
+          },
+          "result": {
+            "$ref": "#/components/schemas/CreativeRevalidationResult"
+          },
+          "semantic_digest": {
+            "title": "Semantic Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "product_id",
+          "concept_id",
+          "concept_digest",
+          "original_concept_set_id",
+          "original_research_snapshot_id",
+          "original_research_snapshot_digest",
+          "current_research_snapshot_id",
+          "current_research_snapshot_digest",
+          "product_snapshot_id",
+          "product_snapshot_digest",
+          "original_decision_id",
+          "result",
+          "reason_codes",
+          "referenced_finding_assertions",
+          "created_by",
+          "semantic_digest",
+          "created_at"
+        ],
+        "title": "CreativeConceptRevalidationResponse",
+        "type": "object"
+      },
       "CreativeConceptSetResponse": {
         "additionalProperties": false,
         "properties": {
@@ -2285,6 +2399,25 @@
         "required": ["transition_id"],
         "title": "CreativeReplacementStart",
         "type": "object"
+      },
+      "CreativeRevalidationReason": {
+        "enum": [
+          "RESEARCH_FINDING_MISSING",
+          "RESEARCH_FINDING_CATEGORY_CHANGED",
+          "RESEARCH_FINDING_STATEMENT_CHANGED",
+          "RESEARCH_FINDING_CONFIDENCE_CHANGED",
+          "RESEARCH_FINDING_SCOPE_CHANGED",
+          "RESEARCH_FINDING_IMPLICATION_CHANGED",
+          "PRODUCT_AUTHORITY_CHANGED",
+          "PRODUCT_CLAIM_REFERENCE_INVALID"
+        ],
+        "title": "CreativeRevalidationReason",
+        "type": "string"
+      },
+      "CreativeRevalidationResult": {
+        "enum": ["REVALIDATED_FOR_PRODUCTION", "REQUIRES_RESTRATEGY"],
+        "title": "CreativeRevalidationResult",
+        "type": "string"
       },
       "CreativeRunStart": {
         "additionalProperties": false,
@@ -5775,6 +5908,37 @@
           "can_edit"
         ],
         "title": "ResearchTargetResponse",
+        "type": "object"
+      },
+      "RevalidatedFindingAssertionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "current_assertion_digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Assertion Digest"
+          },
+          "finding_key": {
+            "title": "Finding Key",
+            "type": "string"
+          },
+          "original_assertion_digest": {
+            "title": "Original Assertion Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "finding_key",
+          "original_assertion_digest",
+          "current_assertion_digest"
+        ],
+        "title": "RevalidatedFindingAssertionResponse",
         "type": "object"
       },
       "SocialAccountResponse": {
@@ -9746,6 +9910,192 @@
         },
         "summary": "Start Producer",
         "tags": ["production"]
+      }
+    },
+    "/v1/creative/concepts/{concept_id}/revalidate": {
+      "post": {
+        "operationId": "revalidate_v1_creative_concepts__concept_id__revalidate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Concept Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreativeConceptRevalidationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revalidate",
+        "tags": ["creative"]
+      }
+    },
+    "/v1/creative/concepts/{concept_id}/revalidations": {
+      "get": {
+        "operationId": "list_revalidations_v1_creative_concepts__concept_id__revalidations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "concept_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Concept Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CreativeConceptRevalidationResponse"
+                  },
+                  "title": "Response List Revalidations V1 Creative Concepts  Concept Id  Revalidations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Revalidations",
+        "tags": ["creative"]
       }
     },
     "/v1/final-creatives/{final_id}": {

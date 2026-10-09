@@ -13,7 +13,9 @@ from jsonschema import Draft202012Validator, FormatChecker
 from creative_marketer.agent_runtime.domain import ModelPricing, ModelRoute, canonical_digest
 from creative_marketer.creative.domain import (
     ApprovedCreativeConcept,
+    CreativeConceptRevalidation,
     CreativeDecisionState,
+    CreativeRevalidationResult,
 )
 
 from .domain import (
@@ -280,16 +282,34 @@ def build_production_context(
     current_research_snapshot_digest: str,
     asset_manifest: Sequence[Mapping[str, object]],
     request: ProductionPlanningRequest | None = None,
+    revalidation: CreativeConceptRevalidation | None = None,
 ) -> ProductionPlanningContext:
     if approved.decision.state is not CreativeDecisionState.APPROVED_FOR_PRODUCTION:
         raise ProductionCreativeNotApproved("concept requires current production approval")
     concept_set = approved.concept_set
-    if (
-        concept_set.product_snapshot_id != current_product_snapshot_id
-        or concept_set.product_snapshot_digest != current_product_snapshot_digest
-        or concept_set.research_snapshot_id != current_research_snapshot_id
-        or concept_set.research_snapshot_digest != current_research_snapshot_digest
-    ):
+    product_matches = (
+        concept_set.product_snapshot_id == current_product_snapshot_id
+        and concept_set.product_snapshot_digest == current_product_snapshot_digest
+    )
+    research_matches = (
+        concept_set.research_snapshot_id == current_research_snapshot_id
+        and concept_set.research_snapshot_digest == current_research_snapshot_digest
+    )
+    revalidation_matches = (
+        revalidation is not None
+        and revalidation.result is CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION
+        and revalidation.concept_id == approved.concept.id
+        and revalidation.concept_digest == approved.concept.semantic_digest
+        and revalidation.original_concept_set_id == concept_set.id
+        and revalidation.original_research_snapshot_id == concept_set.research_snapshot_id
+        and revalidation.original_research_snapshot_digest == concept_set.research_snapshot_digest
+        and revalidation.current_research_snapshot_id == current_research_snapshot_id
+        and revalidation.current_research_snapshot_digest == current_research_snapshot_digest
+        and revalidation.product_snapshot_id == current_product_snapshot_id
+        and revalidation.product_snapshot_digest == current_product_snapshot_digest
+        and revalidation.original_decision_id == approved.decision.id
+    )
+    if not product_matches or not (research_matches or revalidation_matches):
         raise ProductionCreativeRefreshRequired("approved creative context is no longer current")
     selected = select_visual_assets(asset_manifest)
     value = ProductionPlanningRequest() if request is None else request
@@ -307,6 +327,16 @@ def build_production_context(
         "selected_assets": [item.primitive() for item in selected],
         "request": {"target_format": value.target_format, "aspect_ratio": value.aspect_ratio},
     }
+    if revalidation_matches:
+        assert revalidation is not None
+        fields.update(
+            {
+                "original_research_snapshot_id": str(concept_set.research_snapshot_id),
+                "original_research_snapshot_digest": concept_set.research_snapshot_digest,
+                "creative_revalidation_id": str(revalidation.id),
+                "creative_revalidation_digest": revalidation.semantic_digest,
+            }
+        )
     return ProductionPlanningContext(
         approved.concept.id,
         approved.concept.semantic_digest,
@@ -320,6 +350,10 @@ def build_production_context(
         selected,
         value,
         canonical_digest(fields),
+        concept_set.research_snapshot_id if revalidation_matches else None,
+        concept_set.research_snapshot_digest if revalidation_matches else None,
+        revalidation.id if revalidation_matches and revalidation is not None else None,
+        revalidation.semantic_digest if revalidation_matches and revalidation is not None else None,
     )
 
 
@@ -357,6 +391,26 @@ def production_context_from_payload(
             str(request.get("aspect_ratio", "9:16")),
         ),
         context_digest,
+        (
+            UUID(str(values["original_research_snapshot_id"]))
+            if values.get("original_research_snapshot_id") is not None
+            else None
+        ),
+        (
+            str(values["original_research_snapshot_digest"])
+            if values.get("original_research_snapshot_digest") is not None
+            else None
+        ),
+        (
+            UUID(str(values["creative_revalidation_id"]))
+            if values.get("creative_revalidation_id") is not None
+            else None
+        ),
+        (
+            str(values["creative_revalidation_digest"])
+            if values.get("creative_revalidation_digest") is not None
+            else None
+        ),
     )
 
 

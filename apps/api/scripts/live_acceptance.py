@@ -83,9 +83,11 @@ class LiveState:
     tenant_id: str
     product_id: str
     researcher_run_id: str | None = None
+    researcher_history_run_ids: list[str] = field(default_factory=list)
     creative_run_id: str | None = None
     creative_history_run_ids: list[str] = field(default_factory=list)
     creative_concept_id: str | None = None
+    creative_revalidation_id: str | None = None
     producer_run_id: str | None = None
     production_plan_id: str | None = None
     image_job_ids: list[str] = field(default_factory=list)
@@ -95,7 +97,12 @@ class LiveState:
 
 
 FIELDS = set(LiveState.__dataclass_fields__)
-FIELDS_V1 = FIELDS - {"creative_history_run_ids"}
+FIELDS_V1 = FIELDS - {
+    "creative_history_run_ids",
+    "researcher_history_run_ids",
+    "creative_revalidation_id",
+}
+FIELDS_V2 = FIELDS - {"researcher_history_run_ids", "creative_revalidation_id"}
 OPTIONAL_IDS = FIELDS - {
     "version",
     "session_id",
@@ -104,6 +111,7 @@ OPTIONAL_IDS = FIELDS - {
     "image_job_ids",
     "video_job_ids",
     "creative_history_run_ids",
+    "researcher_history_run_ids",
 }
 
 
@@ -130,16 +138,27 @@ class StateStore:
         if not isinstance(raw, dict):
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
         if set(raw) == FIELDS_V1 and raw.get("version") == 1:
-            raw["version"] = 2
+            raw["version"] = 3
             raw["creative_history_run_ids"] = []
-        elif set(raw) == FIELDS and raw.get("version") == 1:
-            raw["version"] = 2
-        elif set(raw) != FIELDS or raw.get("version") != 2:
+            raw["researcher_history_run_ids"] = []
+            raw["creative_revalidation_id"] = None
+        elif set(raw) == FIELDS_V2 and raw.get("version") in {1, 2}:
+            raw["version"] = 3
+            raw["researcher_history_run_ids"] = []
+            raw["creative_revalidation_id"] = None
+        elif set(raw) == FIELDS and raw.get("version") in {1, 2}:
+            raw["version"] = 3
+        elif set(raw) != FIELDS or raw.get("version") != 3:
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
         for name in ("session_id", "tenant_id", "product_id", *OPTIONAL_IDS):
             if raw[name] is not None:
                 raw[name] = valid_id(raw[name], name)
-        for name in ("image_job_ids", "video_job_ids", "creative_history_run_ids"):
+        for name in (
+            "image_job_ids",
+            "video_job_ids",
+            "creative_history_run_ids",
+            "researcher_history_run_ids",
+        ):
             if not isinstance(raw[name], list):
                 raise RuntimeError(f"LIVE_VALIDATION_STATE_INVALID_{name.upper()}")
             raw[name] = [valid_id(item, name) for item in raw[name]]
@@ -183,7 +202,7 @@ def session(
 ) -> LiveState | None:
     value = store.load()
     if value is None and create:
-        value = LiveState(2, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
+        value = LiveState(3, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
         store.save(value)
         print(f"Live acceptance session started: {value.session_id}")
     if value is not None and (
@@ -382,6 +401,114 @@ def bind_recovery_successor(
     return successor
 
 
+def refresh_research(settings: Settings, store: StateStore | None = None) -> int:
+    """Admit one governed Research refresh and preserve the previous successful run."""
+
+    api = api_for(settings)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved, create=False))
+    if state is None or state.researcher_run_id is None:
+        raise RuntimeError("LIVE_RESEARCH_REFRESH_STAGE_NOT_READY")
+    prior = exact_run(api, product, "research", state.researcher_run_id, initial_researcher_route())
+    if prior.get("status") in {"PENDING", "RUNNING"}:
+        print(f"Research refresh already bound: {prior['id']} ({prior['status']})")
+        return 0
+    if (
+        prior.get("status") != "SUCCEEDED"
+        or prior.get("tenant_id") != state.tenant_id
+        or prior.get("product_id") != state.product_id
+    ):
+        raise RuntimeError("LIVE_RESEARCH_REFRESH_REQUIRES_SUCCEEDED_RUN")
+    prior_snapshots = [
+        item
+        for item in items(api, f"/v1/products/{product}/research/snapshots")
+        if item.get("agent_run_id") == state.researcher_run_id
+    ]
+    if len(prior_snapshots) != 1:
+        raise RuntimeError("LIVE_RESEARCH_REFRESH_SNAPSHOT_AMBIGUOUS")
+    if prior_snapshots[0].get("freshness") == "current":
+        raise RuntimeError("LIVE_RESEARCH_REFRESH_NOT_REQUIRED")
+    created = api.request(
+        f"/v1/products/{product}/research/runs",
+        method="POST",
+        body={
+            "idempotency_key": (
+                f"live-research-refresh-{state.session_id}-"
+                f"{len(state.researcher_history_run_ids) + 1}"
+            )
+        },
+    )
+    refresh_id = created_id(created, "research_refresh_run")
+    if (
+        not isinstance(created, dict)
+        or created.get("tenant_id") != state.tenant_id
+        or created.get("product_id") != state.product_id
+        or created.get("agent_type") != "researcher"
+        or refresh_id == state.researcher_run_id
+    ):
+        raise RuntimeError("LIVE_RESEARCH_REFRESH_PROVENANCE_MISMATCH")
+    historical = state.researcher_run_id
+    state.researcher_history_run_ids.append(historical)
+    state.researcher_run_id = refresh_id
+    state.creative_revalidation_id = None
+    saved.save(state)
+    print(f"Research refresh requested: {refresh_id}")
+    print(f"Historical successful Researcher retained: {historical}")
+    print("Creative Strategist and Producer were not started by this command.")
+    return 0
+
+
+def revalidate_creative_concept(settings: Settings, store: StateStore | None = None) -> int:
+    """Run the explicit deterministic revalidation transition; never call a provider."""
+
+    api = api_for(settings, paid=False)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved, create=False))
+    if state is None or state.researcher_run_id is None or state.creative_concept_id is None:
+        raise RuntimeError("LIVE_CREATIVE_REVALIDATION_STAGE_NOT_READY")
+    researcher = exact_run(
+        api, product, "research", state.researcher_run_id, initial_researcher_route()
+    )
+    if researcher.get("status") != "SUCCEEDED":
+        raise RuntimeError("LIVE_CREATIVE_REVALIDATION_RESEARCH_NOT_SUCCEEDED")
+    current_snapshots = [
+        item
+        for item in items(api, f"/v1/products/{product}/research/snapshots")
+        if item.get("agent_run_id") == state.researcher_run_id
+        and item.get("freshness") == "current"
+    ]
+    if len(current_snapshots) != 1:
+        raise RuntimeError("LIVE_CREATIVE_REVALIDATION_CURRENT_RESEARCH_MISSING")
+    values = items(api, f"/v1/creative/concepts/{state.creative_concept_id}/revalidations")
+    if state.creative_revalidation_id is not None:
+        existing = exact(values, state.creative_revalidation_id, "creative_revalidation")
+        print(f"Creative Concept: {existing['result']} ({existing['id']})")
+        return 0 if existing.get("result") == "REVALIDATED_FOR_PRODUCTION" else 3
+    result = api.request(
+        f"/v1/creative/concepts/{state.creative_concept_id}/revalidate",
+        method="POST",
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("LIVE_CREATIVE_REVALIDATION_RESPONSE_INVALID")
+    identifier = valid_id(result.get("id"), "creative_revalidation_id")
+    if (
+        result.get("concept_id") != state.creative_concept_id
+        or result.get("product_id") != state.product_id
+        or result.get("current_research_snapshot_id") != current_snapshots[0].get("id")
+        or result.get("result") not in {"REVALIDATED_FOR_PRODUCTION", "REQUIRES_RESTRATEGY"}
+    ):
+        raise RuntimeError("LIVE_CREATIVE_REVALIDATION_PROVENANCE_MISMATCH")
+    state.creative_revalidation_id = identifier
+    saved.save(state)
+    print(f"Creative Concept: {result['result']}")
+    print(f"  original Research: {result['original_research_snapshot_id']}")
+    print(f"  current Research authority: {result['current_research_snapshot_id']}")
+    print("No Creative or Producer provider execution was started.")
+    return 0 if result["result"] == "REVALIDATED_FOR_PRODUCTION" else 3
+
+
 def replace_output_limited_creative(settings: Settings, store: StateStore | None = None) -> int:
     """Explicitly admit one fresh Creative run without replaying Researcher."""
 
@@ -501,6 +628,19 @@ def replace_invalid_producer(settings: Settings, store: StateStore | None = None
         or state.final_creative_id is not None
     ):
         raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_STAGE_ALREADY_ADVANCED")
+    if state.researcher_history_run_ids:
+        if state.creative_revalidation_id is None:
+            raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_REVALIDATION_REQUIRED")
+        revalidation = exact(
+            items(
+                api,
+                f"/v1/creative/concepts/{state.creative_concept_id}/revalidations",
+            ),
+            state.creative_revalidation_id,
+            "creative_revalidation",
+        )
+        if revalidation.get("result") != "REVALIDATED_FOR_PRODUCTION":
+            raise RuntimeError("LIVE_PRODUCER_REPLACEMENT_RESTRATEGY_REQUIRED")
     runs = items(api, f"/v1/products/{product}/production/runs")
     failed = exact(runs, state.producer_run_id, "production_run")
     failed_contract_version = failed.get("output_contract_version")
@@ -750,6 +890,23 @@ def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
     if approved.get("decision_state") != "APPROVED_FOR_PRODUCTION":
         print("PAUSED: the session-bound Creative Concept is not approved for production.")
         return 3
+    if state.researcher_history_run_ids:
+        if state.creative_revalidation_id is None:
+            print(
+                "PAUSED: run make live-creative-revalidate before Producer after Research refresh."
+            )
+            return 3
+        revalidation = exact(
+            items(
+                api,
+                f"/v1/creative/concepts/{state.creative_concept_id}/revalidations",
+            ),
+            state.creative_revalidation_id,
+            "creative_revalidation",
+        )
+        if revalidation.get("result") != "REVALIDATED_FOR_PRODUCTION":
+            print("PAUSED: Creative Concept requires a fresh Creative Strategist run.")
+            return 3
     result = advance_run(
         api,
         product,
@@ -960,6 +1117,8 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
             lineage = [run]
             seen = {str(run.get("id"))}
             pending_predecessors = [run.get("recovery_of_run_id")]
+            if field_name == "researcher_run_id":
+                pending_predecessors.extend(state.researcher_history_run_ids)
             if field_name == "creative_run_id":
                 pending_predecessors.extend(state.creative_history_run_ids)
             while pending_predecessors:
@@ -982,6 +1141,11 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
             if field_name == "creative_run_id" and len(lineage) > 1:
                 print(
                     "  historical Creative lineage: "
+                    + ", ".join(str(value.get("id")) for value in lineage[1:])
+                )
+            if field_name == "researcher_run_id" and len(lineage) > 1:
+                print(
+                    "  historical Research lineage: "
                     + ", ".join(str(value.get("id")) for value in lineage[1:])
                 )
             original_unknown = sum(
@@ -1027,6 +1191,20 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
                 Decimal(),
             )
             unknown += stage_unknown
+    if state.creative_revalidation_id is not None and state.creative_concept_id is not None:
+        value = exact(
+            items(
+                api,
+                f"/v1/creative/concepts/{state.creative_concept_id}/revalidations",
+            ),
+            state.creative_revalidation_id,
+            "creative_revalidation",
+        )
+        print(f"Creative Concept: {value.get('result', 'UNKNOWN')}")
+        print(f"  original Research: {value.get('original_research_snapshot_id')}")
+        print(f"  current Research authority: {value.get('current_research_snapshot_id')}")
+    elif state.creative_concept_id is not None:
+        print("Creative Concept: NOT REVALIDATED")
     for label, identifiers in (("Image", state.image_job_ids), ("Video", state.video_job_ids)):
         values = [
             cast(dict[str, Any], api.request(f"/v1/production/jobs/{i}")) for i in identifiers

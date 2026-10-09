@@ -35,9 +35,13 @@ from creative_marketer.creative.domain import (
     ApprovedCreativeConcept,
     CreativeConcept,
     CreativeConceptDecision,
+    CreativeConceptRevalidation,
     CreativeConceptSet,
     CreativeDecisionState,
+    CreativeRevalidationResult,
+    RevalidatedFindingAssertion,
     product_claim_refs,
+    research_finding_assertion_digest,
 )
 from creative_marketer.events.domain import event_sha256_v1
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
@@ -373,6 +377,108 @@ def test_v2_preserves_full_concept_and_full_source_provenance_while_v1_is_unchan
     )
     with pytest.raises(ValueError, match="unsupported Producer context"):
         build_producer_model_context(prepared, ProductionPlanningRequest(), context_version=99)
+
+
+@pytest.mark.asyncio
+async def test_revalidated_producer_uses_current_research_and_freezes_both_authorities() -> None:
+    base = producer_preparation()
+    current_finding = replace(
+        base.research_snapshot.findings[0],
+        citations=(Citation(uuid4(), 9, DIGEST_B),),
+    )
+    current_semantic = {
+        "schema_version": 1,
+        "product_snapshot_id": str(base.product_snapshot.id),
+        "product_snapshot_digest": base.product_snapshot.digest,
+        "research_context_digest": "sha256:" + "c" * 64,
+        "findings": [current_finding.semantic()],
+        "research_gaps": [],
+        "recommended_next_sources": [],
+    }
+    current_research = ResearchSnapshot(
+        base.research_snapshot.tenant_id,
+        base.research_snapshot.product_id,
+        uuid4(),
+        base.product_snapshot.id,
+        base.product_snapshot.digest,
+        "sha256:" + "c" * 64,
+        (current_finding,),
+        (),
+        (),
+        canonical_digest(current_semantic),
+        id=uuid4(),
+    )
+    assertion_digest = research_finding_assertion_digest(current_finding)
+    assertion = RevalidatedFindingAssertion(current_finding.key, assertion_digest, assertion_digest)
+    fields = {
+        "schema_version": 1,
+        "concept_id": str(base.approved.concept.id),
+        "concept_digest": base.approved.concept.semantic_digest,
+        "original_concept_set_id": str(base.approved.concept_set.id),
+        "original_research_snapshot_id": str(base.research_snapshot.id),
+        "original_research_snapshot_digest": base.research_snapshot.semantic_digest,
+        "current_research_snapshot_id": str(current_research.id),
+        "current_research_snapshot_digest": current_research.semantic_digest,
+        "product_snapshot_id": str(base.product_snapshot.id),
+        "product_snapshot_digest": base.product_snapshot.digest,
+        "original_decision_id": str(base.approved.decision.id),
+        "result": "REVALIDATED_FOR_PRODUCTION",
+        "reason_codes": [],
+        "referenced_finding_assertions": [assertion.primitive()],
+    }
+    revalidation = CreativeConceptRevalidation(
+        base.approved.concept.tenant_id,
+        base.approved.concept.product_id,
+        base.approved.concept.id,
+        base.approved.concept.semantic_digest,
+        base.approved.concept_set.id,
+        base.research_snapshot.id,
+        base.research_snapshot.semantic_digest,
+        current_research.id,
+        current_research.semantic_digest,
+        base.product_snapshot.id,
+        base.product_snapshot.digest,
+        base.approved.decision.id,
+        CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION,
+        (),
+        (assertion,),
+        uuid4(),
+        canonical_digest(fields),
+    )
+    prepared = replace(
+        base,
+        research_snapshot=current_research,
+        original_research_snapshot=base.research_snapshot,
+        revalidation=revalidation,
+    )
+    planning, model_context = build_producer_model_context(prepared, ProductionPlanningRequest())
+    assert planning.research_snapshot_id == current_research.id
+    assert planning.original_research_snapshot_id == base.research_snapshot.id
+    assert planning.creative_revalidation_id == revalidation.id
+    assert model_context.capability_context is not None
+    assert model_context.capability_context["referenced_research_findings"][0]["key"] == (
+        current_finding.key
+    )
+
+    provider = FakeModelProvider(
+        ModelInvocationResult({}, None, ModelUsage(0, 0, 0), "openai", "gpt-5.6-sol")
+    )
+    runtime, repository, _, _ = service(
+        preparation(prepared.product_snapshot.tenant_id, prepared.product_snapshot.product_id),
+        provider,
+    )
+    repository.producer_prepared = prepared
+    run = await runtime.request_producer(
+        context(prepared.product_snapshot.tenant_id),
+        concept_id=prepared.approved.concept.id,
+        request=ProductionPlanningRequest(),
+        idempotency_key="revalidated-producer",
+    )
+    refs = {item["kind"]: item for item in run.input_context_refs}
+    assert refs["research_snapshot"]["id"] == str(current_research.id)
+    assert refs["creative_origin_research_snapshot"]["id"] == str(base.research_snapshot.id)
+    assert refs["creative_concept_revalidation"]["id"] == str(revalidation.id)
+    assert provider.calls == []
 
 
 def test_exact_live_incident_geometry_fails_v1_and_fits_v2_without_losing_authority() -> None:

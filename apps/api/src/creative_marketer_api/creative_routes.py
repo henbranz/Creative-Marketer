@@ -13,6 +13,8 @@ from creative_marketer.creative.domain import (
     ChannelIntent,
     CreativeDecisionState,
     CreativeError,
+    CreativeRevalidationReason,
+    CreativeRevalidationResult,
     CreativeStrategyRequest,
 )
 from creative_marketer.identity.application.authentication import (
@@ -96,6 +98,33 @@ class CreativeDecisionResponse(Contract):
     created_at: datetime
 
 
+class RevalidatedFindingAssertionResponse(Contract):
+    finding_key: str
+    original_assertion_digest: str
+    current_assertion_digest: str | None
+
+
+class CreativeConceptRevalidationResponse(Contract):
+    id: UUID
+    product_id: UUID
+    concept_id: UUID
+    concept_digest: str
+    original_concept_set_id: UUID
+    original_research_snapshot_id: UUID
+    original_research_snapshot_digest: str
+    current_research_snapshot_id: UUID
+    current_research_snapshot_digest: str
+    product_snapshot_id: UUID
+    product_snapshot_digest: str
+    original_decision_id: UUID
+    result: CreativeRevalidationResult
+    reason_codes: list[CreativeRevalidationReason]
+    referenced_finding_assertions: list[RevalidatedFindingAssertionResponse]
+    created_by: UUID
+    semantic_digest: str
+    created_at: datetime
+
+
 def create_creative_router(
     authenticator: AuthenticationPort,
     identity_uow: UnitOfWorkFactory,
@@ -142,6 +171,31 @@ def create_creative_router(
             semantic_digest=value.semantic_digest,
             created_at=value.created_at,
             decision_state=decision.state if decision else None,
+        )
+
+    def revalidation_response(value: Any) -> CreativeConceptRevalidationResponse:
+        return CreativeConceptRevalidationResponse(
+            id=value.id,
+            product_id=value.product_id,
+            concept_id=value.concept_id,
+            concept_digest=value.concept_digest,
+            original_concept_set_id=value.original_concept_set_id,
+            original_research_snapshot_id=value.original_research_snapshot_id,
+            original_research_snapshot_digest=value.original_research_snapshot_digest,
+            current_research_snapshot_id=value.current_research_snapshot_id,
+            current_research_snapshot_digest=value.current_research_snapshot_digest,
+            product_snapshot_id=value.product_snapshot_id,
+            product_snapshot_digest=value.product_snapshot_digest,
+            original_decision_id=value.original_decision_id,
+            result=value.result,
+            reason_codes=list(value.reason_codes),
+            referenced_finding_assertions=[
+                RevalidatedFindingAssertionResponse(**item.primitive())
+                for item in value.referenced_finding_assertions
+            ],
+            created_by=value.created_by,
+            semantic_digest=value.semantic_digest,
+            created_at=value.created_at,
         )
 
     async def set_response(value: Any, ctx: ExecutionContext) -> CreativeConceptSetResponse:
@@ -274,5 +328,36 @@ def create_creative_router(
             raise HTTPException(
                 status_code=403 if "PERMISSION" in error.code else 404, detail=error.code.lower()
             ) from error
+
+    @router.post(
+        "/creative/concepts/{concept_id}/revalidate",
+        response_model=CreativeConceptRevalidationResponse,
+    )
+    async def revalidate(concept_id: UUID, ctx: Context) -> CreativeConceptRevalidationResponse:
+        try:
+            return revalidation_response(await creative_service.revalidate(ctx, concept_id))
+        except CreativeError as error:
+            if "PERMISSION" in error.code:
+                response_status = 403
+            elif error.code == "CREATIVE_NOT_FOUND":
+                response_status = 404
+            else:
+                response_status = 409
+            raise HTTPException(status_code=response_status, detail=error.code.lower()) from error
+
+    @router.get(
+        "/creative/concepts/{concept_id}/revalidations",
+        response_model=list[CreativeConceptRevalidationResponse],
+    )
+    async def list_revalidations(
+        concept_id: UUID, ctx: Context
+    ) -> list[CreativeConceptRevalidationResponse]:
+        try:
+            return [
+                revalidation_response(item)
+                for item in await creative_service.list_revalidations(ctx, concept_id)
+            ]
+        except CreativeError as error:
+            raise HTTPException(status_code=404, detail=error.code.lower()) from error
 
     return router

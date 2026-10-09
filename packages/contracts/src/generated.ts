@@ -517,6 +517,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/creative/concepts/{concept_id}/revalidate": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Revalidate */
+    post: operations["revalidate_v1_creative_concepts__concept_id__revalidate_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/v1/creative/concepts/{concept_id}/revalidations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Revalidations */
+    get: operations["list_revalidations_v1_creative_concepts__concept_id__revalidations_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/final-creatives/{final_id}": {
     parameters: {
       query?: never;
@@ -2606,6 +2640,74 @@ export interface components {
       /** Semantic Digest */
       semantic_digest: string;
     };
+    /** CreativeConceptRevalidationResponse */
+    CreativeConceptRevalidationResponse: {
+      /** Concept Digest */
+      concept_digest: string;
+      /**
+       * Concept Id
+       * Format: uuid
+       */
+      concept_id: string;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Created By
+       * Format: uuid
+       */
+      created_by: string;
+      /** Current Research Snapshot Digest */
+      current_research_snapshot_digest: string;
+      /**
+       * Current Research Snapshot Id
+       * Format: uuid
+       */
+      current_research_snapshot_id: string;
+      /**
+       * Id
+       * Format: uuid
+       */
+      id: string;
+      /**
+       * Original Concept Set Id
+       * Format: uuid
+       */
+      original_concept_set_id: string;
+      /**
+       * Original Decision Id
+       * Format: uuid
+       */
+      original_decision_id: string;
+      /** Original Research Snapshot Digest */
+      original_research_snapshot_digest: string;
+      /**
+       * Original Research Snapshot Id
+       * Format: uuid
+       */
+      original_research_snapshot_id: string;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Product Snapshot Digest */
+      product_snapshot_digest: string;
+      /**
+       * Product Snapshot Id
+       * Format: uuid
+       */
+      product_snapshot_id: string;
+      /** Reason Codes */
+      reason_codes: components["schemas"]["CreativeRevalidationReason"][];
+      /** Referenced Finding Assertions */
+      referenced_finding_assertions: components["schemas"]["RevalidatedFindingAssertionResponse"][];
+      result: components["schemas"]["CreativeRevalidationResult"];
+      /** Semantic Digest */
+      semantic_digest: string;
+    };
     /** CreativeConceptSetResponse */
     CreativeConceptSetResponse: {
       /**
@@ -2705,6 +2807,25 @@ export interface components {
        */
       transition_id: string;
     };
+    /**
+     * CreativeRevalidationReason
+     * @enum {string}
+     */
+    CreativeRevalidationReason:
+      | "RESEARCH_FINDING_MISSING"
+      | "RESEARCH_FINDING_CATEGORY_CHANGED"
+      | "RESEARCH_FINDING_STATEMENT_CHANGED"
+      | "RESEARCH_FINDING_CONFIDENCE_CHANGED"
+      | "RESEARCH_FINDING_SCOPE_CHANGED"
+      | "RESEARCH_FINDING_IMPLICATION_CHANGED"
+      | "PRODUCT_AUTHORITY_CHANGED"
+      | "PRODUCT_CLAIM_REFERENCE_INVALID";
+    /**
+     * CreativeRevalidationResult
+     * @enum {string}
+     */
+    CreativeRevalidationResult:
+      "REVALIDATED_FOR_PRODUCTION" | "REQUIRES_RESTRATEGY";
     /** CreativeRunStart */
     CreativeRunStart: {
       /** Approved Experiment Proposal Id */
@@ -4081,6 +4202,15 @@ export interface components {
       updated_at: string;
       /** Website Url */
       website_url: string | null;
+    };
+    /** RevalidatedFindingAssertionResponse */
+    RevalidatedFindingAssertionResponse: {
+      /** Current Assertion Digest */
+      current_assertion_digest: string | null;
+      /** Finding Key */
+      finding_key: string;
+      /** Original Assertion Digest */
+      original_assertion_digest: string;
     };
     /** SocialAccountResponse */
     SocialAccountResponse: {
@@ -5669,6 +5799,76 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentRunResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  revalidate_v1_creative_concepts__concept_id__revalidate_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        concept_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeConceptRevalidationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  list_revalidations_v1_creative_concepts__concept_id__revalidations_get: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        concept_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["CreativeConceptRevalidationResponse"][];
         };
       };
       /** @description Validation Error */

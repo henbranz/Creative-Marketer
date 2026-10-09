@@ -382,6 +382,9 @@ def test_published_v1_event_contract_digests_are_immutable() -> None:
         "creative.concept.approved_for_production.v1": (
             "sha256:925c2cbe127fd2cef31979ed586ca9bb5a154ae66540738236f51271d2ab9593"
         ),
+        "creative.concept.revalidated.v1": (
+            "sha256:906da005ab3390d50ca7f23d22b826cdc89d1423a39cf0da51313fbd649dc0ea"
+        ),
         "creative.concept_set.created.v1": (
             "sha256:f6dc4b7f32824a81a5053f4e97a62ceea44691d70f5597c89972f29e499f41cc"
         ),
@@ -502,6 +505,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20261002_0035"]
+    assert script.get_heads() == ["20261009_0036"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

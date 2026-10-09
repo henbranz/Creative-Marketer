@@ -40,8 +40,11 @@ Production does not own Product, Research, Creative, Agent governance, storage, 
 ## Producer context and plan
 
 Producer accepts only a Concept whose latest decision is `APPROVED_FOR_PRODUCTION`. Its ConceptSet
-must still bind the current ProductKnowledgeSnapshot V2 and ResearchSnapshot; otherwise it fails
-with `PRODUCTION_CREATIVE_REFRESH_REQUIRED` before inference.
+must still bind the current ProductKnowledgeSnapshot V2. Its bound ResearchSnapshot must either be
+current or be accompanied by an explicit successful `CreativeConceptRevalidation` against the
+latest current ResearchSnapshot. Revalidation compares only exact referenced finding assertion
+digests and never calls a model. Without either authority path, Producer fails with
+`PRODUCTION_CREATIVE_REFRESH_REQUIRED` before inference. See ADR-052.
 
 `ProductionPlanningContext` freezes exact concept/set/snapshot digests, decision ID, request, and
 selected Asset IDs/digests/rights. Selection is deterministic: READY, confirmed-rights images that
@@ -56,7 +59,8 @@ authority. Product input is the explicit `producer_product.v1` allowlist: identi
 truth, exact referenced allowed claims, and complete production/publication safety constraints.
 Research input is `producer_research.v1`: only findings named by the concept's exact
 `supporting_research_refs`, with no unrelated findings or gaps. Product/Research snapshots remain
-complete immutable sources and their original IDs/digests stay frozen on AgentRun. Projection
+complete immutable sources. Revalidated runs use current findings but freeze the original Creative
+Research, revalidation, and current Research identities/digests separately on AgentRun. Projection
 versions/digests and referenced claim/finding identities are frozen separately. Historical
 `production_planning.v1` runs reconstruct their original full-snapshot provider context. See
 ADR-048.

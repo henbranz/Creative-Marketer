@@ -57,6 +57,7 @@ from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import (
     ChannelIntent,
     CreativeDecisionState,
+    CreativeRevalidationResult,
     CreativeStrategyRequest,
 )
 from creative_marketer.infrastructure.database.agent_runtime_uow import (
@@ -775,6 +776,11 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert loaded.semantic_digest == concept.semantic_digest
     assert current == decision
     assert (await creative.get_set(context, sets[0].id)).id == sets[0].id
+    revalidation = await creative.revalidate(context, concept.id)
+    assert revalidation.result is CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION
+    replay = await creative.revalidate(context, concept.id)
+    assert replay.id == revalidation.id
+    assert await creative.list_revalidations(context, concept.id) == (revalidation,)
 
     producer = await CreateTenantAgentDefinition(agent_registry_factory)(
         context, agent_key="producer", agent_type="producer"

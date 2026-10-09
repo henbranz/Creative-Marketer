@@ -65,6 +65,7 @@ Every event uses the implemented immutable canonical envelope:
 - `creative.concept.created.v1`
 - `creative.concept.approved.v1`
 - `creative.concept.rejected.v1`
+- `creative.concept.revalidated.v1`
 
 ### Production
 - `production.plan.created.v1`

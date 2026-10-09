@@ -79,6 +79,7 @@ HISTORICAL = "80000000-0000-0000-0000-000000000008"
 SNAPSHOT = "90000000-0000-0000-0000-000000000009"
 SUCCESSOR = "a0000000-0000-0000-0000-00000000000a"
 UNRELATED = "b0000000-0000-0000-0000-00000000000b"
+REVALIDATION = "c0000000-0000-0000-0000-00000000000c"
 
 
 class FakeApi:
@@ -633,6 +634,113 @@ def test_live_creative_replacement_is_explicit_idempotent_and_preserves_history(
         )
     ]
     assert not any(path.endswith("/research/runs") for method, path, _ in posts)
+
+
+def test_research_refresh_preserves_history_without_starting_creative_or_producer(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    state = saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    refresh = {
+        **recoverable_run(SUCCESSOR, acceptance.initial_researcher_route()),
+        "status": "PENDING",
+        "agent_type": "researcher",
+        "resolved_provider": None,
+        "resolved_model": None,
+        "model_route_version": None,
+        "pricing_version": None,
+    }
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(RESEARCH, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/research/snapshots"): [
+                {"id": SNAPSHOT, "agent_run_id": RESEARCH, "freshness": "stale"}
+            ],
+            ("POST", f"/v1/products/{PRODUCT}/research/runs"): refresh,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+    assert acceptance.refresh_research(settings(), store) == 0
+    saved = store.load()
+    assert saved is not None
+    assert saved.researcher_run_id == SUCCESSOR
+    assert saved.researcher_history_run_ids == [RESEARCH]
+    assert saved.creative_run_id == CREATIVE
+    assert saved.creative_concept_id == CONCEPT
+    assert saved.producer_run_id == PRODUCER
+    assert saved.creative_revalidation_id is None
+    assert not any(
+        method == "POST" and ("/creative/" in path or "/production/" in path)
+        for method, path, _ in fake.calls
+    )
+    assert state.researcher_run_id == RESEARCH
+
+
+def test_live_deterministic_revalidation_binds_current_research_without_generation(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=SUCCESSOR,
+        researcher_history_run_ids=[RESEARCH],
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    response = {
+        "id": REVALIDATION,
+        "product_id": PRODUCT,
+        "concept_id": CONCEPT,
+        "original_research_snapshot_id": SNAPSHOT,
+        "current_research_snapshot_id": UNRELATED,
+        "result": "REVALIDATED_FOR_PRODUCTION",
+    }
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(SUCCESSOR, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/research/snapshots"): [
+                {"id": UNRELATED, "agent_run_id": SUCCESSOR, "freshness": "current"}
+            ],
+            ("GET", f"/v1/creative/concepts/{CONCEPT}/revalidations"): [],
+            ("POST", f"/v1/creative/concepts/{CONCEPT}/revalidate"): response,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+    assert acceptance.revalidate_creative_concept(settings(), store) == 0
+    state = store.load()
+    assert state is not None and state.creative_revalidation_id == REVALIDATION
+    posts = [(path, body) for method, path, body in fake.calls if method == "POST"]
+    assert posts == [(f"/v1/creative/concepts/{CONCEPT}/revalidate", None)]
+
+
+def test_live_producer_replacement_requires_revalidation_after_research_refresh(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=SUCCESSOR,
+        researcher_history_run_ids=[RESEARCH],
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+    )
+    fake = FakeApi({})
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+    with pytest.raises(RuntimeError, match="REVALIDATION_REQUIRED"):
+        acceptance.replace_invalid_producer(settings(), store)
+    assert fake.calls == []
 
 
 def test_live_producer_replacement_is_explicit_and_leaves_successor_pending(

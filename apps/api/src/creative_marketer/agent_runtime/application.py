@@ -44,6 +44,7 @@ from creative_marketer.creative.domain import (
     ApprovedExperimentContext,
     ChannelIntent,
     CreativeBriefIncomplete,
+    CreativeConceptRevalidation,
     CreativeError,
     CreativeResearchRefreshRequired,
     CreativeStrategyContext,
@@ -966,6 +967,8 @@ class ProducerPreparation:
     product_snapshot: ProductKnowledgeSnapshot
     research_snapshot: ResearchSnapshot
     asset_manifest: tuple[Mapping[str, object], ...]
+    original_research_snapshot: ResearchSnapshot | None = None
+    revalidation: CreativeConceptRevalidation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1507,6 +1510,7 @@ def build_producer_model_context(
             current_research_snapshot_digest=preparation.research_snapshot.semantic_digest,
             asset_manifest=preparation.asset_manifest,
             request=request,
+            revalidation=preparation.revalidation,
         )
     elif (
         planning.concept_id != preparation.approved.concept.id
@@ -1518,6 +1522,28 @@ def build_producer_model_context(
         or planning.product_snapshot_digest != preparation.product_snapshot.digest
         or planning.research_snapshot_id != preparation.research_snapshot.id
         or planning.research_snapshot_digest != preparation.research_snapshot.semantic_digest
+        or planning.original_research_snapshot_id
+        != (
+            preparation.original_research_snapshot.id
+            if preparation.revalidation is not None
+            and preparation.original_research_snapshot is not None
+            else None
+        )
+        or planning.creative_revalidation_id
+        != (preparation.revalidation.id if preparation.revalidation is not None else None)
+        or planning.original_research_snapshot_digest
+        != (
+            preparation.original_research_snapshot.semantic_digest
+            if preparation.revalidation is not None
+            and preparation.original_research_snapshot is not None
+            else None
+        )
+        or planning.creative_revalidation_digest
+        != (
+            preparation.revalidation.semantic_digest
+            if preparation.revalidation is not None
+            else None
+        )
         or planning.request != request
     ):
         raise ProductionCreativeRefreshRequired(
@@ -1559,7 +1585,11 @@ def build_producer_model_context(
             product_content=preparation.product_snapshot.content,
             product_snapshot_digest=preparation.product_snapshot.digest,
             approved_concept=approved_concept,
-            research_snapshot_id=str(preparation.research_snapshot.id),
+            research_snapshot_id=str(
+                preparation.original_research_snapshot.id
+                if preparation.original_research_snapshot is not None
+                else preparation.research_snapshot.id
+            ),
             research_findings=preparation.research_snapshot.findings,
         )
         projection_metadata = {
@@ -1576,6 +1606,11 @@ def build_producer_model_context(
                 "product_snapshot_digest": preparation.product_snapshot.digest,
                 "research_snapshot_digest": preparation.research_snapshot.semantic_digest,
                 "approved_concept_digest": preparation.approved.concept.semantic_digest,
+                "creative_revalidation_digest": (
+                    preparation.revalidation.semantic_digest
+                    if preparation.revalidation is not None
+                    else None
+                ),
                 "provider_projection": projection_metadata,
                 "product_claim_refs": list(projection.product_claim_refs),
                 "research_finding_refs": [dict(item) for item in projection.research_finding_refs],
@@ -2563,6 +2598,23 @@ class AgentRunService:
                     "id": str(planning.research_snapshot_id),
                     "digest": planning.research_snapshot_digest,
                 },
+                *(
+                    (
+                        {
+                            "kind": "creative_origin_research_snapshot",
+                            "id": str(planning.original_research_snapshot_id),
+                            "digest": planning.original_research_snapshot_digest,
+                        },
+                        {
+                            "kind": "creative_concept_revalidation",
+                            "id": str(planning.creative_revalidation_id),
+                            "digest": planning.creative_revalidation_digest,
+                            "result": "REVALIDATED_FOR_PRODUCTION",
+                        },
+                    )
+                    if planning.creative_revalidation_id is not None
+                    else ()
+                ),
                 {
                     "kind": "selected_assets",
                     "assets": [item.primitive() for item in planning.selected_assets],

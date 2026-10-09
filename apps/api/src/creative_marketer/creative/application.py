@@ -30,10 +30,15 @@ from .domain import (
     CreativeClaimMismatch,
     CreativeConcept,
     CreativeConceptDecision,
+    CreativeConceptRevalidation,
     CreativeConceptSet,
+    CreativeDecisionConflict,
     CreativeDecisionState,
     CreativeNotFound,
     CreativePermissionDenied,
+    CreativeRevalidationNotReady,
+    CreativeRevalidationReason,
+    CreativeRevalidationResult,
     CreativeStrategyContext,
     CreativeStrategyRequest,
     InvalidCreativeAssetReference,
@@ -41,8 +46,10 @@ from .domain import (
     InvalidCreativeOutput,
     InvalidCreativeResearchReference,
     ProhibitedCreativeClaim,
+    RevalidatedFindingAssertion,
     normalized_phrase,
     product_claim_refs,
+    research_finding_assertion_digest,
 )
 
 CREATIVE_CONTRACT_KEY = "creative.creative_concept_set"
@@ -57,6 +64,19 @@ class CreativeRepository(Protocol):
     async def list_sets(self, product_id: UUID) -> tuple[CreativeConceptSet, ...]: ...
     async def add_decision(self, value: CreativeConceptDecision) -> None: ...
     async def current_decision(self, concept_id: UUID) -> CreativeConceptDecision | None: ...
+    async def prepare_revalidation(
+        self, concept_id: UUID
+    ) -> CreativeRevalidationPreparation | None: ...
+    async def find_revalidation(
+        self,
+        concept_id: UUID,
+        current_research_snapshot_id: UUID,
+        original_decision_id: UUID,
+    ) -> CreativeConceptRevalidation | None: ...
+    async def add_revalidation(self, value: CreativeConceptRevalidation) -> bool: ...
+    async def list_revalidations(
+        self, concept_id: UUID
+    ) -> tuple[CreativeConceptRevalidation, ...]: ...
 
 
 class CreativeUnitOfWork(Protocol):
@@ -76,6 +96,17 @@ class CreativeUnitOfWork(Protocol):
 
 class CreativeUnitOfWorkFactory(Protocol):
     def __call__(self, tenant_id: UUID) -> CreativeUnitOfWork: ...
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeRevalidationPreparation:
+    concept: CreativeConcept
+    concept_set: CreativeConceptSet
+    decision: CreativeConceptDecision
+    original_research: ResearchSnapshot
+    current_research: ResearchSnapshot
+    current_research_freshness: str
+    current_product: ProductKnowledgeSnapshot
 
 
 def load_creative_output_schema() -> Mapping[str, object]:
@@ -378,6 +409,220 @@ class CreativeService:
             if value is None:
                 raise CreativeNotFound("CreativeConcept not found")
             return value, await uow.creative.current_decision(concept_id)
+
+    async def list_revalidations(
+        self, context: ExecutionContext, concept_id: UUID
+    ) -> tuple[CreativeConceptRevalidation, ...]:
+        async with self.uow_factory(context.tenant_id) as uow:
+            if await uow.creative.get_concept(concept_id) is None:
+                raise CreativeNotFound("CreativeConcept not found")
+            return await uow.creative.list_revalidations(concept_id)
+
+    async def revalidate(
+        self, context: ExecutionContext, concept_id: UUID
+    ) -> CreativeConceptRevalidation:
+        """Re-establish current authority without model inference or mutable rewrites."""
+
+        if (
+            context.membership_status is not MembershipStatus.ACTIVE
+            or context.membership_role not in {MembershipRole.OWNER, MembershipRole.ADMIN}
+            or context.user_id is None
+        ):
+            raise CreativePermissionDenied("Creative revalidation requires owner or admin")
+        async with self.uow_factory(context.tenant_id) as uow:
+            preparation = await uow.creative.prepare_revalidation(concept_id)
+            if preparation is None:
+                raise CreativeNotFound("CreativeConcept or its frozen authority was not found")
+            if preparation.decision.state is not CreativeDecisionState.APPROVED_FOR_PRODUCTION:
+                raise CreativeDecisionConflict(
+                    "CreativeConcept latest decision is not approved for production"
+                )
+            if preparation.current_research_freshness != "current":
+                raise CreativeRevalidationNotReady(
+                    "target ResearchSnapshot must be the latest current authority"
+                )
+            replay = await uow.creative.find_revalidation(
+                concept_id,
+                preparation.current_research.id,
+                preparation.decision.id,
+            )
+            if replay is not None:
+                return replay
+
+            reasons: list[CreativeRevalidationReason] = []
+            if (
+                preparation.current_product.id != preparation.concept_set.product_snapshot_id
+                or preparation.current_product.digest
+                != preparation.concept_set.product_snapshot_digest
+            ):
+                reasons.append(CreativeRevalidationReason.PRODUCT_AUTHORITY_CHANGED)
+
+            allowed_claims = {
+                item.key
+                for item in product_claim_refs(
+                    preparation.current_product.digest,
+                    preparation.current_product.content,
+                )
+            }
+            message_points = preparation.concept.payload.get("message_points", ())
+            if not isinstance(message_points, (list, tuple)) or any(
+                not isinstance(point, Mapping)
+                or (
+                    point.get("kind") == "PRODUCT_FACT"
+                    and point.get("product_claim_ref") not in allowed_claims
+                )
+                for point in message_points
+            ):
+                reasons.append(CreativeRevalidationReason.PRODUCT_CLAIM_REFERENCE_INVALID)
+
+            original_findings = {item.key: item for item in preparation.original_research.findings}
+            current_findings = {item.key: item for item in preparation.current_research.findings}
+            raw_refs = preparation.concept.payload.get("supporting_research_refs", ())
+            if not isinstance(raw_refs, (list, tuple)):
+                raise CreativeRevalidationNotReady("Concept Research references are malformed")
+            referenced_keys: list[str] = []
+            for reference in raw_refs:
+                if (
+                    not isinstance(reference, Mapping)
+                    or str(reference.get("research_snapshot_id"))
+                    != str(preparation.original_research.id)
+                    or not isinstance(reference.get("finding_key"), str)
+                ):
+                    raise CreativeRevalidationNotReady(
+                        "Concept Research references do not match original authority"
+                    )
+                key = str(reference["finding_key"])
+                if key not in referenced_keys:
+                    referenced_keys.append(key)
+
+            bindings: list[RevalidatedFindingAssertion] = []
+            fields = (
+                ("category", CreativeRevalidationReason.RESEARCH_FINDING_CATEGORY_CHANGED),
+                ("statement", CreativeRevalidationReason.RESEARCH_FINDING_STATEMENT_CHANGED),
+                ("confidence", CreativeRevalidationReason.RESEARCH_FINDING_CONFIDENCE_CHANGED),
+                ("scope", CreativeRevalidationReason.RESEARCH_FINDING_SCOPE_CHANGED),
+                ("implication", CreativeRevalidationReason.RESEARCH_FINDING_IMPLICATION_CHANGED),
+            )
+            for key in referenced_keys:
+                original = original_findings.get(key)
+                if original is None:
+                    raise CreativeRevalidationNotReady(
+                        "Original Research finding referenced by Concept is unavailable"
+                    )
+                current = current_findings.get(key)
+                original_digest = research_finding_assertion_digest(original)
+                current_digest = (
+                    research_finding_assertion_digest(current) if current is not None else None
+                )
+                bindings.append(RevalidatedFindingAssertion(key, original_digest, current_digest))
+                if current is None:
+                    reasons.append(CreativeRevalidationReason.RESEARCH_FINDING_MISSING)
+                    continue
+                for field_name, reason in fields:
+                    if getattr(original, field_name) != getattr(current, field_name):
+                        reasons.append(reason)
+
+            unique_reasons = tuple(dict.fromkeys(reasons))
+            result = (
+                CreativeRevalidationResult.REQUIRES_RESTRATEGY
+                if unique_reasons
+                else CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION
+            )
+            semantic = {
+                "schema_version": 1,
+                "concept_id": str(preparation.concept.id),
+                "concept_digest": preparation.concept.semantic_digest,
+                "original_concept_set_id": str(preparation.concept_set.id),
+                "original_research_snapshot_id": str(preparation.original_research.id),
+                "original_research_snapshot_digest": preparation.original_research.semantic_digest,
+                "current_research_snapshot_id": str(preparation.current_research.id),
+                "current_research_snapshot_digest": preparation.current_research.semantic_digest,
+                "product_snapshot_id": str(preparation.current_product.id),
+                "product_snapshot_digest": preparation.current_product.digest,
+                "original_decision_id": str(preparation.decision.id),
+                "result": result.value,
+                "reason_codes": [item.value for item in unique_reasons],
+                "referenced_finding_assertions": [item.primitive() for item in bindings],
+            }
+            value = CreativeConceptRevalidation(
+                context.tenant_id,
+                preparation.concept.product_id,
+                preparation.concept.id,
+                preparation.concept.semantic_digest,
+                preparation.concept_set.id,
+                preparation.original_research.id,
+                preparation.original_research.semantic_digest,
+                preparation.current_research.id,
+                preparation.current_research.semantic_digest,
+                preparation.current_product.id,
+                preparation.current_product.digest,
+                preparation.decision.id,
+                result,
+                unique_reasons,
+                tuple(bindings),
+                context.user_id,
+                canonical_digest(semantic),
+            )
+            if not await uow.creative.add_revalidation(value):
+                winner = await uow.creative.find_revalidation(
+                    concept_id,
+                    preparation.current_research.id,
+                    preparation.decision.id,
+                )
+                if winner is None:
+                    raise CreativeDecisionConflict(
+                        "Creative revalidation authority changed concurrently"
+                    )
+                return winner
+            matched = sum(
+                item.current_assertion_digest == item.original_assertion_digest for item in bindings
+            )
+            missing = sum(item.current_assertion_digest is None for item in bindings)
+            changed = len(bindings) - matched - missing
+            metadata = {
+                "referenced_finding_count": len(bindings),
+                "matched_finding_count": matched,
+                "changed_finding_count": changed,
+                "missing_finding_count": missing,
+                "product_authority_changed": (
+                    CreativeRevalidationReason.PRODUCT_AUTHORITY_CHANGED in unique_reasons
+                ),
+                "result": result.value,
+                "reason_codes": [item.value for item in unique_reasons],
+            }
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="creative.concept.revalidated",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="creative_concept_revalidation",
+                    resource_id=str(value.id),
+                    reason_code=(unique_reasons[0].value if unique_reasons else None),
+                    metadata=safe_metadata(metadata),
+                )
+            )
+            event_type = "creative.concept.revalidated.v1"
+            await uow.outbox.append(
+                tenant_event(
+                    context,
+                    event_type=event_type,
+                    schema_version=1,
+                    aggregate_type="creative_concept",
+                    aggregate_id=preparation.concept.id,
+                    payload={
+                        "revalidation_id": str(value.id),
+                        "concept_id": str(value.concept_id),
+                        "product_id": str(value.product_id),
+                        "current_research_snapshot_id": str(value.current_research_snapshot_id),
+                        "result": value.result.value,
+                        "semantic_digest": value.semantic_digest,
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+                    occurred_at=value.created_at,
+                )
+            )
+            await uow.commit()
+            return value
 
     async def decide(
         self,

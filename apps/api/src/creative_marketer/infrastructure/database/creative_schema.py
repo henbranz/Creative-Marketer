@@ -54,3 +54,28 @@ concept_decisions = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     schema="creative",
 )
+
+concept_revalidations = Table(
+    "concept_revalidations",
+    metadata,
+    Column("id", UUID(as_uuid=True), primary_key=True),
+    Column("tenant_id", UUID(as_uuid=True), nullable=False),
+    Column("product_id", UUID(as_uuid=True), nullable=False),
+    Column("concept_id", UUID(as_uuid=True), nullable=False),
+    Column("concept_digest", String(71), nullable=False),
+    Column("original_concept_set_id", UUID(as_uuid=True), nullable=False),
+    Column("original_research_snapshot_id", UUID(as_uuid=True), nullable=False),
+    Column("original_research_snapshot_digest", String(71), nullable=False),
+    Column("current_research_snapshot_id", UUID(as_uuid=True), nullable=False),
+    Column("current_research_snapshot_digest", String(71), nullable=False),
+    Column("product_snapshot_id", UUID(as_uuid=True), nullable=False),
+    Column("product_snapshot_digest", String(71), nullable=False),
+    Column("original_decision_id", UUID(as_uuid=True), nullable=False),
+    Column("result", String(32), nullable=False),
+    Column("reason_codes", JSONB, nullable=False),
+    Column("referenced_finding_assertions", JSONB, nullable=False),
+    Column("created_by", UUID(as_uuid=True), nullable=False),
+    Column("semantic_digest", String(71), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    schema="creative",
+)

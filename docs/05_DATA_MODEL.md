@@ -367,6 +367,14 @@ shapes below describe possible future analytic aggregation, not the implemented 
 - variant_dimensions
 - status
 
+### CreativeConceptRevalidation
+
+Append-only authority proving whether an already approved Concept remains valid against the latest
+current Research without rewriting its ConceptSet. It binds the exact Concept/digest, original
+ConceptSet and Research, current Research, unchanged Product snapshot, exact approval decision,
+finite result/reason codes, referenced finding assertion digests, actor, timestamp, and semantic
+digest. Runtime has insert/select only; forced tenant RLS and composite tenant foreign keys apply.
+
 ## Production
 
 ### ProductionPlan

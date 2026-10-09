@@ -194,6 +194,10 @@ class ProductionPlanningContext:
     selected_assets: tuple[FrozenAssetReference, ...]
     request: ProductionPlanningRequest
     context_digest: str
+    original_research_snapshot_id: UUID | None = None
+    original_research_snapshot_digest: str | None = None
+    creative_revalidation_id: UUID | None = None
+    creative_revalidation_digest: str | None = None
 
     def __post_init__(self) -> None:
         if len(self.selected_assets) > MAX_VISUAL_REFERENCES:
@@ -202,9 +206,19 @@ class ProductionPlanningContext:
             raise ValueError("Producer visual context contains duplicate assets")
         if self.context_digest != canonical_digest(self.semantic_content()):
             raise ValueError("Producer context digest does not match frozen provenance")
+        optional = (
+            self.original_research_snapshot_id,
+            self.original_research_snapshot_digest,
+            self.creative_revalidation_id,
+            self.creative_revalidation_digest,
+        )
+        if any(item is not None for item in optional) and not all(
+            item is not None for item in optional
+        ):
+            raise ValueError("revalidated Producer context provenance must be complete")
 
     def semantic_content(self) -> dict[str, object]:
-        return {
+        content: dict[str, object] = {
             "schema_version": 1,
             "concept_id": str(self.concept_id),
             "concept_digest": self.concept_digest,
@@ -221,6 +235,12 @@ class ProductionPlanningContext:
                 "aspect_ratio": self.request.aspect_ratio,
             },
         }
+        if self.creative_revalidation_id is not None:
+            content["original_research_snapshot_id"] = str(self.original_research_snapshot_id)
+            content["original_research_snapshot_digest"] = self.original_research_snapshot_digest
+            content["creative_revalidation_id"] = str(self.creative_revalidation_id)
+            content["creative_revalidation_digest"] = self.creative_revalidation_digest
+        return content
 
 
 @dataclass(frozen=True, slots=True)

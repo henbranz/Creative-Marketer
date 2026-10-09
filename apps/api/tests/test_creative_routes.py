@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,assignment,union-attr"
 
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from creative_marketer.creative.domain import (
     CreativeDecisionState,
     CreativeNotFound,
     CreativePermissionDenied,
+    CreativeRevalidationNotReady,
+    CreativeRevalidationResult,
 )
 from creative_marketer.identity.application.errors import (
     AuthenticationUnavailable,
@@ -75,6 +78,26 @@ class CreativeService:
         value = strategy_context()
         self.value = validate(output(value), value)
         self.error = None
+        self.revalidation = SimpleNamespace(
+            id=uuid4(),
+            product_id=self.value.product_id,
+            concept_id=self.value.concepts[0].id,
+            concept_digest=self.value.concepts[0].semantic_digest,
+            original_concept_set_id=self.value.id,
+            original_research_snapshot_id=self.value.research_snapshot_id,
+            original_research_snapshot_digest=self.value.research_snapshot_digest,
+            current_research_snapshot_id=uuid4(),
+            current_research_snapshot_digest="sha256:" + "e" * 64,
+            product_snapshot_id=self.value.product_snapshot_id,
+            product_snapshot_digest=self.value.product_snapshot_digest,
+            original_decision_id=uuid4(),
+            result=CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION,
+            reason_codes=(),
+            referenced_finding_assertions=(),
+            created_by=uuid4(),
+            semantic_digest="sha256:" + "f" * 64,
+            created_at=self.value.created_at,
+        )
 
     async def list_sets(self, _context, product_id):
         return (self.value,)
@@ -102,6 +125,16 @@ class CreativeService:
             values.get("reason_code"),
             values.get("note"),
         )
+
+    async def revalidate(self, _context, _concept_id):
+        if self.error:
+            raise self.error
+        return self.revalidation
+
+    async def list_revalidations(self, _context, _concept_id):
+        if self.error:
+            raise self.error
+        return (self.revalidation,)
 
 
 def router(agent: AgentService, creative: CreativeService):
@@ -146,6 +179,12 @@ async def test_creative_routes_expose_runs_results_and_decisions() -> None:
         ),
         ctx,
     )
+    revalidation = await endpoint(value, "/v1/creative/concepts/{concept_id}/revalidate", "POST")(
+        concept.id, ctx
+    )
+    revalidations = await endpoint(
+        value, "/v1/creative/concepts/{concept_id}/revalidations", "GET"
+    )(concept.id, ctx)
     assert started.id == runs[0].id and len(runs) == 1
     assert started.output_contract_key == "creative.creative_concept_set"
     assert started.output_contract_version == 1
@@ -154,6 +193,8 @@ async def test_creative_routes_expose_runs_results_and_decisions() -> None:
     assert loaded_set.id == creative.value.id
     assert loaded_concept.id == concept.id
     assert decision.state is CreativeDecisionState.APPROVED_FOR_PRODUCTION
+    assert revalidation.result is CreativeRevalidationResult.REVALIDATED_FOR_PRODUCTION
+    assert revalidations[0].id == revalidation.id
 
 
 @pytest.mark.asyncio
@@ -181,6 +222,28 @@ async def test_creative_routes_map_bounded_errors() -> None:
             object(),
         )
     assert decision_error.value.status_code == 403
+
+    revalidate_endpoint = endpoint(value, "/v1/creative/concepts/{concept_id}/revalidate", "POST")
+    with pytest.raises(HTTPException) as revalidation_permission_error:
+        await revalidate_endpoint(uuid4(), object())
+    assert revalidation_permission_error.value.status_code == 403
+
+    creative.error = CreativeNotFound("missing")
+    with pytest.raises(HTTPException) as revalidation_missing_error:
+        await revalidate_endpoint(uuid4(), object())
+    assert revalidation_missing_error.value.status_code == 404
+
+    creative.error = CreativeRevalidationNotReady("stale")
+    with pytest.raises(HTTPException) as revalidation_conflict_error:
+        await revalidate_endpoint(uuid4(), object())
+    assert revalidation_conflict_error.value.status_code == 409
+
+    creative.error = CreativeNotFound("missing")
+    with pytest.raises(HTTPException) as revalidation_list_error:
+        await endpoint(value, "/v1/creative/concepts/{concept_id}/revalidations", "GET")(
+            uuid4(), object()
+        )
+    assert revalidation_list_error.value.status_code == 404
 
 
 @pytest.mark.asyncio
