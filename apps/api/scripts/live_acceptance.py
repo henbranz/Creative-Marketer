@@ -1670,7 +1670,7 @@ def assembly(api: LocalApi, state: LiveState, store: StateStore) -> int:
 
 
 def e2e(settings: Settings, store: StateStore | None = None) -> int:
-    """Inspect the authoritative pre-generation state machine without causing effects."""
+    """Inspect the authoritative Product-to-FinalCreative state without causing effects."""
 
     saved = store or StateStore()
     api = api_for(settings, paid=False)

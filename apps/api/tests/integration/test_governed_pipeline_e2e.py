@@ -191,6 +191,40 @@ def _model_result(invocation) -> ModelInvocationResult:
     )
 
 
+@dataclass(slots=True)
+class _ChangedAuthorityOutputs:
+    research_attempts: int = 0
+    producer_attempts: int = 0
+
+    def __call__(self, invocation) -> ModelInvocationResult:
+        result = _model_result(invocation)
+        if invocation.output_contract_key == "research.research_snapshot":
+            self.research_attempts += 1
+            if self.research_attempts > 1:
+                output = deepcopy(dict(result.output))
+                findings = cast(list[dict[str, Any]], output["findings"])
+                findings[0]["key"] = "changed_market_authority"
+                findings[0]["category"] = "positioning"
+                findings[0]["statement"] = (
+                    "The current market evidence materially changes the recommended message."
+                )
+                findings[0]["implication"] = "Create a new strategy from current authority."
+                return replace(
+                    result,
+                    output=output,
+                    provider_response_id=f"governed-e2e-research-{self.research_attempts}",
+                )
+        if invocation.output_contract_key == "production.production_plan":
+            self.producer_attempts += 1
+            if self.producer_attempts == 1:
+                return replace(
+                    result,
+                    output={"schema_version": 3, "invalid_fixture": True},
+                    provider_response_id="governed-e2e-historical-producer-failure",
+                )
+        return result
+
+
 async def _media_executor(sessions, store) -> GovernedProductionJobExecutor:
     authority = SqlAlchemyGenerationAuthority(
         sessions,
@@ -235,6 +269,126 @@ async def _media_executor(sessions, store) -> GovernedProductionJobExecutor:
         SqlAlchemyGatewayUnitOfWorkFactory(sessions),
     )
     return GovernedProductionJobExecutor(authority, gateway)
+
+
+async def _complete_approved_concept_to_final(
+    *,
+    context,
+    concept_id,
+    locator,
+    runtime,
+    state,
+    executor,
+    production,
+    assembly,
+    sessions,
+    store,
+):
+    producer_action = await state.resolve_next_action(context, locator)
+    assert producer_action.action is PipelineAction.RUN_PRODUCER
+    assert producer_action.concept_id == concept_id
+
+    admitted = await executor.execute(
+        context,
+        locator,
+        expected_action=PipelineAction.RUN_PRODUCER,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RUN_PRODUCER),
+    )
+    locator = admitted.locator
+    producer_run = await runtime.get_run(context, admitted.resource_id)
+    assert producer_run.status.value == "PENDING"
+    assert producer_run.recovery_of_run_id is None
+    await runtime.execute(context.tenant_id, producer_run.id)
+    review = await state.resolve_next_action(context, locator)
+    assert review.action is PipelineAction.REVIEW_PRODUCTION_PLAN
+    assert review.production_plan_id is not None
+    locator = replace(
+        locator,
+        concept_id=concept_id,
+        production_plan_id=review.production_plan_id,
+    )
+    await production.decide(
+        context,
+        review.production_plan_id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    media = await state.resolve_next_action(context, locator)
+    assert media.action is PipelineAction.WAIT_FOR_MEDIA
+
+    jobs = await production.list_jobs(context, review.production_plan_id)
+    media_executor = await _media_executor(sessions, store)
+    for job in jobs:
+        for _ in range(6):
+            result = await media_executor.execute(
+                context.tenant_id, review.production_plan_id, job.id
+            )
+            if result.status in {
+                GenerationJobStatus.SUCCEEDED.value,
+                GenerationJobStatus.FAILED.value,
+                GenerationJobStatus.OUTCOME_UNKNOWN.value,
+            }:
+                break
+        assert result.status == GenerationJobStatus.SUCCEEDED.value
+
+    manual_gate = await state.resolve_next_action(context, locator)
+    assert manual_gate.action is PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT
+    assembly_input_factory = SqlAlchemyAssemblyUnitOfWorkFactory(sessions)
+    async with assembly_input_factory(context.tenant_id) as uow:
+        source = await uow.assembly.production_input(review.production_plan_id)
+    assert source is not None
+    manual_shot = next(
+        shot
+        for scene in source.scenes
+        for shot in scene.shots
+        if shot.source_strategy == "MANUAL_CAPTURE"
+    )
+    videos = await AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), store).list(
+        context,
+        product_id=bootstrap_demo.PRODUCT_ID,
+        kind=AssetKind.VIDEO,
+        status=AssetStatus.READY,
+    )
+    manual_video = next(value for value in videos if value.role is AssetRole.PRODUCTION_REFERENCE)
+    await assembly.bind_manual_source(context, manual_shot.id, manual_video.id)
+
+    ready = await state.resolve_next_action(context, locator)
+    assert ready.action is PipelineAction.CREATE_ASSEMBLY_PLAN
+    assembled = await executor.execute(
+        context,
+        locator,
+        expected_action=PipelineAction.CREATE_ASSEMBLY_PLAN,
+    )
+    locator = assembled.locator
+    assert (
+        await state.resolve_next_action(context, locator)
+    ).action is PipelineAction.WAIT_FOR_ASSEMBLY
+
+    record = await assembly.get_plan(context, assembled.resource_id)
+    renderer = _Renderer()
+    final = await AssemblyJobExecutor(
+        sessions,
+        store,
+        AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), store),
+        renderer,
+        AssemblyWorkloadIdentity(uuid4(), "governed-e2e-assembly", "test"),
+    ).execute(context.tenant_id, record.job.id)
+    review_final = await state.resolve_next_action(context, locator)
+    assert review_final.action is PipelineAction.REVIEW_FINAL_CREATIVE
+    assert review_final.final_creative_id == final.id
+    assert final.output_asset_id is not None
+
+    await assembly.decide_final(
+        context,
+        final.id,
+        FinalCreativeDecisionState.APPROVED_FOR_PUBLISHING,
+    )
+    complete = await state.resolve_next_action(context, locator)
+    assert complete.action is PipelineAction.FINAL_CREATIVE_READY
+    stored = await assembly.get_final(context, final.id)
+    assert stored.final_creative.output_asset_id == final.output_asset_id
+    assert stored.decision is not None
+    assert renderer.calls == 1
+    return producer_run, final
 
 
 @pytest.mark.postgres
@@ -336,107 +490,191 @@ async def test_database_backed_governed_pipeline_reaches_persisted_final_creativ
         CreativeDecisionState.APPROVED_FOR_PRODUCTION,
         note="Governed offline E2E approval",
     )
-    producer_action = await state.resolve_next_action(context, locator)
-    assert producer_action.action is PipelineAction.RUN_PRODUCER
-    assert producer_action.concept_id == concept.id
+    await _complete_approved_concept_to_final(
+        context=context,
+        concept_id=concept.id,
+        locator=locator,
+        runtime=runtime,
+        state=state,
+        executor=executor,
+        production=production,
+        assembly=assembly,
+        sessions=sessions,
+        store=store,
+    )
 
-    admitted = await executor.execute(
+
+@pytest.mark.postgres
+@pytest.mark.object_storage
+@pytest.mark.asyncio
+async def test_changed_authority_restrategy_starts_new_lineage_and_reaches_final_creative(
+    monkeypatch,
+    admin_engine,
+    admin_database_url: str,
+    runtime_database_url: str,
+) -> None:
+    """Regress the live REQUIRES_RESTRATEGY branch without mutating live state."""
+
+    del admin_engine
+    endpoint = __import__("os").environ["TEST_OBJECT_STORAGE_URL"]
+    for key, value in {
+        "APP_ENV": "development",
+        "DATABASE_URL": admin_database_url,
+        "OBJECT_STORAGE_BACKEND": "s3",
+        "OBJECT_STORAGE_ENDPOINT_URL": endpoint,
+        "OBJECT_STORAGE_PUBLIC_ENDPOINT_URL": endpoint,
+        "OBJECT_STORAGE_ACCESS_KEY_ID": OBJECT_STORAGE_ACCESS_KEY_ID,
+        "OBJECT_STORAGE_SECRET_ACCESS_KEY": OBJECT_STORAGE_SECRET_ACCESS_KEY,
+        "CORS_ORIGINS": '["http://localhost:3000"]',
+        "MODEL_PROVIDER_BACKEND": "disabled",
+        "MEDIA_IMAGE_PROVIDER": "fake",
+        "MEDIA_VIDEO_PROVIDER": "fake",
+    }.items():
+        monkeypatch.setenv(key, value)
+    await bootstrap_demo.run()
+
+    sessions = create_session_factory(runtime_database_url)
+    context = bootstrap_demo._context()
+    store = S3ObjectStore(
+        endpoint_url=endpoint,
+        public_endpoint_url=endpoint,
+        region="us-east-1",
+        bucket="creative-marketer-assets",
+        access_key_id=OBJECT_STORAGE_ACCESS_KEY_ID,
+        secret_access_key=OBJECT_STORAGE_SECRET_ACCESS_KEY,
+    )
+    outputs = _ChangedAuthorityOutputs()
+    runtime = AgentRunService(
+        SqlAlchemyAgentRuntimeUnitOfWorkFactory(sessions),
+        ModelRouter(
+            (
+                initial_researcher_route(),
+                initial_creative_strategist_route(),
+                initial_producer_route(),
+            )
+        ),
+        ModelProviderRegistry({"openai": FakeModelProvider(outputs)}),
+        bootstrap_demo.DemoWorkload(),
+    )
+    creative = CreativeService(SqlAlchemyCreativeUnitOfWorkFactory(sessions))
+    production = ProductionService(
+        SqlAlchemyProductionUnitOfWorkFactory(sessions), initial_media_router()
+    )
+    assembly = AssemblyService(SqlAlchemyAssemblyUnitOfWorkFactory(sessions))
+    state = PipelineStateService(SqlAlchemyOrchestrationUnitOfWorkFactory(sessions))
+    executor = PipelineActionExecutor(state, runtime, creative, production, assembly)
+    locator = PipelineLocator(bootstrap_demo.PRODUCT_ID, use_latest_when_unbound=False)
+
+    admitted_research = await executor.execute(
+        context,
+        locator,
+        expected_action=PipelineAction.RUN_RESEARCH,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RUN_RESEARCH),
+    )
+    locator = admitted_research.locator
+    await runtime.execute(context.tenant_id, admitted_research.resource_id)
+
+    admitted_creative = await executor.execute(
+        context,
+        locator,
+        expected_action=PipelineAction.RUN_CREATIVE,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RUN_CREATIVE),
+    )
+    locator = admitted_creative.locator
+    await runtime.execute(context.tenant_id, admitted_creative.resource_id)
+    historical_creative = await runtime.get_run(context, admitted_creative.resource_id)
+    historical_set = next(
+        value
+        for value in await creative.list_sets(context, bootstrap_demo.PRODUCT_ID)
+        if value.agent_run_id == historical_creative.id
+    )
+    historical_concept = historical_set.concepts[0]
+    await creative.decide(
+        context,
+        historical_concept.id,
+        CreativeDecisionState.APPROVED_FOR_PRODUCTION,
+        note="Historical concept retained for changed-authority regression",
+    )
+
+    historical_producer_admission = await executor.execute(
         context,
         locator,
         expected_action=PipelineAction.RUN_PRODUCER,
         explicit_approval=pipeline_approval_phrase(PipelineAction.RUN_PRODUCER),
     )
-    locator = admitted.locator
-    producer_run = await runtime.get_run(context, admitted.resource_id)
-    assert producer_run.status.value == "PENDING"
-    assert producer_run.recovery_of_run_id is None
-    await runtime.execute(context.tenant_id, producer_run.id)
-    review = await state.resolve_next_action(context, locator)
-    assert review.action is PipelineAction.REVIEW_PRODUCTION_PLAN
-    assert review.production_plan_id is not None
-    locator = replace(
-        locator,
-        concept_id=concept.id,
-        production_plan_id=review.production_plan_id,
+    locator = historical_producer_admission.locator
+    historical_producer = await runtime.execute(
+        context.tenant_id, historical_producer_admission.resource_id
     )
-    await production.decide(
-        context,
-        review.production_plan_id,
-        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
-    )
-    media = await state.resolve_next_action(context, locator)
-    assert media.action is PipelineAction.WAIT_FOR_MEDIA
+    assert historical_producer.status.value == "FAILED"
+    assert historical_producer.recovery_of_run_id is None
+    historical_producer_frozen = await runtime.get_run(context, historical_producer.id)
 
-    jobs = await production.list_jobs(context, review.production_plan_id)
-    media_executor = await _media_executor(sessions, store)
-    for job in jobs:
-        for _ in range(6):
-            result = await media_executor.execute(
-                context.tenant_id, review.production_plan_id, job.id
-            )
-            if result.status in {
-                GenerationJobStatus.SUCCEEDED.value,
-                GenerationJobStatus.FAILED.value,
-                GenerationJobStatus.OUTCOME_UNKNOWN.value,
-            }:
-                break
-        assert result.status == GenerationJobStatus.SUCCEEDED.value
-
-    manual_gate = await state.resolve_next_action(context, locator)
-    assert manual_gate.action is PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT
-    assembly_input_factory = SqlAlchemyAssemblyUnitOfWorkFactory(sessions)
-    async with assembly_input_factory(context.tenant_id) as uow:
-        source = await uow.assembly.production_input(review.production_plan_id)
-    assert source is not None
-    manual_shot = next(
-        shot
-        for scene in source.scenes
-        for shot in scene.shots
-        if shot.source_strategy == "MANUAL_CAPTURE"
-    )
-    videos = await AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), store).list(
+    current_research = await runtime.request_researcher(
         context,
         product_id=bootstrap_demo.PRODUCT_ID,
-        kind=AssetKind.VIDEO,
-        status=AssetStatus.READY,
+        idempotency_key="governed-e2e-current-research-refresh",
     )
-    manual_video = next(value for value in videos if value.role is AssetRole.PRODUCTION_REFERENCE)
-    await assembly.bind_manual_source(context, manual_shot.id, manual_video.id)
+    await runtime.execute(context.tenant_id, current_research.id)
+    locator = replace(locator, research_run_id=current_research.id)
+    revalidation_required = await state.resolve_next_action(context, locator)
+    assert revalidation_required.action is PipelineAction.REVALIDATE_CREATIVE
 
-    ready = await state.resolve_next_action(context, locator)
-    assert ready.action is PipelineAction.CREATE_ASSEMBLY_PLAN
-    assembled = await executor.execute(
+    revalidated = await executor.execute(
         context,
         locator,
-        expected_action=PipelineAction.CREATE_ASSEMBLY_PLAN,
+        expected_action=PipelineAction.REVALIDATE_CREATIVE,
     )
-    locator = assembled.locator
-    assert (
-        await state.resolve_next_action(context, locator)
-    ).action is PipelineAction.WAIT_FOR_ASSEMBLY
+    locator = revalidated.locator
+    restrategy_required = await state.resolve_next_action(context, locator)
+    assert restrategy_required.action is PipelineAction.RESTRATEGIZE_CREATIVE
+    assert restrategy_required.concept_id == historical_concept.id
 
-    record = await assembly.get_plan(context, assembled.resource_id)
-    renderer = _Renderer()
-    final = await AssemblyJobExecutor(
-        sessions,
-        store,
-        AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), store),
-        renderer,
-        AssemblyWorkloadIdentity(uuid4(), "governed-e2e-assembly", "test"),
-    ).execute(context.tenant_id, record.job.id)
-    review_final = await state.resolve_next_action(context, locator)
-    assert review_final.action is PipelineAction.REVIEW_FINAL_CREATIVE
-    assert review_final.final_creative_id == final.id
-    assert final.output_asset_id is not None
-
-    await assembly.decide_final(
+    restrategy = await executor.execute(
         context,
-        final.id,
-        FinalCreativeDecisionState.APPROVED_FOR_PUBLISHING,
+        locator,
+        expected_action=PipelineAction.RESTRATEGIZE_CREATIVE,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RESTRATEGIZE_CREATIVE),
     )
-    complete = await state.resolve_next_action(context, locator)
-    assert complete.action is PipelineAction.FINAL_CREATIVE_READY
-    stored = await assembly.get_final(context, final.id)
-    assert stored.final_creative.output_asset_id == final.output_asset_id
-    assert stored.decision is not None
-    assert renderer.calls == 1
+    locator = restrategy.locator
+    assert locator.concept_id is None
+    assert locator.creative_revalidation_id is None
+    assert locator.producer_run_id is None
+    assert locator.production_plan_id is None
+    new_creative_run = await runtime.get_run(context, restrategy.resource_id)
+    assert new_creative_run.status.value == "PENDING"
+    assert new_creative_run.recovery_of_run_id is None
+    await runtime.execute(context.tenant_id, new_creative_run.id)
+
+    assert (await runtime.get_run(context, historical_creative.id)) == historical_creative
+    assert (await runtime.get_run(context, historical_producer.id)) == historical_producer_frozen
+    new_set = next(
+        value
+        for value in await creative.list_sets(context, bootstrap_demo.PRODUCT_ID)
+        if value.agent_run_id == new_creative_run.id
+    )
+    new_concept = new_set.concepts[0]
+    assert new_concept.id != historical_concept.id
+    await creative.decide(
+        context,
+        new_concept.id,
+        CreativeDecisionState.APPROVED_FOR_PRODUCTION,
+        note="Approve the new current-authority concept",
+    )
+
+    new_producer, final = await _complete_approved_concept_to_final(
+        context=context,
+        concept_id=new_concept.id,
+        locator=locator,
+        runtime=runtime,
+        state=state,
+        executor=executor,
+        production=production,
+        assembly=assembly,
+        sessions=sessions,
+        store=store,
+    )
+    assert new_producer.id != historical_producer.id
+    assert new_producer.recovery_of_run_id is None
+    assert final.output_asset_id is not None
+    assert (await runtime.get_run(context, historical_producer.id)) == historical_producer_frozen

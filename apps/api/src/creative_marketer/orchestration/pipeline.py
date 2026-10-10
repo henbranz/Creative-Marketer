@@ -377,7 +377,7 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
     PipelineAction.WAIT_FOR_MEDIA: _execution(
         PipelineExecutionBehavior.WAIT,
         "await_generation_workers",
-        "GET /v1/production/plans/{production_plan_id}/generation-jobs",
+        "GET /v1/production/plans/{production_plan_id}/jobs",
         resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
     ),
     PipelineAction.RECOVER_MEDIA_FAILURE: _execution(
@@ -403,7 +403,7 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
     PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT: _execution(
         PipelineExecutionBehavior.HUMAN_GATE,
         "select_and_bind_manual_source_asset",
-        "POST /v1/assembly/shots/{shot_id}/manual-source",
+        "POST /v1/production/shots/{shot_id}/manual-source",
         explicit_approval_required=True,
         resulting_states=("Assembly:INPUT_REQUIRED", "Assembly:READY_TO_PLAN"),
     ),
@@ -440,7 +440,7 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
     PipelineAction.REVIEW_FINAL_CREATIVE: _execution(
         PipelineExecutionBehavior.HUMAN_GATE,
         "review_and_decide_final_creative",
-        "POST /v1/assembly/final-creatives/{final_creative_id}/approve|reject",
+        "POST /v1/final-creatives/{final_creative_id}/approve-publishing|reject",
         explicit_approval_required=True,
         resulting_states=("FinalCreative:APPROVED", "FinalCreative:REJECTED"),
     ),
@@ -453,7 +453,7 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
     PipelineAction.FINAL_CREATIVE_READY: _execution(
         PipelineExecutionBehavior.TERMINAL,
         "final_creative_approved_for_publishing",
-        "GET /v1/assembly/final-creatives/{final_creative_id}",
+        "GET /v1/final-creatives/{final_creative_id}",
         resulting_states=("FinalCreative:APPROVED",),
     ),
 }
@@ -584,7 +584,7 @@ class NextPipelineAction:
 
 
 class PipelineStateResolver:
-    """The sole deterministic Research -> Creative -> Producer transition table."""
+    """The sole deterministic Product-to-FinalCreative transition table."""
 
     def resolve(self, state: PipelineObservation) -> NextPipelineAction:
         research = {

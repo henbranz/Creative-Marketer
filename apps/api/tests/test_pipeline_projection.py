@@ -8,14 +8,21 @@ from uuid import uuid4
 import pytest
 
 from creative_marketer.agent_runtime.domain import AgentRun, AgentRunStatus
+from creative_marketer.assembly.domain import AssemblyReadiness
 from creative_marketer.infrastructure.database.agent_runtime_repositories import (
     SqlAlchemyAgentRunRepository,
+)
+from creative_marketer.infrastructure.database.assembly_repositories import (
+    SqlAlchemyAssemblyRepository,
 )
 from creative_marketer.infrastructure.database.orchestration_repositories import (
     SqlAlchemyOrchestrationRepository,
 )
 from creative_marketer.orchestration.pipeline import (
+    AssemblyPipelineState,
     CreativePipelineState,
+    FinalCreativePipelineState,
+    MediaPipelineState,
     PipelineLocator,
     ProducerPipelineState,
     ResearchPipelineState,
@@ -24,7 +31,7 @@ from tests.test_agent_runtime_domain import run
 
 
 class _MappingResult:
-    def __init__(self, row: dict[str, object] | None) -> None:
+    def __init__(self, row: dict[str, object] | tuple[object, ...] | None) -> None:
         self.row = row
 
     def mappings(self):
@@ -33,13 +40,19 @@ class _MappingResult:
     def one_or_none(self):
         return self.row
 
+    def scalars(self):
+        return self
+
+    def __iter__(self):
+        return iter(self.row if isinstance(self.row, tuple) else ())
+
 
 class _Session:
     def __init__(
         self,
         *,
         scalars: list[object] | None = None,
-        rows: list[dict[str, object] | None] | None = None,
+        rows: list[dict[str, object] | tuple[object, ...] | None] | None = None,
     ) -> None:
         self.scalars = list(scalars or [])
         self.rows = list(rows or [])
@@ -445,6 +458,236 @@ async def test_producer_projection_rejects_missing_or_cross_lineage_bound_run(mo
         )
     )
     assert mismatched is None
+
+
+async def _approved_plan_observation(
+    monkeypatch,
+    *,
+    job_statuses: tuple[str, ...],
+    assembly_plan_id=None,
+    final_creative_id=None,
+):
+    product_id = uuid4()
+    snapshot_id = uuid4()
+    concept_set_id = uuid4()
+    concept_id = uuid4()
+    concept_digest = "sha256:" + "e" * 64
+    plan_id = uuid4()
+    research = _agent_run(product_id, "researcher", AgentRunStatus.SUCCEEDED)
+    creative = _agent_run(product_id, "creative_strategist", AgentRunStatus.SUCCEEDED)
+    producer = replace(
+        _agent_run(product_id, "producer", AgentRunStatus.SUCCEEDED),
+        output_contract_key="production.production_plan",
+        output_contract_version=3,
+        input_context_refs=_producer_refs(
+            concept_id,
+            concept_digest,
+            snapshot_id,
+            research.product_snapshot_id,
+            current_authority=True,
+        ),
+    )
+    session = _Session(
+        scalars=[product_id, concept_id, concept_digest],
+        rows=[
+            {"id": snapshot_id, "product_snapshot_id": research.product_snapshot_id},
+            {"id": concept_set_id, "research_snapshot_id": snapshot_id},
+            {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
+            {"id": plan_id},
+            {"state": "APPROVED_FOR_GENERATION"},
+            job_statuses,
+        ],
+    )
+    repository = _repository(monkeypatch, session, research, creative, producer)
+    observation = await repository.observe_pipeline(
+        PipelineLocator(
+            product_id,
+            research_run_id=research.id,
+            creative_run_id=creative.id,
+            concept_id=concept_id,
+            producer_run_id=producer.id,
+            production_plan_id=plan_id,
+            use_latest_when_unbound=False,
+            assembly_plan_id=assembly_plan_id,
+            final_creative_id=final_creative_id,
+        )
+    )
+    return observation, plan_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_statuses", "expected", "reason"),
+    [
+        ((), MediaPipelineState.INVARIANT_VIOLATION, "APPROVED_PLAN_MISSING_GENERATION_JOBS"),
+        (("READY",), MediaPipelineState.READY, None),
+        (("PROCESSING",), MediaPipelineState.RUNNING, None),
+        (("FAILED",), MediaPipelineState.FAILED, "GENERATION_JOB_FAILED"),
+        (
+            ("OUTCOME_UNKNOWN",),
+            MediaPipelineState.OUTCOME_UNKNOWN,
+            "GENERATION_PROVIDER_OUTCOME_UNKNOWN",
+        ),
+    ],
+)
+async def test_approved_plan_projects_every_non_success_media_state(
+    monkeypatch,
+    job_statuses: tuple[str, ...],
+    expected: MediaPipelineState,
+    reason: str | None,
+) -> None:
+    observation, _plan_id = await _approved_plan_observation(monkeypatch, job_statuses=job_statuses)
+
+    assert observation is not None
+    assert observation.media is expected
+    assert observation.blocking_reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("readiness", "expected", "reason"),
+    [
+        (AssemblyReadiness.READY, AssemblyPipelineState.READY_TO_PLAN, None),
+        (
+            AssemblyReadiness.MISSING_MANUAL_MEDIA,
+            AssemblyPipelineState.INPUT_REQUIRED,
+            "MANUAL_ASSEMBLY_SOURCE_REQUIRED",
+        ),
+        (
+            AssemblyReadiness.RIGHTS_CHANGED,
+            AssemblyPipelineState.BLOCKED,
+            "ASSEMBLY_RIGHTS_CHANGED",
+        ),
+    ],
+)
+async def test_successful_media_projects_assembly_input_readiness(
+    monkeypatch,
+    readiness: AssemblyReadiness,
+    expected: AssemblyPipelineState,
+    reason: str | None,
+) -> None:
+    async def production_input(_repository, _plan_id):
+        return SimpleNamespace()
+
+    async def list_plans(_repository, _plan_id):
+        return ()
+
+    monkeypatch.setattr(SqlAlchemyAssemblyRepository, "production_input", production_input)
+    monkeypatch.setattr(SqlAlchemyAssemblyRepository, "list_plans", list_plans)
+    monkeypatch.setattr(
+        "creative_marketer.infrastructure.database.orchestration_repositories.evaluate_readiness",
+        lambda _source: SimpleNamespace(status=readiness),
+    )
+
+    observation, _plan_id = await _approved_plan_observation(
+        monkeypatch, job_statuses=("SUCCEEDED", "SUCCEEDED")
+    )
+
+    assert observation is not None
+    assert observation.media is MediaPipelineState.SUCCEEDED
+    assert observation.assembly is expected
+    assert observation.blocking_reason == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_status", "final_id", "decision", "assembly", "final", "reason"),
+    [
+        (
+            "FAILED",
+            None,
+            None,
+            AssemblyPipelineState.FAILED,
+            FinalCreativePipelineState.NOT_STARTED,
+            "ASSEMBLY_RENDER_FAILED",
+        ),
+        (
+            "SUCCEEDED",
+            None,
+            None,
+            AssemblyPipelineState.INVARIANT_VIOLATION,
+            FinalCreativePipelineState.NOT_STARTED,
+            "ASSEMBLY_SUCCESS_MISSING_FINAL_CREATIVE",
+        ),
+        (
+            "SUCCEEDED",
+            "new",
+            None,
+            AssemblyPipelineState.SUCCEEDED,
+            FinalCreativePipelineState.REVIEW_REQUIRED,
+            None,
+        ),
+        (
+            "SUCCEEDED",
+            "new",
+            "APPROVED_FOR_PUBLISHING",
+            AssemblyPipelineState.SUCCEEDED,
+            FinalCreativePipelineState.APPROVED,
+            None,
+        ),
+        (
+            "SUCCEEDED",
+            "new",
+            "REJECTED",
+            AssemblyPipelineState.SUCCEEDED,
+            FinalCreativePipelineState.REJECTED,
+            "FINAL_CREATIVE_REJECTED",
+        ),
+    ],
+)
+async def test_existing_assembly_plan_projects_job_and_final_review_states(
+    monkeypatch,
+    job_status: str,
+    final_id: str | None,
+    decision: str | None,
+    assembly: AssemblyPipelineState,
+    final: FinalCreativePipelineState,
+    reason: str | None,
+) -> None:
+    assembly_plan_id = uuid4()
+    final_creative_id = uuid4() if final_id is not None else None
+
+    async def production_input(_repository, _plan_id):
+        return SimpleNamespace()
+
+    async def list_plans(_repository, _plan_id):
+        return (
+            SimpleNamespace(
+                plan=SimpleNamespace(id=assembly_plan_id),
+                job=SimpleNamespace(
+                    status=SimpleNamespace(value=job_status),
+                    failure_code="ASSEMBLY_RENDER_FAILED" if job_status == "FAILED" else None,
+                    final_creative_id=final_creative_id,
+                ),
+            ),
+        )
+
+    async def get_final(_repository, _final_id):
+        return SimpleNamespace(
+            decision=(
+                None if decision is None else SimpleNamespace(state=SimpleNamespace(value=decision))
+            )
+        )
+
+    monkeypatch.setattr(SqlAlchemyAssemblyRepository, "production_input", production_input)
+    monkeypatch.setattr(SqlAlchemyAssemblyRepository, "list_plans", list_plans)
+    monkeypatch.setattr(SqlAlchemyAssemblyRepository, "get_final", get_final)
+    monkeypatch.setattr(
+        "creative_marketer.infrastructure.database.orchestration_repositories.evaluate_readiness",
+        lambda _source: SimpleNamespace(status=AssemblyReadiness.READY),
+    )
+
+    observation, _plan_id = await _approved_plan_observation(
+        monkeypatch,
+        job_statuses=("SUCCEEDED",),
+        assembly_plan_id=assembly_plan_id,
+        final_creative_id=final_creative_id,
+    )
+
+    assert observation is not None
+    assert observation.assembly is assembly
+    assert observation.final_creative is final
+    assert observation.blocking_reason == reason
 
 
 @pytest.mark.asyncio

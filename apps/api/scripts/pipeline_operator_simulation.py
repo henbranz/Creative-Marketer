@@ -1,5 +1,5 @@
 # mypy: disable-error-code="import-untyped"
-"""Print and validate the authoritative pre-generation operator action matrix."""
+"""Print and validate the authoritative Product-to-FinalCreative action matrix."""
 
 from __future__ import annotations
 

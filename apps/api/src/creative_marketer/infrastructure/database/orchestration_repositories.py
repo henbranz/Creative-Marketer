@@ -708,7 +708,7 @@ class SqlAlchemyOrchestrationRepository:
         )
 
     async def observe_pipeline(self, locator: PipelineLocator) -> PipelineObservation | None:
-        """Project exact persisted authority into the pre-generation state machine.
+        """Project exact persisted authority into the governed creative pipeline.
 
         RLS scopes every table. Optional IDs bind a live session without turning the
         local checkpoint into authority; omitted IDs select the latest canonical row.

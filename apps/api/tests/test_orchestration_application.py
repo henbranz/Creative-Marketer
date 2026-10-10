@@ -39,7 +39,10 @@ from creative_marketer.orchestration.domain import (
     SupervisorReport,
 )
 from creative_marketer.orchestration.pipeline import (
+    AssemblyPipelineState,
     CreativePipelineState,
+    FinalCreativePipelineState,
+    MediaPipelineState,
     PipelineAction,
     PipelineLocator,
     PipelineObservation,
@@ -351,7 +354,7 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
         (
             CycleStage.RESEARCHING,
             {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.NOT_STARTED)},
-            (None, "research"),
+            (None, "operator:RUN_RESEARCH"),
         ),
         (CycleStage.RESEARCHING, {}, (None, "needs_recovery")),
         (
@@ -379,7 +382,7 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
                     CreativePipelineState.NOT_STARTED,
                 )
             },
-            (None, "creative"),
+            (None, "operator:RUN_CREATIVE"),
         ),
         (
             CycleStage.AWAITING_CONCEPT_APPROVAL,
@@ -403,7 +406,7 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
                     ProducerPipelineState.NOT_STARTED,
                 ),
             },
-            (None, "producer"),
+            (None, "operator:RUN_PRODUCER"),
         ),
         (
             CycleStage.PRODUCTION_PLANNING,
@@ -432,7 +435,7 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
         (
             CycleStage.RESEARCHING,
             {"pipeline": PipelineObservation(uuid4(), ResearchPipelineState.OUTCOME_UNKNOWN)},
-            (None, "needs_recovery"),
+            (None, "operator:RECONCILE_RESEARCH_OUTCOME"),
         ),
         (
             CycleStage.AWAITING_CONCEPT_APPROVAL,
@@ -443,33 +446,90 @@ async def test_service_start_transition_report_get_and_cancel_are_auditable() ->
                     CreativePipelineState.REQUIRES_RESTRATEGY,
                 )
             },
-            (None, "operator:RESTRATEGIZE_CREATIVE"),
+            (CycleStage.CREATIVE_STRATEGY, None),
         ),
         (
             CycleStage.GENERATING_MEDIA,
-            {"generation_outcome_unknown": True},
-            (None, "needs_recovery"),
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.OUTCOME_UNKNOWN,
+                )
+            },
+            (None, "operator:RECONCILE_MEDIA_OUTCOME"),
         ),
-        (CycleStage.GENERATING_MEDIA, {"generation_failed": True}, (CycleStage.FAILED, None)),
         (
             CycleStage.GENERATING_MEDIA,
-            {"generation_complete": True},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.FAILED,
+                )
+            },
+            (None, "operator:RECOVER_MEDIA_FAILURE"),
+        ),
+        (
+            CycleStage.GENERATING_MEDIA,
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.SUCCEEDED,
+                    assembly=AssemblyPipelineState.INPUT_REQUIRED,
+                )
+            },
             (CycleStage.ASSEMBLING_FINAL_CREATIVE, None),
         ),
         (
             CycleStage.ASSEMBLING_FINAL_CREATIVE,
-            {"final_creative_id": uuid4()},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.SUCCEEDED,
+                    assembly=AssemblyPipelineState.SUCCEEDED,
+                    final_creative=FinalCreativePipelineState.REVIEW_REQUIRED,
+                )
+            },
             (CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL, None),
         ),
         (
             CycleStage.ASSEMBLING_FINAL_CREATIVE,
-            {"assembly_failed": True},
-            (CycleStage.FAILED, None),
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.SUCCEEDED,
+                    assembly=AssemblyPipelineState.FAILED,
+                )
+            },
+            (None, "operator:RECOVER_ASSEMBLY_FAILURE"),
         ),
-        (CycleStage.ASSEMBLING_FINAL_CREATIVE, {}, (None, "assembly")),
         (
             CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL,
-            {"final_creative_approved": True},
+            {
+                "pipeline": PipelineObservation(
+                    uuid4(),
+                    ResearchPipelineState.SUCCEEDED_CURRENT,
+                    CreativePipelineState.APPROVED_FOR_PRODUCTION,
+                    ProducerPipelineState.APPROVED_FOR_GENERATION,
+                    media=MediaPipelineState.SUCCEEDED,
+                    assembly=AssemblyPipelineState.SUCCEEDED,
+                    final_creative=FinalCreativePipelineState.APPROVED,
+                )
+            },
             (CycleStage.AWAITING_PUBLICATION_INPUT, None),
         ),
         (
@@ -551,8 +611,7 @@ class Runtime:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["research", "creative", "producer", "intelligence"])
-async def test_reconciler_requests_each_agent_only_through_common_runtime(action) -> None:
+async def test_reconciler_keeps_post_pipeline_intelligence_on_common_runtime() -> None:
     ctx = context()
     repository = MemoryRepository(ctx)
     uow = MemoryUow(repository)
@@ -560,20 +619,43 @@ async def test_reconciler_requests_each_agent_only_through_common_runtime(action
     repository.cycle = cycle
     runtime = Runtime()
     service = CreativeCycleService(lambda _tenant: uow, SimpleNamespace(), runtime)
-    state = CanonicalCycleState(
-        cycle,
-        approved_concept_id=uuid4() if action == "producer" else None,
-    )
-    updated = await service._start_action(ctx, state, action)
-    assert runtime.calls == [action]
+    state = CanonicalCycleState(cycle)
+    updated = await service._start_action(ctx, state, "intelligence")
+    assert runtime.calls == ["intelligence"]
     assert runtime.contexts[0].actor == Actor(ActorKind.USER, ctx.user_id)
     assert runtime.contexts[0].correlation_id == ctx.correlation_id
-    assert repository.step_values[-1].idempotency_key == f"cycle:{cycle.id}:{action}:v1"
+    assert repository.step_values[-1].idempotency_key == f"cycle:{cycle.id}:intelligence:v1"
     assert updated.cycle_version == 2
 
-    replay = await service._start_action(ctx, state, action)
+    replay = await service._start_action(ctx, state, "intelligence")
     assert replay is cycle
-    assert runtime.calls == [action]
+    assert runtime.calls == ["intelligence"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    ["RUN_RESEARCH", "RUN_CREATIVE", "RUN_PRODUCER", "CREATE_ASSEMBLY_PLAN"],
+)
+async def test_cycle_never_duplicates_canonical_pipeline_execution(action) -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    uow = MemoryUow(repository)
+    cycle = sample_cycle(ctx, CycleStage.RESEARCHING)
+    repository.cycle = cycle
+    runtime = Runtime()
+    service = CreativeCycleService(lambda _tenant: uow, SimpleNamespace(), runtime)
+
+    blocked = await service._start_action(
+        ctx,
+        CanonicalCycleState(cycle),
+        f"operator:{action}",
+    )
+
+    assert blocked.status is CycleStatus.BLOCKED
+    assert blocked.blocker_code == action
+    assert runtime.calls == []
+    assert repository.step_values == []
 
 
 @pytest.mark.asyncio
@@ -615,9 +697,10 @@ async def test_reconcile_handles_terminal_action_and_idle_paths() -> None:
     recovered = await service.reconcile(ctx, researching.id)
     assert recovered.status is CycleStatus.NEEDS_RECOVERY
 
-    idle = sample_cycle(ctx, CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL)
-    repository.cycle = idle
-    assert await service.reconcile(ctx, idle.id) is idle
+    missing_pipeline = sample_cycle(ctx, CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL)
+    repository.cycle = missing_pipeline
+    recovered = await service.reconcile(ctx, missing_pipeline.id)
+    assert recovered.status is CycleStatus.NEEDS_RECOVERY
 
 
 @pytest.mark.asyncio
@@ -865,7 +948,7 @@ async def test_cross_tenant_experiment_handoff_fails_closed() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["assembly", "publishing", "measurement"])
+@pytest.mark.parametrize("action", ["publishing", "measurement"])
 async def test_reconciler_starts_each_existing_workflow_once(action) -> None:
     ctx = context()
     repository = MemoryRepository(ctx)
@@ -873,16 +956,6 @@ async def test_reconciler_starts_each_existing_workflow_once(action) -> None:
     cycle = sample_cycle(ctx, CycleStage.ASSEMBLING_FINAL_CREATIVE)
     repository.cycle = cycle
     calls = []
-
-    class Assembly:
-        async def readiness(self, execution_context, plan_id):
-            return SimpleNamespace(ready=True)
-
-        async def create_plan(self, execution_context, plan_id):
-            calls.append(("assembly", execution_context.tenant_id, plan_id))
-            return SimpleNamespace(
-                plan=SimpleNamespace(id=uuid4()), job=SimpleNamespace(id=uuid4())
-            )
 
     class Workflows:
         async def start_publication(self, tenant_id, draft_id, correlation_id):
@@ -896,7 +969,7 @@ async def test_reconciler_starts_each_existing_workflow_once(action) -> None:
         lambda _tenant: uow,
         SimpleNamespace(),
         Runtime(),
-        Assembly(),
+        None,
         None,
         Workflows(),
         Workflows(),
@@ -914,33 +987,3 @@ async def test_reconciler_starts_each_existing_workflow_once(action) -> None:
     assert [item[0] for item in calls] == [action]
     assert repository.step_values[-1].step_key == action
     assert repository.step_values[-1].workflow_ref
-
-
-@pytest.mark.asyncio
-async def test_reconciler_waits_for_final_assembly_inputs_without_starting_a_step() -> None:
-    ctx = context()
-    repository = MemoryRepository(ctx)
-    uow = MemoryUow(repository)
-    cycle = sample_cycle(ctx, CycleStage.ASSEMBLING_FINAL_CREATIVE)
-    repository.cycle = cycle
-
-    class Assembly:
-        async def readiness(self, execution_context, plan_id):
-            return SimpleNamespace(ready=False)
-
-        async def create_plan(self, execution_context, plan_id):
-            raise AssertionError("an unready assembly must not start")
-
-    service = CreativeCycleService(
-        lambda _tenant: uow,
-        SimpleNamespace(),
-        Runtime(),
-        Assembly(),
-    )
-    result = await service._start_action(
-        ctx,
-        CanonicalCycleState(cycle, production_plan_id=uuid4()),
-        "assembly",
-    )
-    assert result is cycle
-    assert repository.step_values == []

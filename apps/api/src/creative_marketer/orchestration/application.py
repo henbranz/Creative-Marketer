@@ -13,13 +13,11 @@ from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditOutcome
 from creative_marketer.audit.safety import safe_metadata
 from creative_marketer.catalog.application import CatalogService
-from creative_marketer.creative.domain import ChannelIntent, CreativeStrategyRequest
 from creative_marketer.events.application import OutboxWriter
 from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.events.domain import tenant_event
-from creative_marketer.identity.application.authentication import Actor, ActorKind, ExecutionContext
+from creative_marketer.identity.application.authentication import ExecutionContext
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
-from creative_marketer.production.domain import ProductionPlanningRequest
 
 from .domain import (
     CreativeCycle,
@@ -40,10 +38,13 @@ from .domain import (
     SupervisorReport,
 )
 from .pipeline import (
+    EXECUTION_BEHAVIOR_REGISTRY,
     NextPipelineAction,
     PipelineAction,
+    PipelineExecutionBehavior,
     PipelineLocator,
     PipelineObservation,
+    PipelineStage,
     PipelineStateResolver,
 )
 
@@ -239,18 +240,25 @@ class CycleReadinessEngine:
         stage = value.cycle.current_stage
         requirements: list[ReadinessRequirement] = []
         actions: tuple[SupervisorAction, ...] = ()
-        pre_generation_stages = {
+        governed_pipeline_stages = {
             CycleStage.RESEARCHING,
             CycleStage.CREATIVE_STRATEGY,
             CycleStage.AWAITING_CONCEPT_APPROVAL,
             CycleStage.PRODUCTION_PLANNING,
             CycleStage.AWAITING_PRODUCTION_APPROVAL,
+            CycleStage.GENERATING_MEDIA,
+            CycleStage.ASSEMBLING_FINAL_CREATIVE,
+            CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL,
         }
-        if value.pipeline is not None and stage in pre_generation_stages:
+        if value.pipeline is not None and stage in governed_pipeline_stages:
             resolution = PipelineStateResolver().resolve(value.pipeline)
             human_actions = {
                 PipelineAction.APPROVE_CREATIVE: SupervisorAction.APPROVE_CONCEPT,
                 PipelineAction.REVIEW_PRODUCTION_PLAN: SupervisorAction.APPROVE_PRODUCTION_PLAN,
+                PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT: (
+                    SupervisorAction.PREPARE_FINAL_ASSEMBLY
+                ),
+                PipelineAction.REVIEW_FINAL_CREATIVE: SupervisorAction.REVIEW_FINAL_CREATIVE,
                 PipelineAction.RECONCILE_RESEARCH_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
                 PipelineAction.RECONCILE_CREATIVE_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
                 PipelineAction.RECONCILE_PRODUCER_OUTCOME: SupervisorAction.RECOVER_AGENT_RUN,
@@ -258,17 +266,20 @@ class CycleReadinessEngine:
             mapped = human_actions.get(resolution.action)
             if mapped is not None:
                 actions = (mapped,)
-            waiting = resolution.action in {
-                PipelineAction.WAIT_FOR_RESEARCH,
-                PipelineAction.WAIT_FOR_CREATIVE,
-                PipelineAction.WAIT_FOR_PRODUCER,
+            behavior = EXECUTION_BEHAVIOR_REGISTRY[resolution.action].behavior
+            waiting = behavior in {
+                PipelineExecutionBehavior.WAIT,
+                PipelineExecutionBehavior.HUMAN_GATE,
+                PipelineExecutionBehavior.RECOVERY_GATE,
             }
             requirements.append(
                 ReadinessRequirement(
                     "pipeline_next_action",
-                    ReadinessState.WAITING
-                    if waiting or resolution.human_approval_required
-                    else ReadinessState.READY,
+                    (
+                        ReadinessState.WAITING
+                        if waiting or resolution.human_approval_required
+                        else ReadinessState.READY
+                    ),
                     (
                         f"Next governed action: {resolution.action.value}."
                         + (
@@ -587,73 +598,113 @@ class CreativeCycleService:
             return CycleStage.CHECKING_READINESS, None
         if stage in {CycleStage.CHECKING_READINESS, CycleStage.BLOCKED}:
             return CycleStage.RESEARCHING, None
-        if stage in {
+        governed_stages = {
             CycleStage.RESEARCHING,
             CycleStage.CREATIVE_STRATEGY,
             CycleStage.AWAITING_CONCEPT_APPROVAL,
             CycleStage.PRODUCTION_PLANNING,
             CycleStage.AWAITING_PRODUCTION_APPROVAL,
-        }:
+            CycleStage.GENERATING_MEDIA,
+            CycleStage.ASSEMBLING_FINAL_CREATIVE,
+            CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL,
+        }
+        if stage in governed_stages:
             if state.pipeline is None:
                 return None, "needs_recovery"
             resolution = self.pipeline_resolver.resolve(state.pipeline)
-            if resolution.action is PipelineAction.RUN_RESEARCH:
-                return None, "research"
-            if resolution.action is PipelineAction.RUN_CREATIVE:
-                if stage is CycleStage.RESEARCHING:
+            action = resolution.action
+            pipeline_stage = resolution.stage
+
+            # Keep the durable cycle's user-facing stage aligned, one legal step
+            # at a time, while the resolver remains the sole lifecycle authority.
+            if stage is CycleStage.RESEARCHING and pipeline_stage not in {
+                PipelineStage.RESEARCH,
+                PipelineStage.RESEARCH_RECOVERY,
+            }:
+                return CycleStage.CREATIVE_STRATEGY, None
+            if stage is CycleStage.CREATIVE_STRATEGY and pipeline_stage not in {
+                PipelineStage.CREATIVE,
+                PipelineStage.CREATIVE_RECOVERY,
+                PipelineStage.CREATIVE_AUTHORITY_REFRESH,
+                PipelineStage.CREATIVE_REVALIDATION,
+                PipelineStage.CREATIVE_RESTRATEGY,
+            }:
+                return CycleStage.AWAITING_CONCEPT_APPROVAL, None
+            if stage is CycleStage.CREATIVE_STRATEGY and action is PipelineAction.APPROVE_CREATIVE:
+                return CycleStage.AWAITING_CONCEPT_APPROVAL, None
+            if stage is CycleStage.AWAITING_CONCEPT_APPROVAL:
+                if (
+                    pipeline_stage
+                    in {
+                        PipelineStage.CREATIVE,
+                        PipelineStage.CREATIVE_RECOVERY,
+                        PipelineStage.CREATIVE_AUTHORITY_REFRESH,
+                        PipelineStage.CREATIVE_REVALIDATION,
+                        PipelineStage.CREATIVE_RESTRATEGY,
+                    }
+                    and action is not PipelineAction.APPROVE_CREATIVE
+                ):
                     return CycleStage.CREATIVE_STRATEGY, None
-                return None, "creative"
-            if resolution.action is PipelineAction.RUN_PRODUCER:
-                if stage is CycleStage.AWAITING_CONCEPT_APPROVAL:
+                if pipeline_stage in {
+                    PipelineStage.PRODUCER,
+                    PipelineStage.PRODUCER_RECOVERY,
+                    PipelineStage.PRODUCTION_PLAN_REVIEW,
+                    PipelineStage.READY_FOR_GENERATION,
+                    PipelineStage.MEDIA_GENERATION,
+                    PipelineStage.MEDIA_RECOVERY,
+                    PipelineStage.ASSEMBLY_INPUT,
+                    PipelineStage.ASSEMBLY,
+                    PipelineStage.ASSEMBLY_RECOVERY,
+                    PipelineStage.FINAL_CREATIVE_REVIEW,
+                    PipelineStage.FINAL_CREATIVE_READY,
+                }:
                     return CycleStage.PRODUCTION_PLANNING, None
-                return None, "producer"
-            if resolution.action in {
-                PipelineAction.WAIT_FOR_RESEARCH,
-                PipelineAction.WAIT_FOR_CREATIVE,
-                PipelineAction.WAIT_FOR_PRODUCER,
+            if stage is CycleStage.PRODUCTION_PLANNING and pipeline_stage not in {
+                PipelineStage.PRODUCER,
+                PipelineStage.PRODUCER_RECOVERY,
+            }:
+                return CycleStage.AWAITING_PRODUCTION_APPROVAL, None
+            if stage is CycleStage.AWAITING_PRODUCTION_APPROVAL and pipeline_stage in {
+                PipelineStage.READY_FOR_GENERATION,
+                PipelineStage.MEDIA_GENERATION,
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineStage.ASSEMBLY_INPUT,
+                PipelineStage.ASSEMBLY,
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineStage.FINAL_CREATIVE_REVIEW,
+                PipelineStage.FINAL_CREATIVE_READY,
+            }:
+                return CycleStage.GENERATING_MEDIA, None
+            if stage is CycleStage.GENERATING_MEDIA and pipeline_stage in {
+                PipelineStage.ASSEMBLY_INPUT,
+                PipelineStage.ASSEMBLY,
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineStage.FINAL_CREATIVE_REVIEW,
+                PipelineStage.FINAL_CREATIVE_READY,
+            }:
+                return CycleStage.ASSEMBLING_FINAL_CREATIVE, None
+            if stage is CycleStage.ASSEMBLING_FINAL_CREATIVE and pipeline_stage in {
+                PipelineStage.FINAL_CREATIVE_REVIEW,
+                PipelineStage.FINAL_CREATIVE_READY,
+            }:
+                return CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL, None
+            if (
+                stage is CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL
+                and action is PipelineAction.FINAL_CREATIVE_READY
+            ):
+                return CycleStage.AWAITING_PUBLICATION_INPUT, None
+
+            behavior = EXECUTION_BEHAVIOR_REGISTRY[action].behavior
+            if behavior in {
+                PipelineExecutionBehavior.WAIT,
+                PipelineExecutionBehavior.HUMAN_GATE,
+                PipelineExecutionBehavior.TERMINAL,
             }:
                 return None, None
-            if resolution.action is PipelineAction.APPROVE_CREATIVE:
-                return (
-                    CycleStage.AWAITING_CONCEPT_APPROVAL
-                    if stage is not CycleStage.AWAITING_CONCEPT_APPROVAL
-                    else None,
-                    None,
-                )
-            if resolution.action is PipelineAction.REVIEW_PRODUCTION_PLAN:
-                return (
-                    CycleStage.AWAITING_PRODUCTION_APPROVAL
-                    if stage is not CycleStage.AWAITING_PRODUCTION_APPROVAL
-                    else None,
-                    None,
-                )
-            if resolution.action is PipelineAction.READY_FOR_GENERATION:
-                return CycleStage.GENERATING_MEDIA, None
-            if resolution.action in {
-                PipelineAction.RECONCILE_RESEARCH_OUTCOME,
-                PipelineAction.RECONCILE_CREATIVE_OUTCOME,
-                PipelineAction.RECONCILE_PRODUCER_OUTCOME,
-            }:
-                return None, "needs_recovery"
-            # Paid retries, authority revalidation, and restrategy require an
-            # explicit operator transition. Preserve the exact resolver action as
-            # the blocker instead of misclassifying them as ambiguous outcomes.
-            return None, f"operator:{resolution.action.value}"
-        if stage is CycleStage.GENERATING_MEDIA:
-            if state.generation_outcome_unknown:
-                return None, "needs_recovery"
-            if state.generation_failed:
-                return CycleStage.FAILED, None
-            if state.generation_complete:
-                return CycleStage.ASSEMBLING_FINAL_CREATIVE, None
-        if stage is CycleStage.ASSEMBLING_FINAL_CREATIVE:
-            if state.final_creative_id:
-                return CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL, None
-            if state.assembly_failed:
-                return CycleStage.FAILED, None
-            return None, "assembly"
-        if stage is CycleStage.AWAITING_FINAL_CREATIVE_APPROVAL and state.final_creative_approved:
-            return CycleStage.AWAITING_PUBLICATION_INPUT, None
+            # All executable and recovery actions are handled by the canonical
+            # PipelineActionExecutor/operator surface. The cycle never admits a
+            # duplicate AgentRun or invents an independent recovery transition.
+            return None, f"operator:{action.value}"
         if stage is CycleStage.AWAITING_PUBLICATION_INPUT and state.publication_draft_id:
             return CycleStage.AWAITING_PUBLICATION_APPROVAL, None
         if stage is CycleStage.AWAITING_PUBLICATION_APPROVAL and state.publication_approved:
@@ -725,21 +776,6 @@ class CreativeCycleService:
             existing = await uow.cycles.step(cycle.id, step_key)
         if existing is not None:
             return cycle
-        if action == "assembly" and state.production_plan_id and self.assembly is not None:
-            readiness = await self.assembly.readiness(context, state.production_plan_id)
-            if not readiness.ready:
-                return cycle
-            record = await self.assembly.create_plan(context, state.production_plan_id)
-            plan = record.plan
-            job = record.job
-            return await self._record_workflow_step(
-                context,
-                cycle,
-                step_key,
-                idempotency_key,
-                workflow_ref=f"assembly-job://{job.id}",
-                artifact_ref=f"assembly-plan://{plan.id}",
-            )
         if (
             action == "publishing"
             and state.publication_draft_id
@@ -770,37 +806,13 @@ class CreativeCycleService:
                 idempotency_key,
                 workflow_ref=f"publication-measurement://{state.publication_id}",
             )
-        # Reconciliation is performed by the durable workload, but every billed
-        # AgentRun is delegated from the human who explicitly started the cycle.
-        # Preserve the user as authority provenance; AgentRuntime records the
-        # workload that later claims and executes the run independently.
-        agent_context = replace(context, actor=Actor(ActorKind.USER, context.user_id))
+        # Research, Creative, Producer, and Assembly are admitted only through
+        # PipelineActionExecutor. Intelligence is outside the governed
+        # Product-to-FinalCreative boundary and retains its existing cycle path.
         run: AgentRun
-        if action == "research":
-            run = await self.agent_runtime.request_researcher(
-                agent_context, product_id=cycle.product_id, idempotency_key=idempotency_key
-            )
-            artifacts = replace(cycle.artifacts, research_run_id=run.id)
-        elif action == "creative":
-            run = await self.agent_runtime.request_creative_strategist(
-                agent_context,
-                product_id=cycle.product_id,
-                request=CreativeStrategyRequest(5, ChannelIntent.ORGANIC_SHORT_FORM),
-                idempotency_key=idempotency_key,
-                approved_experiment_proposal_id=cycle.source_experiment_proposal_id,
-            )
-            artifacts = replace(cycle.artifacts, creative_run_id=run.id)
-        elif action == "producer" and state.approved_concept_id:
-            run = await self.agent_runtime.request_producer(
-                agent_context,
-                concept_id=state.approved_concept_id,
-                request=ProductionPlanningRequest(),
-                idempotency_key=idempotency_key,
-            )
-            artifacts = replace(cycle.artifacts, producer_run_id=run.id)
-        elif action == "intelligence":
+        if action == "intelligence":
             run = await self.agent_runtime.request_intelligence(
-                agent_context, product_id=cycle.product_id, idempotency_key=idempotency_key
+                context, product_id=cycle.product_id, idempotency_key=idempotency_key
             )
             artifacts = replace(cycle.artifacts, intelligence_run_id=run.id)
         else:
@@ -869,13 +881,47 @@ class CreativeCycleService:
         target: CycleStage,
         state: CanonicalCycleState,
     ) -> CreativeCycle:
+        pipeline = state.pipeline
         artifacts = replace(
             cycle.artifacts,
-            research_snapshot_id=state.research_snapshot_id or cycle.artifacts.research_snapshot_id,
+            research_run_id=(
+                pipeline.research_run_id
+                if pipeline is not None
+                else cycle.artifacts.research_run_id
+            ),
+            research_snapshot_id=(
+                pipeline.research_snapshot_id
+                if pipeline is not None
+                else state.research_snapshot_id or cycle.artifacts.research_snapshot_id
+            ),
+            creative_run_id=(
+                pipeline.creative_run_id
+                if pipeline is not None
+                else cycle.artifacts.creative_run_id
+            ),
             creative_concept_set_id=state.concept_set_id or cycle.artifacts.creative_concept_set_id,
-            approved_concept_id=state.approved_concept_id or cycle.artifacts.approved_concept_id,
-            production_plan_id=state.production_plan_id or cycle.artifacts.production_plan_id,
-            final_creative_id=state.final_creative_id or cycle.artifacts.final_creative_id,
+            approved_concept_id=(
+                pipeline.concept_id
+                if pipeline is not None
+                else state.approved_concept_id or cycle.artifacts.approved_concept_id
+            ),
+            producer_run_id=(
+                pipeline.producer_run_id
+                if pipeline is not None
+                else state.producer_run.id
+                if state.producer_run is not None
+                else cycle.artifacts.producer_run_id
+            ),
+            production_plan_id=(
+                pipeline.production_plan_id
+                if pipeline is not None
+                else state.production_plan_id or cycle.artifacts.production_plan_id
+            ),
+            final_creative_id=(
+                pipeline.final_creative_id
+                if pipeline is not None
+                else state.final_creative_id or cycle.artifacts.final_creative_id
+            ),
             publication_draft_id=state.publication_draft_id or cycle.artifacts.publication_draft_id,
             publication_id=state.publication_id or cycle.artifacts.publication_id,
             performance_snapshot_id=state.performance_snapshot_id
