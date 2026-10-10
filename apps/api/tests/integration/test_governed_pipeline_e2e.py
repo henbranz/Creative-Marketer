@@ -345,7 +345,7 @@ async def _complete_approved_concept_to_final(
                 update(generation_jobs)
                 .where(generation_jobs.c.production_plan_id == review.production_plan_id)
                 .values(
-                    status=GenerationJobStatus.BLOCKED_SPEND_CAP.value,
+                    status=GenerationJobStatus.READY.value,
                     failure_code="LIVE_E2E_SPEND_CAP_REACHED",
                 )
             )
@@ -369,7 +369,7 @@ async def _complete_approved_concept_to_final(
 
         rolled_back = await production.list_jobs(context, review.production_plan_id)
         assert tuple(job.id for job in rolled_back) == original_ids
-        assert all(job.status is GenerationJobStatus.BLOCKED_SPEND_CAP for job in rolled_back)
+        assert all(job.status is GenerationJobStatus.READY for job in rolled_back)
         assert all(job.failure_code == "LIVE_E2E_SPEND_CAP_REACHED" for job in rolled_back)
         assert all(job.provider_operation_ref is None for job in rolled_back)
         assert all(job.actual_cost == job.unknown_cost == 0 for job in rolled_back)
