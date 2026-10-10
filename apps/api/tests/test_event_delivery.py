@@ -1,5 +1,6 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,assignment,index"
 
+import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ from creative_marketer.events.application import (
 )
 from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.events.domain import (
+    DomainEvent,
     EventContractError,
     EventIdConflict,
     EventScopeKind,
@@ -78,6 +80,34 @@ def event(*, ctx=None, event_id=None):
         )
         if event_id is None
         else replace(event(ctx=ctx), event_id=event_id)
+    )
+
+
+def media_retry_event(
+    *,
+    generation_job_ids: list[str] | None = None,
+    extra_payload: dict[str, object] | None = None,
+) -> DomainEvent:
+    ctx = context()
+    contracts = EventContractRegistry()
+    event_type = "production.media.retry_requested.v1"
+    payload: dict[str, object] = {
+        "production_plan_id": str(uuid4()),
+        "transition_id": str(uuid4()),
+        "generation_job_ids": generation_job_ids
+        if generation_job_ids is not None
+        else [str(uuid4()), str(uuid4())],
+    }
+    payload.update(extra_payload or {})
+    return tenant_event(
+        ctx,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=uuid4(),
+        occurred_at=NOW,
+        payload_schema_digest=contracts.schema_digest(event_type),
+        payload=payload,
     )
 
 
@@ -208,6 +238,79 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
     (tmp_path / "bad.json").write_text('{"type":"object"}')
     with pytest.raises(EventContractError):
         EventContractRegistry(Path(tmp_path))
+
+
+def test_frozen_array_payload_validates_as_canonical_json_array() -> None:
+    built = media_retry_event()
+
+    assert isinstance(built.payload["generation_job_ids"], tuple)
+    assert isinstance(built.semantic_envelope()["payload"]["generation_job_ids"], list)
+    EventContractRegistry().validate_event(built)
+
+
+@pytest.mark.parametrize(
+    ("job_ids", "extra_payload"),
+    [
+        ([], None),
+        (["not-a-uuid"], None),
+        (
+            [
+                "00000000-0000-0000-0000-000000000001",
+                "00000000-0000-0000-0000-000000000001",
+            ],
+            None,
+        ),
+        ([str(uuid4())], {"unexpected": "field"}),
+    ],
+)
+def test_media_retry_array_contract_still_rejects_invalid_payloads(job_ids, extra_payload) -> None:
+    with pytest.raises(EventContractError, match=r"invalid production\.media\.retry_requested\.v1"):
+        EventContractRegistry().validate_event(
+            media_retry_event(generation_job_ids=job_ids, extra_payload=extra_payload)
+        )
+
+
+def test_canonical_array_validation_is_generic_for_nested_arrays(tmp_path) -> None:
+    (tmp_path / "test.array.v1.json").write_text(
+        json.dumps(
+            {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "x-event-type": "test.array.v1",
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["groups"],
+                "properties": {
+                    "groups": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": ["values"],
+                            "properties": {
+                                "values": {"type": "array", "items": {"type": "integer"}}
+                            },
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    registry = EventContractRegistry(tmp_path)
+    ctx = context()
+    built = tenant_event(
+        ctx,
+        event_type="test.array.v1",
+        schema_version=1,
+        aggregate_type="test",
+        aggregate_id=uuid4(),
+        occurred_at=NOW,
+        payload_schema_digest=registry.schema_digest("test.array.v1"),
+        payload={"groups": [{"values": [1, 2]}]},
+    )
+
+    assert isinstance(built.payload["groups"], tuple)
+    registry.validate_event(built)
 
 
 def test_caused_event_requires_tenant_source_and_worker_fails_closed() -> None:

@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from creative_marketer.action_binding import NormalizedToolInput
+from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.identity.application.authentication import (
     Actor,
     ActorKind,
@@ -82,6 +83,12 @@ class Writer:
         self.values.append(value)
 
 
+class ContractValidatingWriter(Writer):
+    async def append(self, value) -> None:
+        EventContractRegistry().validate_event(value)
+        await super().append(value)
+
+
 class Repository:
     def __init__(self, record) -> None:
         self.record = record
@@ -136,7 +143,7 @@ class Uow:
     def __init__(self, repository) -> None:
         self.production = repository
         self.audit = Writer()
-        self.outbox = Writer()
+        self.outbox = ContractValidatingWriter()
         self.committed = False
         self.lock = asyncio.Lock()
 
@@ -266,6 +273,8 @@ async def test_spend_cap_recovery_reuses_jobs_reservations_and_is_idempotent() -
     ]
     assert len(retry_events) == 1
     assert retry_events[0].event_id == transition_id
+    assert isinstance(retry_events[0].payload["generation_job_ids"], tuple)
+    EventContractRegistry().validate_event(retry_events[0])
 
 
 @pytest.mark.asyncio

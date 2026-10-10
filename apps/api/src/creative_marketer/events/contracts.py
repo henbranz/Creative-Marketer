@@ -50,10 +50,11 @@ class EventContractRegistry:
         expected = self.schema_digest(event.event_type)
         if event.payload_schema_digest != expected:
             raise EventContractError("event payload schema digest does not match local contract")
+        payload = event.semantic_envelope()["payload"]
         errors = sorted(
             Draft202012Validator(
                 self._schemas[event.event_type], format_checker=Draft202012Validator.FORMAT_CHECKER
-            ).iter_errors(dict(event.payload)),
+            ).iter_errors(payload),
             key=lambda item: list(item.path),
         )
         if errors:

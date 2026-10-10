@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from decimal import Decimal
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import func, select, update
 
 from creative_marketer.agent_governance.application import ResolveActiveAgentVersion
 from creative_marketer.agent_runtime.application import (
@@ -28,6 +30,8 @@ from creative_marketer.catalog.asset_application import AssetService
 from creative_marketer.catalog.asset_domain import AssetKind, AssetRole, AssetStatus
 from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import CreativeDecisionState
+from creative_marketer.events.contracts import EventContractRegistry
+from creative_marketer.events.domain import EventContractError
 from creative_marketer.infrastructure.database.agent_governance_uow import (
     SqlAlchemyAgentRegistryUnitOfWorkFactory,
 )
@@ -44,6 +48,7 @@ from creative_marketer.infrastructure.database.creative_uow import (
     SqlAlchemyCreativeUnitOfWorkFactory,
 )
 from creative_marketer.infrastructure.database.engine import create_session_factory
+from creative_marketer.infrastructure.database.event_delivery_schema import outbox_events
 from creative_marketer.infrastructure.database.orchestration_uow import (
     SqlAlchemyOrchestrationUnitOfWorkFactory,
 )
@@ -54,9 +59,14 @@ from creative_marketer.infrastructure.database.production_authority import (
     MediaWorkloadIdentity,
     SqlAlchemyGenerationAuthority,
 )
+from creative_marketer.infrastructure.database.production_schema import (
+    generation_jobs,
+    media_budget_usage,
+)
 from creative_marketer.infrastructure.database.production_uow import (
     SqlAlchemyProductionUnitOfWorkFactory,
 )
+from creative_marketer.infrastructure.database.tool_execution_schema import tool_calls
 from creative_marketer.infrastructure.database.tool_execution_uow import (
     SqlAlchemyGatewayUnitOfWorkFactory,
 )
@@ -283,6 +293,9 @@ async def _complete_approved_concept_to_final(
     assembly,
     sessions,
     store,
+    exercise_spend_cap_recovery=False,
+    monkeypatch=None,
+    inspection_sessions=None,
 ):
     producer_action = await state.resolve_next_action(context, locator)
     assert producer_action.action is PipelineAction.RUN_PRODUCER
@@ -314,6 +327,113 @@ async def _complete_approved_concept_to_final(
     )
     media = await state.resolve_next_action(context, locator)
     assert media.action is PipelineAction.WAIT_FOR_MEDIA
+
+    if exercise_spend_cap_recovery:
+        assert monkeypatch is not None
+        assert inspection_sessions is not None
+        original_jobs = await production.list_jobs(context, review.production_plan_id)
+        original_ids = tuple(job.id for job in original_jobs)
+        original_reservations = tuple(job.reserved_cost for job in original_jobs)
+        async with inspection_sessions.begin() as session:
+            original_tool_call_count = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(tool_calls.c.tenant_id == context.tenant_id)
+            )
+        async with inspection_sessions.begin() as session:
+            await session.execute(
+                update(generation_jobs)
+                .where(generation_jobs.c.production_plan_id == review.production_plan_id)
+                .values(
+                    status=GenerationJobStatus.BLOCKED_SPEND_CAP.value,
+                    failure_code="LIVE_E2E_SPEND_CAP_REACHED",
+                )
+            )
+        production.live_spend_cap = Decimal("100")
+        transition_id = uuid4()
+        validate_event = EventContractRegistry.validate_event
+
+        def reject_retry_event(registry, candidate):
+            if candidate.event_type == "production.media.retry_requested.v1":
+                raise EventContractError("forced retry event validation failure")
+            return validate_event(registry, candidate)
+
+        monkeypatch.setattr(EventContractRegistry, "validate_event", reject_retry_event)
+        with pytest.raises(EventContractError, match="forced retry event validation failure"):
+            await production.retry_after_spend_cap_increase(
+                context,
+                review.production_plan_id,
+                transition_id=transition_id,
+            )
+        monkeypatch.setattr(EventContractRegistry, "validate_event", validate_event)
+
+        rolled_back = await production.list_jobs(context, review.production_plan_id)
+        assert tuple(job.id for job in rolled_back) == original_ids
+        assert all(job.status is GenerationJobStatus.BLOCKED_SPEND_CAP for job in rolled_back)
+        assert all(job.failure_code == "LIVE_E2E_SPEND_CAP_REACHED" for job in rolled_back)
+        assert all(job.provider_operation_ref is None for job in rolled_back)
+        assert all(job.actual_cost == job.unknown_cost == 0 for job in rolled_back)
+        async with inspection_sessions.begin() as session:
+            retry_event_count = await session.scalar(
+                select(func.count())
+                .select_from(outbox_events)
+                .where(
+                    outbox_events.c.aggregate_id == review.production_plan_id,
+                    outbox_events.c.event_type == "production.media.retry_requested.v1",
+                )
+            )
+            reservation_count = await session.scalar(
+                select(func.count())
+                .select_from(media_budget_usage)
+                .where(
+                    media_budget_usage.c.generation_job_id.in_(original_ids),
+                    media_budget_usage.c.entry_kind == "RESERVED",
+                )
+            )
+            tool_call_count = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(tool_calls.c.tenant_id == context.tenant_id)
+            )
+        assert retry_event_count == 0
+        assert reservation_count == len(original_ids)
+        assert tool_call_count == original_tool_call_count
+
+        requeued = await production.retry_after_spend_cap_increase(
+            context,
+            review.production_plan_id,
+            transition_id=transition_id,
+        )
+        assert tuple(job.id for job in requeued) == original_ids
+        assert tuple(job.reserved_cost for job in requeued) == original_reservations
+        assert all(job.provider_operation_ref is None for job in requeued)
+        after_retry = await state.resolve_next_action(context, locator)
+        assert after_retry.action is PipelineAction.WAIT_FOR_MEDIA
+        async with inspection_sessions.begin() as session:
+            retry_event_count = await session.scalar(
+                select(func.count())
+                .select_from(outbox_events)
+                .where(
+                    outbox_events.c.aggregate_id == review.production_plan_id,
+                    outbox_events.c.event_type == "production.media.retry_requested.v1",
+                )
+            )
+            reservation_count = await session.scalar(
+                select(func.count())
+                .select_from(media_budget_usage)
+                .where(
+                    media_budget_usage.c.generation_job_id.in_(original_ids),
+                    media_budget_usage.c.entry_kind == "RESERVED",
+                )
+            )
+            tool_call_count = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(tool_calls.c.tenant_id == context.tenant_id)
+            )
+        assert retry_event_count == 1
+        assert reservation_count == len(original_ids)
+        assert tool_call_count == original_tool_call_count
 
     jobs = await production.list_jobs(context, review.production_plan_id)
     media_executor = await _media_executor(sessions, store)
@@ -501,6 +621,9 @@ async def test_database_backed_governed_pipeline_reaches_persisted_final_creativ
         assembly=assembly,
         sessions=sessions,
         store=store,
+        exercise_spend_cap_recovery=True,
+        monkeypatch=monkeypatch,
+        inspection_sessions=create_session_factory(admin_database_url),
     )
 
 

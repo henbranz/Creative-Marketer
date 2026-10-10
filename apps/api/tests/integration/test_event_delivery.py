@@ -24,7 +24,12 @@ from creative_marketer.events.application import (
     PublishOutboxBatch,
 )
 from creative_marketer.events.contracts import EventContractRegistry
-from creative_marketer.events.domain import DomainEvent, EventIdConflict, tenant_event_caused_by
+from creative_marketer.events.domain import (
+    DomainEvent,
+    EventIdConflict,
+    tenant_event,
+    tenant_event_caused_by,
+)
 from creative_marketer.identity.application.authentication import Actor, ActorKind
 from creative_marketer.infrastructure.database.approval_schema import (
     approval_decisions,
@@ -195,6 +200,75 @@ async def test_approval_state_audit_and_outbox_are_atomic(
                 await connection.scalar(select(func.count()).select_from(outbox_events))
                 == outbox_before
             )
+
+
+@pytest.mark.postgres
+@pytest.mark.asyncio
+async def test_array_event_persists_and_reloads_with_stable_digest(
+    admin_engine,
+    runtime_database_url,
+    publisher_database_url,
+    identity_stack,
+    agent_registry_factory,
+    tool_control_factory,
+    tool_runtime_factory,
+    permission_factory,
+    approval_factory,
+) -> None:
+    del admin_engine
+    ctx, _permission, _request_value = await _request(
+        identity_stack,
+        agent_registry_factory,
+        tool_control_factory,
+        tool_runtime_factory,
+        permission_factory,
+        approval_factory,
+    )
+    registry = EventContractRegistry()
+    event_type = "production.media.retry_requested.v1"
+    plan_id, transition_id = uuid4(), uuid4()
+    job_ids = [uuid4(), uuid4()]
+    candidate = tenant_event(
+        ctx,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=plan_id,
+        occurred_at=NOW,
+        payload_schema_digest=registry.schema_digest(event_type),
+        payload={
+            "production_plan_id": str(plan_id),
+            "transition_id": str(transition_id),
+            "generation_job_ids": [str(value) for value in job_ids],
+        },
+        event_id=transition_id,
+    )
+    original_digest = candidate.event_digest
+    assert isinstance(candidate.payload["generation_job_ids"], tuple)
+
+    sessions = create_session_factory(runtime_database_url)
+    async with sessions.begin() as session:
+        await session.execute(
+            text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(ctx.tenant_id)},
+        )
+        await PostgresOutboxWriter(session, registry).append(candidate)
+
+    claimed = await PostgresPublisherStore(
+        create_session_factory(publisher_database_url)
+    ).claim_ready_types(
+        uuid4(),
+        event_types=(event_type,),
+        batch_size=10,
+        now=NOW + timedelta(seconds=1),
+        lease_duration=timedelta(seconds=30),
+    )
+    reloaded = next(item.event for item in claimed if item.event.event_id == transition_id)
+    assert reloaded.event_digest == original_digest
+    assert isinstance(reloaded.payload["generation_job_ids"], tuple)
+    reloaded_payload = reloaded.semantic_envelope()["payload"]
+    assert isinstance(reloaded_payload, dict)
+    assert reloaded_payload["generation_job_ids"] == [str(value) for value in job_ids]
 
 
 @pytest.mark.postgres
