@@ -52,6 +52,10 @@ class ProducerReplacementStart(Contract):
     transition_id: UUID
 
 
+class ProductionPlanRejectionRequest(Contract):
+    feedback: str = Field(min_length=10, max_length=1000)
+
+
 class ProductionShotResponse(Contract):
     id: UUID
     shot_key: str
@@ -99,6 +103,7 @@ class ProductionPlanResponse(Contract):
     estimated_max_video_cost: str
     estimated_total_cost: str
     currency: str
+    rejection_feedback: str | None
     created_at: datetime
 
 
@@ -180,6 +185,9 @@ def _plan(value: ProductionPlanRecord) -> ProductionPlanResponse:
         estimated_max_video_cost=str(plan.cost.estimated_max_video_cost),
         estimated_total_cost=str(plan.cost.estimated_total_cost),
         currency=plan.cost.currency,
+        rejection_feedback=(
+            value.decision.rejection_feedback if value.decision is not None else None
+        ),
         created_at=plan.created_at,
     )
 
@@ -312,10 +320,20 @@ def create_production_router(
             raise failure(error) from error
 
     async def decide(
-        plan_id: UUID, state: ProductionPlanDecisionState, ctx: ExecutionContext
+        plan_id: UUID,
+        state: ProductionPlanDecisionState,
+        ctx: ExecutionContext,
+        rejection_feedback: str | None = None,
     ) -> ProductionPlanResponse:
         try:
-            return _plan(await production_service.decide(ctx, plan_id, state))
+            return _plan(
+                await production_service.decide(
+                    ctx,
+                    plan_id,
+                    state,
+                    rejection_feedback,
+                )
+            )
         except ProductionError as error:
             raise failure(error) from error
 
@@ -327,8 +345,17 @@ def create_production_router(
         return await decide(plan_id, ProductionPlanDecisionState.APPROVED_FOR_GENERATION, ctx)
 
     @router.post("/production/plans/{plan_id}/reject", response_model=ProductionPlanResponse)
-    async def reject(plan_id: UUID, ctx: Context) -> ProductionPlanResponse:
-        return await decide(plan_id, ProductionPlanDecisionState.REJECTED, ctx)
+    async def reject(
+        plan_id: UUID,
+        request: ProductionPlanRejectionRequest,
+        ctx: Context,
+    ) -> ProductionPlanResponse:
+        return await decide(
+            plan_id,
+            ProductionPlanDecisionState.REJECTED,
+            ctx,
+            request.feedback,
+        )
 
     @router.get("/production/plans/{plan_id}/jobs", response_model=list[ProductionJobResponse])
     async def list_jobs(plan_id: UUID, ctx: Context) -> list[ProductionJobResponse]:

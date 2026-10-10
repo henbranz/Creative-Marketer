@@ -85,6 +85,7 @@ export interface ProductionPlan {
   estimated_max_video_cost: string;
   estimated_total_cost: string;
   currency: string;
+  rejection_feedback: string | null;
 }
 export interface ProductionJob {
   id: string;
@@ -751,9 +752,10 @@ export const catalogApi = {
         method: "POST",
       },
     ),
-  rejectProductionPlan: (session: Session, planId: string) =>
+  rejectProductionPlan: (session: Session, planId: string, feedback: string) =>
     request<ProductionPlan>(session, `/v1/production/plans/${planId}/reject`, {
       method: "POST",
+      body: JSON.stringify({ feedback }),
     }),
   listProductionJobs: (session: Session, planId: string) =>
     request<ProductionJob[]>(session, `/v1/production/plans/${planId}/jobs`),

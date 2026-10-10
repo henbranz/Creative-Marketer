@@ -1167,6 +1167,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/products/{product_id}/pipeline/execute-next": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Execute Next Pipeline Action */
+    post: operations["execute_next_pipeline_action_v1_products__product_id__pipeline_execute_next_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/products/{product_id}/pipeline/next-action": {
     parameters: {
       query?: never;
@@ -3084,6 +3101,29 @@ export interface components {
       /** Title */
       title: string | null;
     };
+    /** ExecuteNextPipelineActionRequest */
+    ExecuteNextPipelineActionRequest: {
+      /** Concept Id */
+      concept_id?: string | null;
+      /** Creative Revalidation Id */
+      creative_revalidation_id?: string | null;
+      /** Creative Run Id */
+      creative_run_id?: string | null;
+      expected_action: components["schemas"]["PipelineAction"];
+      /** Explicit Approval */
+      explicit_approval?: string | null;
+      /** Producer Run Id */
+      producer_run_id?: string | null;
+      /** Production Plan Id */
+      production_plan_id?: string | null;
+      /** Research Run Id */
+      research_run_id?: string | null;
+      /**
+       * Use Latest When Unbound
+       * @default true
+       */
+      use_latest_when_unbound: boolean;
+    };
     /** ExecutionContextResponse */
     ExecutionContextResponse: {
       /** Actor Kind */
@@ -3400,8 +3440,12 @@ export interface components {
     MediaKind: "IMAGE" | "VIDEO";
     /** NextPipelineActionResponse */
     NextPipelineActionResponse: {
+      /** Api Boundary */
+      api_boundary: string;
       /** Blocking Reason */
       blocking_reason: string | null;
+      /** Canonical Operation */
+      canonical_operation: string;
       /** Concept Id */
       concept_id: string | null;
       /** Creative Revalidation Id */
@@ -3410,6 +3454,7 @@ export interface components {
       creative_run_id: string | null;
       creative_state: components["schemas"]["CreativePipelineState"];
       current_stage: components["schemas"]["PipelineStage"];
+      execution_behavior: components["schemas"]["PipelineExecutionBehavior"];
       /** Human Approval Required */
       human_approval_required: boolean;
       next_action: components["schemas"]["PipelineAction"];
@@ -3495,9 +3540,46 @@ export interface components {
       | "RETRY_PRODUCER"
       | "RERUN_PRODUCER"
       | "RECONCILE_PRODUCER_OUTCOME"
+      | "ESCALATE_PRODUCER_INVALID_OUTPUT"
+      | "RECOVER_PRODUCER_INVARIANT"
       | "UPGRADE_PRODUCER_CONTRACT"
       | "REVIEW_PRODUCTION_PLAN"
       | "READY_FOR_GENERATION";
+    /**
+     * PipelineExecutionBehavior
+     * @description The only allowed execution disposition for a resolver-emitted action.
+     * @enum {string}
+     */
+    PipelineExecutionBehavior:
+      "EXECUTE" | "WAIT" | "HUMAN_GATE" | "RECOVERY_GATE" | "TERMINAL";
+    /**
+     * PipelineExecutionOutcome
+     * @enum {string}
+     */
+    PipelineExecutionOutcome:
+      | "EXECUTED"
+      | "WAITING"
+      | "HUMAN_ACTION_REQUIRED"
+      | "RECOVERY_REQUIRED"
+      | "COMPLETE";
+    /** PipelineExecutionResponse */
+    PipelineExecutionResponse: {
+      after: components["schemas"]["NextPipelineActionResponse"] | null;
+      /** Api Boundary */
+      api_boundary: string;
+      before: components["schemas"]["NextPipelineActionResponse"];
+      /** Canonical Operation */
+      canonical_operation: string;
+      execution_behavior: components["schemas"]["PipelineExecutionBehavior"];
+      locator: components["schemas"]["PipelineLocatorResponse"];
+      outcome: components["schemas"]["PipelineExecutionOutcome"];
+      /** Provider Execution Occurred */
+      provider_execution_occurred: boolean;
+      /** Resource Id */
+      resource_id: string | null;
+      /** Resource Type */
+      resource_type: string | null;
+    };
     /** PipelineLocatorRequest */
     PipelineLocatorRequest: {
       /** Concept Id */
@@ -3516,6 +3598,28 @@ export interface components {
        * Use Latest When Unbound
        * @default true
        */
+      use_latest_when_unbound: boolean;
+    };
+    /** PipelineLocatorResponse */
+    PipelineLocatorResponse: {
+      /** Concept Id */
+      concept_id: string | null;
+      /** Creative Revalidation Id */
+      creative_revalidation_id: string | null;
+      /** Creative Run Id */
+      creative_run_id: string | null;
+      /** Producer Run Id */
+      producer_run_id: string | null;
+      /**
+       * Product Id
+       * Format: uuid
+       */
+      product_id: string;
+      /** Production Plan Id */
+      production_plan_id: string | null;
+      /** Research Run Id */
+      research_run_id: string | null;
+      /** Use Latest When Unbound */
       use_latest_when_unbound: boolean;
     };
     /**
@@ -3548,7 +3652,9 @@ export interface components {
       | "FAILED_RESPONSE"
       | "OUTCOME_UNKNOWN"
       | "PRODUCTION_PLAN_INVALID"
+      | "CURRENT_CONTRACT_RETRY_EXHAUSTED"
       | "CONTRACT_UPGRADE_REQUIRED"
+      | "INVARIANT_VIOLATION"
       | "PRODUCTION_PLAN_REVIEW_REQUIRED"
       | "PRODUCTION_PLAN_REJECTED"
       | "APPROVED_FOR_GENERATION";
@@ -3809,6 +3915,11 @@ export interface components {
        */
       updated_at: string;
     };
+    /** ProductionPlanRejectionRequest */
+    ProductionPlanRejectionRequest: {
+      /** Feedback */
+      feedback: string;
+    };
     /** ProductionPlanResponse */
     ProductionPlanResponse: {
       /**
@@ -3849,6 +3960,8 @@ export interface components {
       manual_shot_count: number;
       /** Planning Cost */
       planning_cost: string;
+      /** Rejection Feedback */
+      rejection_feedback: string | null;
       /** Scenes */
       scenes: components["schemas"]["ProductionSceneResponse"][];
       /** Status */
@@ -6749,7 +6862,11 @@ export interface operations {
       };
       cookie?: never;
     };
-    requestBody?: never;
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ProductionPlanRejectionRequest"];
+      };
+    };
     responses: {
       /** @description Successful Response */
       200: {
@@ -7507,6 +7624,45 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["creative_marketer_api__measurement_routes__SnapshotResponse"][];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  execute_next_pipeline_action_v1_products__product_id__pipeline_execute_next_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        product_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExecuteNextPipelineActionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["PipelineExecutionResponse"];
         };
       };
       /** @description Validation Error */

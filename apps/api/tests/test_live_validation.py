@@ -62,6 +62,26 @@ async def test_live_cli_dispatches_explicit_creative_restrategy(monkeypatch) -> 
     assert called == [configured]
 
 
+@pytest.mark.asyncio
+async def test_live_cli_dispatches_canonical_next_with_optional_approval(monkeypatch) -> None:
+    configured = settings()
+    called = []
+
+    def next_action(value, approval):
+        called.append((value, approval))
+        return 0
+
+    monkeypatch.setattr(live, "Settings", lambda: configured)
+    monkeypatch.setattr(live.acceptance, "live_next", next_action)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["live_validation", "next", "--approval", "I_APPROVE_RUN_RESEARCH"],
+    )
+
+    assert await live._main() == 0
+    assert called == [(configured, "I_APPROVE_RUN_RESEARCH")]
+
+
 def test_live_api_requires_acknowledgement_product_and_local_identity(monkeypatch) -> None:
     settings = Settings(database_url=DATABASE)
     with pytest.raises(RuntimeError, match="ALLOW_BILLABLE_MEDIA"):
@@ -1263,6 +1283,202 @@ def test_live_e2e_without_checkpoint_inspects_latest_product_state(
     assert not store.path.exists()
     assert fake.calls[0][2]["use_latest_when_unbound"] is True
     assert "Next action: WAIT_FOR_RESEARCH" in capsys.readouterr().out
+
+
+def _operator_resolution(action: str, behavior: str, **changes):
+    value = {
+        "current_stage": "RESEARCH",
+        "next_action": action,
+        "execution_behavior": behavior,
+        "canonical_operation": "canonical_operation",
+        "api_boundary": "POST /v1/products/{product_id}/pipeline/execute-next",
+        "blocking_reason": None,
+        "provider_cost": behavior == "EXECUTE" and action != "REVALIDATE_CREATIVE",
+        "human_approval_required": behavior in {"EXECUTE", "HUMAN_GATE"},
+        "provider_execution_permitted": behavior == "EXECUTE",
+        "research_state": "NOT_STARTED",
+        "creative_state": "NOT_STARTED",
+        "producer_state": "NOT_STARTED",
+        "research_run_id": None,
+        "research_snapshot_id": None,
+        "creative_run_id": None,
+        "concept_id": None,
+        "creative_revalidation_id": None,
+        "producer_run_id": None,
+        "production_plan_id": None,
+    }
+    value.update(changes)
+    return value
+
+
+def test_live_next_paid_action_requires_exact_action_bound_approval_before_admission(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(store)
+    resolution = _operator_resolution("RUN_RESEARCH", "EXECUTE")
+    fake = FakeApi({("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): resolution})
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.live_next(settings(), store=store) == 3
+
+    assert len(fake.calls) == 1
+    assert "/pipeline/execute-next" not in fake.calls[0][1]
+    output = capsys.readouterr().out
+    assert "Maximum reserved exposure: 0.16 USD" in output
+    assert "APPROVAL=I_APPROVE_RUN_RESEARCH" in output
+    assert "no provider execution occurred" in output
+
+
+def test_live_next_wait_and_human_gates_are_side_effect_free(monkeypatch, tmp_path) -> None:
+    for behavior, action in (
+        ("WAIT", "WAIT_FOR_RESEARCH"),
+        ("HUMAN_GATE", "APPROVE_CREATIVE"),
+        ("RECOVERY_GATE", "RECONCILE_RESEARCH_OUTCOME"),
+    ):
+        store = acceptance.StateStore(tmp_path / f"{behavior}.json")
+        saved_state(store)
+        fake = FakeApi(
+            {
+                ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): (
+                    _operator_resolution(action, behavior)
+                )
+            }
+        )
+        monkeypatch.setattr(
+            acceptance,
+            "api_for",
+            lambda *_args, fake=fake, **_kwargs: fake,
+        )
+
+        assert acceptance.live_next(settings(), store=store) == 3
+        assert len(fake.calls) == 1
+
+
+def test_live_next_executes_free_revalidation_without_spend_authorization(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+    )
+    resolution = _operator_resolution(
+        "REVALIDATE_CREATIVE",
+        "EXECUTE",
+        current_stage="CREATIVE_REVALIDATION",
+        provider_cost=False,
+        human_approval_required=False,
+        provider_execution_permitted=False,
+        research_state="SUCCEEDED_CURRENT",
+        creative_state="STALE_RESEARCH",
+        research_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        concept_id=CONCEPT,
+    )
+    response = {
+        "outcome": "EXECUTED",
+        "execution_behavior": "EXECUTE",
+        "provider_execution_occurred": False,
+        "resource_type": "creative_concept_revalidation",
+        "resource_id": REVALIDATION,
+        "before": resolution,
+        "locator": {
+            "product_id": PRODUCT,
+            "research_run_id": RESEARCH,
+            "creative_run_id": CREATIVE,
+            "concept_id": CONCEPT,
+            "creative_revalidation_id": REVALIDATION,
+            "producer_run_id": None,
+            "production_plan_id": None,
+            "use_latest_when_unbound": False,
+        },
+    }
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): resolution,
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/execute-next"): response,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+    unapproved = Settings(database_url=DATABASE, live_e2e_product_id=PRODUCT)
+
+    assert acceptance.live_next(unapproved, store=store) == 0
+    assert store.load().creative_revalidation_id == REVALIDATION
+    assert fake.calls[-1][2]["expected_action"] == "REVALIDATE_CREATIVE"
+    assert fake.calls[-1][2]["explicit_approval"] is None
+
+
+def test_live_next_restrategy_preserves_history_and_clears_old_lineage(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+        production_plan_id=PLAN,
+    )
+    resolution = _operator_resolution(
+        "RESTRATEGIZE_CREATIVE",
+        "EXECUTE",
+        current_stage="CREATIVE_RESTRATEGY",
+        research_state="SUCCEEDED_CURRENT",
+        creative_state="REQUIRES_RESTRATEGY",
+        research_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+        production_plan_id=PLAN,
+    )
+    response = {
+        "outcome": "EXECUTED",
+        "execution_behavior": "EXECUTE",
+        "provider_execution_occurred": False,
+        "resource_type": "agent_run",
+        "resource_id": SUCCESSOR,
+        "before": resolution,
+        "locator": {
+            "product_id": PRODUCT,
+            "research_run_id": RESEARCH,
+            "creative_run_id": SUCCESSOR,
+            "concept_id": None,
+            "creative_revalidation_id": None,
+            "producer_run_id": None,
+            "production_plan_id": None,
+            "use_latest_when_unbound": False,
+        },
+    }
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): resolution,
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/execute-next"): response,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert (
+        acceptance.live_next(
+            settings(),
+            "I_APPROVE_RESTRATEGIZE_CREATIVE",
+            store,
+        )
+        == 0
+    )
+    state = store.load()
+    assert state.creative_run_id == SUCCESSOR
+    assert state.creative_history_run_ids == [CREATIVE]
+    assert state.creative_concept_id is None
+    assert state.creative_revalidation_id is None
+    assert state.producer_run_id is None
+    assert state.production_plan_id is None
+    assert fake.calls[-1][2]["explicit_approval"] == "I_APPROVE_RESTRATEGIZE_CREATIVE"
 
 
 def test_live_producer_replacement_requires_revalidation_after_research_refresh(

@@ -89,6 +89,7 @@ plan_decisions = _table(
     Column("image_pricing_version", String(128), nullable=False),
     Column("estimated_max_cost", Numeric(20, 6), nullable=False),
     Column("currency", String(3), nullable=False),
+    Column("rejection_feedback", String(1000)),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 generation_jobs = _table(

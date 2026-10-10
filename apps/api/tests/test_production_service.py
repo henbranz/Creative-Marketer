@@ -25,6 +25,7 @@ from creative_marketer.production.domain import (
     ProductionPermissionDenied,
     ProductionPlanDecisionState,
     ProductionPricingChanged,
+    ProductionRejectionFeedbackRequired,
 )
 from creative_marketer.production.execution import (
     ExecutableGeneration,
@@ -164,7 +165,10 @@ async def test_approval_binds_cost_routes_creates_jobs_and_is_idempotent() -> No
     )
     with pytest.raises(ProductionDecisionConflict):
         await service.decide(
-            context, repository.record.plan.id, ProductionPlanDecisionState.REJECTED
+            context,
+            repository.record.plan.id,
+            ProductionPlanDecisionState.REJECTED,
+            rejection_feedback="Use a shorter opening and one product shot.",
         )
 
 
@@ -563,12 +567,26 @@ async def test_production_service_not_found_rejection_and_pricing_drift() -> Non
     with pytest.raises(ProductionNotFound):
         await service.get_job(context, missing)
     with pytest.raises(ProductionNotFound):
-        await service.decide(context, missing, ProductionPlanDecisionState.REJECTED)
+        await service.decide(
+            context,
+            missing,
+            ProductionPlanDecisionState.REJECTED,
+            rejection_feedback="Use a shorter opening and one product shot.",
+        )
+
+    with pytest.raises(ProductionRejectionFeedbackRequired):
+        await service.decide(
+            context, repository.record.plan.id, ProductionPlanDecisionState.REJECTED
+        )
 
     rejected = await service.decide(
-        context, repository.record.plan.id, ProductionPlanDecisionState.REJECTED
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.REJECTED,
+        rejection_feedback="Use a shorter opening and one product shot.",
     )
     assert rejected.decision is not None and repository.jobs == ()
+    assert rejected.decision.rejection_feedback == "Use a shorter opening and one product shot."
     service, repository, _uow = service_fixture()
     repository.record = replace(
         repository.record,

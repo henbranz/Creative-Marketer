@@ -26,6 +26,7 @@ from creative_marketer.production.domain import (
 from creative_marketer_api.production_routes import (
     ProducerReplacementStart,
     ProducerRunStart,
+    ProductionPlanRejectionRequest,
     create_production_router,
 )
 
@@ -100,7 +101,7 @@ class ProductionService:
             raise self.error
         return self.record
 
-    async def decide(self, _context, plan_id, state):
+    async def decide(self, _context, plan_id, state, rejection_feedback=None):
         if self.error:
             raise self.error
         decision = ProductionPlanDecision(
@@ -115,6 +116,7 @@ class ProductionService:
             self.record.plan.cost.image_pricing_version,
             self.record.plan.cost.estimated_total_cost,
             "USD",
+            rejection_feedback=rejection_feedback,
         )
         return replace(self.record, decision=decision)
 
@@ -162,7 +164,9 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
         plan.id, context
     )
     rejected = await endpoint(value, "/v1/production/plans/{plan_id}/reject", "POST")(
-        plan.id, context
+        plan.id,
+        ProductionPlanRejectionRequest(feedback="Shorten the opening and use one product shot."),
+        context,
     )
     jobs = await endpoint(value, "/v1/production/plans/{plan_id}/jobs", "GET")(plan.id, context)
     job = await endpoint(value, "/v1/production/jobs/{job_id}", "GET")(
@@ -178,6 +182,7 @@ async def test_production_routes_expose_plan_review_and_jobs() -> None:
     assert listed[0].id == loaded.id == plan.id
     assert approved.status == ProductionPlanDecisionState.APPROVED_FOR_GENERATION.value
     assert rejected.status == ProductionPlanDecisionState.REJECTED.value
+    assert rejected.rejection_feedback == "Shorten the opening and use one product shot."
     assert jobs[0].id == job.id == production.jobs[0].id
 
 

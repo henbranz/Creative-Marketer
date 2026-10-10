@@ -982,6 +982,27 @@ class ProducerPreparation:
     revalidation: CreativeConceptRevalidation | None = None
 
 
+PRODUCER_CURRENT_CONTRACT_INVALID_ATTEMPT_LIMIT = 2
+
+
+def producer_current_contract_invalid_attempts(runs: tuple[AgentRun, ...], concept_id: UUID) -> int:
+    """Count authoritative invalid current-contract outputs for one exact Concept."""
+
+    return sum(
+        1
+        for run in runs
+        if run.agent_type == "producer"
+        and run.status is AgentRunStatus.FAILED
+        and run.output_contract_version == PRODUCTION_CONTRACT_VERSION
+        and run.failure_code in {"MODEL_INVALID_OUTPUT", "PRODUCTION_PLAN_INVALID"}
+        and run.provider_response_id is not None
+        and any(
+            item.get("kind") == "approved_concept" and item.get("id") == str(concept_id)
+            for item in run.input_context_refs
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class IntelligencePreparation:
     intelligence: ResolvedResearcher
@@ -1640,6 +1661,12 @@ def build_producer_model_context(
             "referenced_research_findings": [dict(item) for item in projection.research_findings],
             "provider_projection": projection_metadata,
         }
+        rejection_instruction = (
+            "Revise the rejected plan to address production_request.rejection_feedback exactly, "
+            "without changing Creative strategy or inventing new Product authority. "
+            if request.rejection_feedback is not None
+            else ""
+        )
         output_contract_version = preparation.producer.configuration.output_contract_version
         if output_contract_version == 1:
             output_task = (
@@ -1674,7 +1701,7 @@ def build_producer_model_context(
                 "one scene array item for every concept_scene_keys item, in the same order. Do not "
                 "emit scene keys, scene ordinals, shot parent scene keys, or shot ordinals; "
                 "trusted application code derives them from array position and frozen "
-                "concept_scene_keys. "
+                f"concept_scene_keys. {rejection_instruction}"
                 "Every scene must contain at least one shot. Product facts are authorized only by "
                 "exact entries in producer_product.approved_claims; Research findings explain "
                 "approved rationale but do not grant Product claim authority. Preserve supplied "
@@ -2599,6 +2626,14 @@ class AgentRunService:
             )
             if active is not None:
                 return active
+            invalid_attempts = producer_current_contract_invalid_attempts(
+                await uow.runs.list_for_product(preparation.approved.concept.product_id),
+                concept_id,
+            )
+            if invalid_attempts >= PRODUCER_CURRENT_CONTRACT_INVALID_ATTEMPT_LIMIT:
+                raise AgentRunNotReady(
+                    "current Producer contract invalid-output retry limit is exhausted"
+                )
             try:
                 planning, model_context = build_producer_model_context(preparation, request)
             except InvalidProducerProjection as error:
@@ -2689,6 +2724,11 @@ class AgentRunService:
                     "kind": "production_request",
                     "target_format": request.target_format,
                     "aspect_ratio": request.aspect_ratio,
+                    **(
+                        {"rejection_feedback": request.rejection_feedback}
+                        if request.rejection_feedback is not None
+                        else {}
+                    ),
                 },
                 {
                     "kind": "production_context",
@@ -2912,7 +2952,13 @@ class AgentRunService:
                     raise ValueError
                 concept_id = UUID(str(concept_ref["id"]))
                 request = ProductionPlanningRequest(
-                    str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
+                    str(request_ref["target_format"]),
+                    str(request_ref["aspect_ratio"]),
+                    (
+                        str(request_ref["rejection_feedback"])
+                        if request_ref.get("rejection_feedback") is not None
+                        else None
+                    ),
                 )
             except (KeyError, TypeError, ValueError):
                 raise ProducerReplacementNotAllowed(

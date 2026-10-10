@@ -10,6 +10,7 @@ from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import ChannelIntent, CreativeStrategyRequest
 from creative_marketer.identity.application.authentication import ExecutionContext
 from creative_marketer.production.domain import ProductionPlanningRequest
+from creative_marketer.production.service import ProductionService
 
 from .application import PipelineStateService
 from .domain import (
@@ -85,6 +86,7 @@ class PipelineActionExecutor:
     state: PipelineStateService
     agents: AgentRunService
     creative: CreativeService
+    production: ProductionService
 
     async def execute(
         self,
@@ -123,10 +125,20 @@ class PipelineActionExecutor:
                 f"explicit approval is required for {before.action.value}"
             )
 
-        transition_id = _transition_id(context, locator, before.action)
+        bound_locator = PipelineLocator(
+            locator.product_id,
+            before.research_run_id,
+            before.creative_run_id,
+            before.concept_id,
+            before.creative_revalidation_id,
+            before.producer_run_id,
+            before.production_plan_id,
+            False,
+        )
+        transition_id = _transition_id(context, bound_locator, before.action)
         resource_type, resource_id, updated = await self._execute(
             context,
-            locator,
+            bound_locator,
             before,
             transition_id,
         )
@@ -245,6 +257,16 @@ class PipelineActionExecutor:
             if before.producer_run_id is not None:
                 prior = await self.agents.get_run(context, before.producer_run_id)
                 production_request = self._producer_request(prior)
+            if action is PipelineAction.RERUN_PRODUCER and before.production_plan_id is not None:
+                plan = await self.production.get_plan(context, before.production_plan_id)
+                if plan.decision is None or plan.decision.rejection_feedback is None:
+                    raise PipelineExecutionInvariant(
+                        "rejected Production Plan rerun requires bounded human feedback"
+                    )
+                production_request = replace(
+                    production_request,
+                    rejection_feedback=plan.decision.rejection_feedback,
+                )
             run = await self.agents.request_producer(
                 context,
                 concept_id=before.concept_id,
@@ -307,6 +329,11 @@ class PipelineActionExecutor:
             return ProductionPlanningRequest(
                 str(reference["target_format"]),
                 str(reference["aspect_ratio"]),
+                (
+                    str(reference["rejection_feedback"])
+                    if reference.get("rejection_feedback") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ValueError):
             raise PipelineExecutionInvariant("Producer request provenance is invalid") from None

@@ -831,6 +831,7 @@ const productionPlan: ProductionPlan = {
   concept_id: creativeSet.concepts[0]!.id,
   strategy: "Preserve the approved hook and show the product.",
   status: "UNREVIEWED",
+  rejection_feedback: null,
   scenes: [
     {
       scene_key: "scene_one",
@@ -1678,6 +1679,20 @@ describe("Product Workspace", () => {
     );
     expect(screen.getAllByRole("button", { name: "Open Asset" })).toHaveLength(
       2,
+    );
+    fireEvent.change(
+      screen.getByLabelText("Rejection feedback for the next Producer plan"),
+      { target: { value: "Shorten the opening and use one product shot." } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Reject with feedback" }),
+    );
+    await waitFor(() =>
+      expect(catalogApi.rejectProductionPlan).toHaveBeenCalledWith(
+        expect.anything(),
+        productionPlan.id,
+        "Shorten the opening and use one product shot.",
+      ),
     );
     fireEvent.click(screen.getByRole("button", { name: "Approve & Generate" }));
     await waitFor(() =>

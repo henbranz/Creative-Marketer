@@ -29,7 +29,9 @@ from .domain import (
     ProductionPlan,
     ProductionPlanDecision,
     ProductionPlanDecisionState,
+    ProductionPlanningRequest,
     ProductionPricingChanged,
+    ProductionRejectionFeedbackRequired,
 )
 
 
@@ -117,9 +119,25 @@ class ProductionService:
         context: ExecutionContext,
         plan_id: UUID,
         state: ProductionPlanDecisionState,
+        rejection_feedback: str | None = None,
     ) -> ProductionPlanRecord:
         if not self._can_spend(context):
             raise ProductionPermissionDenied("production decisions require owner or admin")
+        if state is ProductionPlanDecisionState.REJECTED:
+            try:
+                ProductionPlanningRequest(rejection_feedback=rejection_feedback)
+            except ValueError:
+                raise ProductionRejectionFeedbackRequired(
+                    "bounded rejection feedback is required before a Producer rerun"
+                ) from None
+            if rejection_feedback is None:
+                raise ProductionRejectionFeedbackRequired(
+                    "bounded rejection feedback is required before a Producer rerun"
+                )
+        elif rejection_feedback is not None:
+            raise ProductionRejectionFeedbackRequired(
+                "rejection feedback is valid only for a rejected Production Plan"
+            )
         async with self.uow_factory(context.tenant_id) as uow:
             record = await uow.production.get_plan(plan_id, for_update=True)
             if record is None:
@@ -150,6 +168,7 @@ class ProductionService:
                 image.pricing_version,
                 plan.cost.estimated_total_cost,
                 plan.cost.currency,
+                rejection_feedback=rejection_feedback,
             )
             jobs = (
                 self._jobs(plan, video, image)
@@ -174,6 +193,9 @@ class ProductionService:
                             "estimated_max_cost": str(plan.cost.estimated_total_cost),
                             "currency": plan.cost.currency,
                             "generation_job_count": len(jobs),
+                            "rejection_feedback_length": (
+                                len(rejection_feedback) if rejection_feedback is not None else 0
+                            ),
                         }
                     ),
                 )

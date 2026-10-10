@@ -73,6 +73,10 @@ class ProductionDecisionConflict(ProductionError):
     code = "PRODUCTION_DECISION_CONFLICT"
 
 
+class ProductionRejectionFeedbackRequired(ProductionError):
+    code = "PRODUCTION_REJECTION_FEEDBACK_REQUIRED"
+
+
 class SourceStrategy(StrEnum):
     USE_EXISTING_ASSET = "USE_EXISTING_ASSET"
     GENERATE_IMAGE = "GENERATE_IMAGE"
@@ -174,10 +178,16 @@ class FrozenAssetReference:
 class ProductionPlanningRequest:
     target_format: str = "SHORT_FORM_VERTICAL_VIDEO"
     aspect_ratio: str = "9:16"
+    rejection_feedback: str | None = None
 
     def __post_init__(self) -> None:
         if self.target_format != "SHORT_FORM_VERTICAL_VIDEO" or self.aspect_ratio != "9:16":
             raise ValueError("V1 supports only 9:16 short-form vertical video")
+        if self.rejection_feedback is not None and (
+            self.rejection_feedback != self.rejection_feedback.strip()
+            or not 10 <= len(self.rejection_feedback) <= 1000
+        ):
+            raise ValueError("Production Plan rejection feedback must be 10-1000 characters")
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +243,11 @@ class ProductionPlanningContext:
             "request": {
                 "target_format": self.request.target_format,
                 "aspect_ratio": self.request.aspect_ratio,
+                **(
+                    {"rejection_feedback": self.request.rejection_feedback}
+                    if self.request.rejection_feedback is not None
+                    else {}
+                ),
             },
         }
         if self.creative_revalidation_id is not None:
@@ -518,10 +533,18 @@ class ProductionPlanDecision:
     currency: str
     id: UUID = field(default_factory=uuid4)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    rejection_feedback: str | None = None
 
     def __post_init__(self) -> None:
         if self.estimated_max_cost < 0 or not re.fullmatch(r"[A-Z]{3}", self.currency):
             raise ValueError("approval cost binding is invalid")
+        if (
+            self.state is ProductionPlanDecisionState.REJECTED
+            and self.rejection_feedback is not None
+        ):
+            ProductionPlanningRequest(rejection_feedback=self.rejection_feedback)
+        elif self.rejection_feedback is not None:
+            raise ValueError("approved Production Plan cannot include rejection feedback")
 
 
 @dataclass(frozen=True, slots=True)

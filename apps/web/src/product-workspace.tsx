@@ -2286,6 +2286,7 @@ function ProductionPanel({
   const [finalPreview, setFinalPreview] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [planRejectionFeedback, setPlanRejectionFeedback] = useState("");
   const refresh = useCallback(async () => {
     const [nextPlans, conceptSets, nextRuns] = await Promise.all([
       catalogApi.listProductionPlans(session, workspace.product.id),
@@ -2602,29 +2603,46 @@ function ProductionPanel({
             </small>
           </div>
           {workspace.product.can_edit && plan.status === "UNREVIEWED" && (
-            <div className="concept-actions">
-              <button
-                className="primary"
-                disabled={busy}
-                onClick={() =>
-                  void act(() =>
-                    catalogApi.approveProductionPlan(session, plan.id),
-                  )
-                }
-              >
-                Approve &amp; Generate
-              </button>
-              <button
-                className="secondary"
-                disabled={busy}
-                onClick={() =>
-                  void act(() =>
-                    catalogApi.rejectProductionPlan(session, plan.id),
-                  )
-                }
-              >
-                Reject
-              </button>
+            <div>
+              <label>
+                Rejection feedback for the next Producer plan
+                <textarea
+                  value={planRejectionFeedback}
+                  maxLength={1000}
+                  placeholder="Describe the exact bounded plan changes required (10–1000 characters)."
+                  onChange={(event) =>
+                    setPlanRejectionFeedback(event.target.value)
+                  }
+                />
+              </label>
+              <div className="concept-actions">
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(() =>
+                      catalogApi.approveProductionPlan(session, plan.id),
+                    )
+                  }
+                >
+                  Approve &amp; Generate
+                </button>
+                <button
+                  className="secondary"
+                  disabled={busy || planRejectionFeedback.trim().length < 10}
+                  onClick={() =>
+                    void act(() =>
+                      catalogApi.rejectProductionPlan(
+                        session,
+                        plan.id,
+                        planRejectionFeedback.trim(),
+                      ),
+                    )
+                  }
+                >
+                  Reject with feedback
+                </button>
+              </div>
             </div>
           )}
           <h3>Generation progress</h3>

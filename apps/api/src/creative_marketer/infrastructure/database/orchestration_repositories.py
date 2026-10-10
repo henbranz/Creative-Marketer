@@ -970,6 +970,7 @@ class SqlAlchemyOrchestrationRepository:
         producer_state = ProducerPipelineState.NOT_STARTED
         plan_id: UUID | None = None
         producer_authority_current = True
+        current_contract_invalid_attempts = 0
         if producer_run is not None:
             selected_concept_digest = await self.session.scalar(
                 select(concepts.c.semantic_digest).where(concepts.c.id == concept_id)
@@ -1026,6 +1027,28 @@ class SqlAlchemyOrchestrationRepository:
                     producer_run.output_contract_version,
                     PRODUCTION_CONTRACT_VERSION,
                 )
+                if producer_state is ProducerPipelineState.PRODUCTION_PLAN_INVALID:
+                    product_runs = await SqlAlchemyAgentRunRepository(
+                        self.session
+                    ).list_for_product(locator.product_id)
+                    current_contract_invalid_attempts = sum(
+                        1
+                        for candidate in product_runs
+                        if candidate.agent_type == "producer"
+                        and candidate.status.value == "FAILED"
+                        and candidate.output_contract_version == PRODUCTION_CONTRACT_VERSION
+                        and candidate.failure_code
+                        in {"MODEL_INVALID_OUTPUT", "PRODUCTION_PLAN_INVALID"}
+                        and candidate.provider_response_id is not None
+                        and (
+                            (candidate_concept := _run_input_ref(candidate, "approved_concept"))
+                            is not None
+                            and candidate_concept.get("id") == str(concept_id)
+                        )
+                    )
+                    if current_contract_invalid_attempts >= 2:
+                        producer_state = ProducerPipelineState.CURRENT_CONTRACT_RETRY_EXHAUSTED
+                        blocking_reason = "PRODUCER_CURRENT_CONTRACT_RETRY_LIMIT_REACHED"
             elif producer_run.status.value == "SUCCEEDED":
                 if not producer_authority_current:
                     producer_state = (
@@ -1052,7 +1075,7 @@ class SqlAlchemyOrchestrationRepository:
                         .one_or_none()
                     )
                     if plan is None:
-                        producer_state = ProducerPipelineState.SUCCEEDED
+                        producer_state = ProducerPipelineState.INVARIANT_VIOLATION
                         blocking_reason = "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN"
                     else:
                         plan_id = plan["id"]
@@ -1094,6 +1117,7 @@ class SqlAlchemyOrchestrationRepository:
             producer_run.id if producer_run else None,
             plan_id,
             blocking_reason,
+            current_contract_invalid_attempts,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

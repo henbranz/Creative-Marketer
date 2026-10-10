@@ -44,7 +44,9 @@ class ProducerPipelineState(StrEnum):
     FAILED_RESPONSE = "FAILED_RESPONSE"
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
     PRODUCTION_PLAN_INVALID = "PRODUCTION_PLAN_INVALID"
+    CURRENT_CONTRACT_RETRY_EXHAUSTED = "CURRENT_CONTRACT_RETRY_EXHAUSTED"
     CONTRACT_UPGRADE_REQUIRED = "CONTRACT_UPGRADE_REQUIRED"
+    INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
     PRODUCTION_PLAN_REVIEW_REQUIRED = "PRODUCTION_PLAN_REVIEW_REQUIRED"
     PRODUCTION_PLAN_REJECTED = "PRODUCTION_PLAN_REJECTED"
     APPROVED_FOR_GENERATION = "APPROVED_FOR_GENERATION"
@@ -85,6 +87,8 @@ class PipelineAction(StrEnum):
     RETRY_PRODUCER = "RETRY_PRODUCER"
     RERUN_PRODUCER = "RERUN_PRODUCER"
     RECONCILE_PRODUCER_OUTCOME = "RECONCILE_PRODUCER_OUTCOME"
+    ESCALATE_PRODUCER_INVALID_OUTPUT = "ESCALATE_PRODUCER_INVALID_OUTPUT"
+    RECOVER_PRODUCER_INVARIANT = "RECOVER_PRODUCER_INVARIANT"
     UPGRADE_PRODUCER_CONTRACT = "UPGRADE_PRODUCER_CONTRACT"
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
@@ -285,6 +289,18 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         explicit_approval_required=True,
         resulting_states=("Producer:OUTCOME_UNKNOWN", "Producer:FAILED"),
     ),
+    PipelineAction.ESCALATE_PRODUCER_INVALID_OUTPUT: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "diagnose_repeated_current_contract_invalid_output",
+        "operator Producer contract/prompt diagnostic boundary",
+        resulting_states=("Producer:CURRENT_CONTRACT_RETRY_EXHAUSTED",),
+    ),
+    PipelineAction.RECOVER_PRODUCER_INVARIANT: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_succeeded_producer_missing_plan",
+        "operator AgentRun materialization diagnostic boundary",
+        resulting_states=("Producer:INVARIANT_VIOLATION",),
+    ),
     PipelineAction.UPGRADE_PRODUCER_CONTRACT: _execution(
         PipelineExecutionBehavior.EXECUTE,
         "upgrade_producer_contract",
@@ -398,6 +414,11 @@ class PipelineObservation:
     producer_run_id: UUID | None = None
     production_plan_id: UUID | None = None
     blocking_reason: str | None = None
+    producer_current_contract_invalid_attempts: int = 0
+
+    def __post_init__(self) -> None:
+        if self.producer_current_contract_invalid_attempts < 0:
+            raise ValueError("Producer invalid attempt count cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -568,15 +589,25 @@ class PipelineStateResolver:
                 PipelineAction.RERUN_PRODUCER,
                 "PRODUCTION_PLAN_FAILED_CURRENT_CONTRACT_VALIDATION",
             ),
+            ProducerPipelineState.CURRENT_CONTRACT_RETRY_EXHAUSTED: (
+                PipelineStage.PRODUCER_RECOVERY,
+                PipelineAction.ESCALATE_PRODUCER_INVALID_OUTPUT,
+                "PRODUCER_CURRENT_CONTRACT_RETRY_LIMIT_REACHED",
+            ),
             ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.UPGRADE_PRODUCER_CONTRACT,
                 "PRODUCTION_PLAN_USED_HISTORICAL_CONTRACT",
             ),
+            ProducerPipelineState.INVARIANT_VIOLATION: (
+                PipelineStage.PRODUCER_RECOVERY,
+                PipelineAction.RECOVER_PRODUCER_INVARIANT,
+                "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN",
+            ),
             ProducerPipelineState.SUCCEEDED: (
-                PipelineStage.PRODUCTION_PLAN_REVIEW,
-                PipelineAction.REVIEW_PRODUCTION_PLAN,
-                "PRODUCTION_PLAN_REVIEW_REQUIRED",
+                PipelineStage.PRODUCER_RECOVERY,
+                PipelineAction.RECOVER_PRODUCER_INVARIANT,
+                "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN",
             ),
             ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED: (
                 PipelineStage.PRODUCTION_PLAN_REVIEW,

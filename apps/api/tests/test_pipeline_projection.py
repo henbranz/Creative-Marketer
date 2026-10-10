@@ -304,7 +304,7 @@ def _producer_refs(
             AgentRunStatus.SUCCEEDED,
             True,
             [None],
-            ProducerPipelineState.SUCCEEDED,
+            ProducerPipelineState.INVARIANT_VIOLATION,
             "PRODUCER_SUCCESS_MISSING_PRODUCTION_PLAN",
         ),
         (

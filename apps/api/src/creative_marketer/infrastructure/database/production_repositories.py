@@ -193,6 +193,7 @@ class SqlAlchemyProductionRepository:
                 d["currency"],
                 d["id"],
                 d["created_at"],
+                d["rejection_feedback"],
             )
         if concept_ref["digest"] != plan.context.concept_digest:
             raise ValueError("ProductionPlan Concept provenance mismatch")
@@ -238,6 +239,7 @@ class SqlAlchemyProductionRepository:
                 image_pricing_version=value.image_pricing_version,
                 estimated_max_cost=value.estimated_max_cost,
                 currency=value.currency,
+                rejection_feedback=value.rejection_feedback,
                 created_at=value.created_at,
             )
         )

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict
 
 from creative_marketer.agent_runtime.domain import AgentRuntimeError
 from creative_marketer.audit.identity import IdentityAuditService
+from creative_marketer.creative.domain import CreativeError
 from creative_marketer.identity.application.authentication import (
     AuthenticatedPrincipal,
     AuthenticationPort,
@@ -26,9 +27,15 @@ from creative_marketer.identity.application.identity_resolution import ResolveTe
 from creative_marketer.identity.application.ports import UnitOfWorkFactory
 from creative_marketer.orchestration.application import CreativeCycleService, PipelineStateService
 from creative_marketer.orchestration.domain import CreativeCycle, OrchestrationError
+from creative_marketer.orchestration.execution import (
+    PipelineActionExecutor,
+    PipelineExecutionOutcome,
+)
 from creative_marketer.orchestration.pipeline import (
+    EXECUTION_BEHAVIOR_REGISTRY,
     CreativePipelineState,
     PipelineAction,
+    PipelineExecutionBehavior,
     PipelineLocator,
     PipelineStage,
     ProducerPipelineState,
@@ -55,9 +62,28 @@ class PipelineLocatorRequest(Contract):
     use_latest_when_unbound: bool = True
 
 
+class ExecuteNextPipelineActionRequest(PipelineLocatorRequest):
+    expected_action: PipelineAction
+    explicit_approval: str | None = None
+
+
+class PipelineLocatorResponse(Contract):
+    product_id: UUID
+    research_run_id: UUID | None
+    creative_run_id: UUID | None
+    concept_id: UUID | None
+    creative_revalidation_id: UUID | None
+    producer_run_id: UUID | None
+    production_plan_id: UUID | None
+    use_latest_when_unbound: bool
+
+
 class NextPipelineActionResponse(Contract):
     current_stage: PipelineStage
     next_action: PipelineAction
+    execution_behavior: PipelineExecutionBehavior
+    canonical_operation: str
+    api_boundary: str
     blocking_reason: str | None
     provider_cost: bool
     human_approval_required: bool
@@ -72,6 +98,19 @@ class NextPipelineActionResponse(Contract):
     creative_revalidation_id: UUID | None
     producer_run_id: UUID | None
     production_plan_id: UUID | None
+
+
+class PipelineExecutionResponse(Contract):
+    outcome: PipelineExecutionOutcome
+    execution_behavior: PipelineExecutionBehavior
+    canonical_operation: str
+    api_boundary: str
+    provider_execution_occurred: bool
+    resource_type: str | None
+    resource_id: UUID | None
+    locator: PipelineLocatorResponse
+    before: NextPipelineActionResponse
+    after: NextPipelineActionResponse | None
 
 
 class RequirementResponse(Contract):
@@ -148,6 +187,57 @@ class CycleResponse(Contract):
     steps: list[StepResponse] = []
     timeline: list[TransitionResponse] = []
     supervisor_report: SupervisorReportResponse | None = None
+
+
+def _pipeline_locator(product_id: UUID, value: PipelineLocatorRequest) -> PipelineLocator:
+    return PipelineLocator(
+        product_id,
+        value.research_run_id,
+        value.creative_run_id,
+        value.concept_id,
+        value.creative_revalidation_id,
+        value.producer_run_id,
+        value.production_plan_id,
+        value.use_latest_when_unbound,
+    )
+
+
+def _pipeline_locator_response(value: PipelineLocator) -> PipelineLocatorResponse:
+    return PipelineLocatorResponse(
+        product_id=value.product_id,
+        research_run_id=value.research_run_id,
+        creative_run_id=value.creative_run_id,
+        concept_id=value.concept_id,
+        creative_revalidation_id=value.creative_revalidation_id,
+        producer_run_id=value.producer_run_id,
+        production_plan_id=value.production_plan_id,
+        use_latest_when_unbound=value.use_latest_when_unbound,
+    )
+
+
+def _next_pipeline_action_response(value: Any) -> NextPipelineActionResponse:
+    execution = EXECUTION_BEHAVIOR_REGISTRY[value.action]
+    return NextPipelineActionResponse(
+        current_stage=value.stage,
+        next_action=value.action,
+        execution_behavior=execution.behavior,
+        canonical_operation=execution.operation,
+        api_boundary=execution.api_boundary,
+        blocking_reason=value.blocking_reason,
+        provider_cost=value.costs_money,
+        human_approval_required=value.human_approval_required,
+        provider_execution_permitted=value.provider_execution_permitted,
+        research_state=value.research_state,
+        creative_state=value.creative_state,
+        producer_state=value.producer_state,
+        research_run_id=value.research_run_id,
+        research_snapshot_id=value.research_snapshot_id,
+        creative_run_id=value.creative_run_id,
+        concept_id=value.concept_id,
+        creative_revalidation_id=value.creative_revalidation_id,
+        producer_run_id=value.producer_run_id,
+        production_plan_id=value.production_plan_id,
+    )
 
 
 def _readiness(value: Any) -> ReadinessResponse:
@@ -244,6 +334,7 @@ def create_orchestration_router(
     identity_uow: UnitOfWorkFactory,
     service: CreativeCycleService,
     pipeline: PipelineStateService,
+    executor: PipelineActionExecutor,
     environment: str,
     audit: IdentityAuditService,
 ) -> APIRouter:
@@ -295,38 +386,43 @@ def create_orchestration_router(
         product_id: UUID, request: PipelineLocatorRequest, ctx: Context
     ) -> NextPipelineActionResponse:
         try:
-            value = await pipeline.resolve_next_action(
-                ctx,
-                PipelineLocator(
-                    product_id,
-                    request.research_run_id,
-                    request.creative_run_id,
-                    request.concept_id,
-                    request.creative_revalidation_id,
-                    request.producer_run_id,
-                    request.production_plan_id,
-                    request.use_latest_when_unbound,
-                ),
-            )
-            return NextPipelineActionResponse(
-                current_stage=value.stage,
-                next_action=value.action,
-                blocking_reason=value.blocking_reason,
-                provider_cost=value.costs_money,
-                human_approval_required=value.human_approval_required,
-                provider_execution_permitted=value.provider_execution_permitted,
-                research_state=value.research_state,
-                creative_state=value.creative_state,
-                producer_state=value.producer_state,
-                research_run_id=value.research_run_id,
-                research_snapshot_id=value.research_snapshot_id,
-                creative_run_id=value.creative_run_id,
-                concept_id=value.concept_id,
-                creative_revalidation_id=value.creative_revalidation_id,
-                producer_run_id=value.producer_run_id,
-                production_plan_id=value.production_plan_id,
+            return _next_pipeline_action_response(
+                await pipeline.resolve_next_action(ctx, _pipeline_locator(product_id, request))
             )
         except OrchestrationError as error:
+            raise problem(error) from error
+
+    @router.post(
+        "/products/{product_id}/pipeline/execute-next",
+        response_model=PipelineExecutionResponse,
+    )
+    async def execute_next_pipeline_action(
+        product_id: UUID,
+        request: ExecuteNextPipelineActionRequest,
+        ctx: Context,
+    ) -> PipelineExecutionResponse:
+        try:
+            value = await executor.execute(
+                ctx,
+                _pipeline_locator(product_id, request),
+                expected_action=request.expected_action,
+                explicit_approval=request.explicit_approval,
+            )
+            return PipelineExecutionResponse(
+                outcome=value.outcome,
+                execution_behavior=value.behavior,
+                canonical_operation=value.operation,
+                api_boundary=value.api_boundary,
+                provider_execution_occurred=value.provider_execution_occurred,
+                resource_type=value.resource_type,
+                resource_id=value.resource_id,
+                locator=_pipeline_locator_response(value.locator),
+                before=_next_pipeline_action_response(value.before),
+                after=(
+                    _next_pipeline_action_response(value.after) if value.after is not None else None
+                ),
+            )
+        except (OrchestrationError, AgentRuntimeError, CreativeError, ValueError) as error:
             raise problem(error) from error
 
     @router.post(

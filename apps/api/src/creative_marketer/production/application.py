@@ -325,7 +325,15 @@ def build_production_context(
         "research_snapshot_digest": current_research_snapshot_digest,
         "creative_decision_id": str(approved.decision.id),
         "selected_assets": [item.primitive() for item in selected],
-        "request": {"target_format": value.target_format, "aspect_ratio": value.aspect_ratio},
+        "request": {
+            "target_format": value.target_format,
+            "aspect_ratio": value.aspect_ratio,
+            **(
+                {"rejection_feedback": value.rejection_feedback}
+                if value.rejection_feedback is not None
+                else {}
+            ),
+        },
     }
     if revalidation_matches:
         assert revalidation is not None
@@ -389,6 +397,11 @@ def production_context_from_payload(
         ProductionPlanningRequest(
             str(request.get("target_format", "SHORT_FORM_VERTICAL_VIDEO")),
             str(request.get("aspect_ratio", "9:16")),
+            (
+                str(request["rejection_feedback"])
+                if request.get("rejection_feedback") is not None
+                else None
+            ),
         ),
         context_digest,
         (

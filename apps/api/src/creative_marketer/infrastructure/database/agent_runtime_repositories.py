@@ -3057,6 +3057,7 @@ class SqlAlchemyAgentRunRepository:
                     "production_request": {
                         "target_format": request_ref["target_format"],
                         "aspect_ratio": request_ref["aspect_ratio"],
+                        "rejection_feedback": request_ref.get("rejection_feedback"),
                     },
                     **(
                         {
@@ -3074,7 +3075,13 @@ class SqlAlchemyAgentRunRepository:
             planning, model = build_producer_model_context(
                 producer_preparation,
                 ProductionPlanningRequest(
-                    str(request_ref["target_format"]), str(request_ref["aspect_ratio"])
+                    str(request_ref["target_format"]),
+                    str(request_ref["aspect_ratio"]),
+                    (
+                        str(request_ref["rejection_feedback"])
+                        if request_ref.get("rejection_feedback") is not None
+                        else None
+                    ),
                 ),
                 frozen_context=frozen_context,
                 context_version=run.input_context_schema_version,

@@ -3017,6 +3017,105 @@
         "title": "EvidenceResponse",
         "type": "object"
       },
+      "ExecuteNextPipelineActionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id"
+          },
+          "creative_revalidation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Revalidation Id"
+          },
+          "creative_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Run Id"
+          },
+          "expected_action": {
+            "$ref": "#/components/schemas/PipelineAction"
+          },
+          "explicit_approval": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explicit Approval"
+          },
+          "producer_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer Run Id"
+          },
+          "production_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Plan Id"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
+          },
+          "use_latest_when_unbound": {
+            "default": true,
+            "title": "Use Latest When Unbound",
+            "type": "boolean"
+          }
+        },
+        "required": ["expected_action"],
+        "title": "ExecuteNextPipelineActionRequest",
+        "type": "object"
+      },
       "ExecutionContextResponse": {
         "properties": {
           "actor_kind": {
@@ -3875,6 +3974,10 @@
       "NextPipelineActionResponse": {
         "additionalProperties": false,
         "properties": {
+          "api_boundary": {
+            "title": "Api Boundary",
+            "type": "string"
+          },
           "blocking_reason": {
             "anyOf": [
               {
@@ -3885,6 +3988,10 @@
               }
             ],
             "title": "Blocking Reason"
+          },
+          "canonical_operation": {
+            "title": "Canonical Operation",
+            "type": "string"
           },
           "concept_id": {
             "anyOf": [
@@ -3927,6 +4034,9 @@
           },
           "current_stage": {
             "$ref": "#/components/schemas/PipelineStage"
+          },
+          "execution_behavior": {
+            "$ref": "#/components/schemas/PipelineExecutionBehavior"
           },
           "human_approval_required": {
             "title": "Human Approval Required",
@@ -4001,6 +4111,9 @@
         "required": [
           "current_stage",
           "next_action",
+          "execution_behavior",
+          "canonical_operation",
+          "api_boundary",
           "blocking_reason",
           "provider_cost",
           "human_approval_required",
@@ -4126,12 +4239,107 @@
           "RETRY_PRODUCER",
           "RERUN_PRODUCER",
           "RECONCILE_PRODUCER_OUTCOME",
+          "ESCALATE_PRODUCER_INVALID_OUTPUT",
+          "RECOVER_PRODUCER_INVARIANT",
           "UPGRADE_PRODUCER_CONTRACT",
           "REVIEW_PRODUCTION_PLAN",
           "READY_FOR_GENERATION"
         ],
         "title": "PipelineAction",
         "type": "string"
+      },
+      "PipelineExecutionBehavior": {
+        "description": "The only allowed execution disposition for a resolver-emitted action.",
+        "enum": ["EXECUTE", "WAIT", "HUMAN_GATE", "RECOVERY_GATE", "TERMINAL"],
+        "title": "PipelineExecutionBehavior",
+        "type": "string"
+      },
+      "PipelineExecutionOutcome": {
+        "enum": [
+          "EXECUTED",
+          "WAITING",
+          "HUMAN_ACTION_REQUIRED",
+          "RECOVERY_REQUIRED",
+          "COMPLETE"
+        ],
+        "title": "PipelineExecutionOutcome",
+        "type": "string"
+      },
+      "PipelineExecutionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NextPipelineActionResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "api_boundary": {
+            "title": "Api Boundary",
+            "type": "string"
+          },
+          "before": {
+            "$ref": "#/components/schemas/NextPipelineActionResponse"
+          },
+          "canonical_operation": {
+            "title": "Canonical Operation",
+            "type": "string"
+          },
+          "execution_behavior": {
+            "$ref": "#/components/schemas/PipelineExecutionBehavior"
+          },
+          "locator": {
+            "$ref": "#/components/schemas/PipelineLocatorResponse"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/PipelineExecutionOutcome"
+          },
+          "provider_execution_occurred": {
+            "title": "Provider Execution Occurred",
+            "type": "boolean"
+          },
+          "resource_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Id"
+          },
+          "resource_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resource Type"
+          }
+        },
+        "required": [
+          "outcome",
+          "execution_behavior",
+          "canonical_operation",
+          "api_boundary",
+          "provider_execution_occurred",
+          "resource_type",
+          "resource_id",
+          "locator",
+          "before",
+          "after"
+        ],
+        "title": "PipelineExecutionResponse",
+        "type": "object"
       },
       "PipelineLocatorRequest": {
         "additionalProperties": false,
@@ -4217,6 +4425,104 @@
         "title": "PipelineLocatorRequest",
         "type": "object"
       },
+      "PipelineLocatorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Concept Id"
+          },
+          "creative_revalidation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Revalidation Id"
+          },
+          "creative_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Run Id"
+          },
+          "producer_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Producer Run Id"
+          },
+          "product_id": {
+            "format": "uuid",
+            "title": "Product Id",
+            "type": "string"
+          },
+          "production_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Production Plan Id"
+          },
+          "research_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Research Run Id"
+          },
+          "use_latest_when_unbound": {
+            "title": "Use Latest When Unbound",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "product_id",
+          "research_run_id",
+          "creative_run_id",
+          "concept_id",
+          "creative_revalidation_id",
+          "producer_run_id",
+          "production_plan_id",
+          "use_latest_when_unbound"
+        ],
+        "title": "PipelineLocatorResponse",
+        "type": "object"
+      },
       "PipelineStage": {
         "enum": [
           "RESEARCH",
@@ -4245,7 +4551,9 @@
           "FAILED_RESPONSE",
           "OUTCOME_UNKNOWN",
           "PRODUCTION_PLAN_INVALID",
+          "CURRENT_CONTRACT_RETRY_EXHAUSTED",
           "CONTRACT_UPGRADE_REQUIRED",
+          "INVARIANT_VIOLATION",
           "PRODUCTION_PLAN_REVIEW_REQUIRED",
           "PRODUCTION_PLAN_REJECTED",
           "APPROVED_FOR_GENERATION"
@@ -4972,6 +5280,20 @@
         "title": "ProductionJobResponse",
         "type": "object"
       },
+      "ProductionPlanRejectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "feedback": {
+            "maxLength": 1000,
+            "minLength": 10,
+            "title": "Feedback",
+            "type": "string"
+          }
+        },
+        "required": ["feedback"],
+        "title": "ProductionPlanRejectionRequest",
+        "type": "object"
+      },
       "ProductionPlanResponse": {
         "additionalProperties": false,
         "properties": {
@@ -5034,6 +5356,17 @@
             "title": "Planning Cost",
             "type": "string"
           },
+          "rejection_feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Feedback"
+          },
           "scenes": {
             "items": {
               "$ref": "#/components/schemas/ProductionSceneResponse"
@@ -5071,6 +5404,7 @@
           "estimated_max_video_cost",
           "estimated_total_cost",
           "currency",
+          "rejection_feedback",
           "created_at"
         ],
         "title": "ProductionPlanResponse",
@@ -12326,6 +12660,16 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProductionPlanRejectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -14321,6 +14665,107 @@
         },
         "summary": "Product Performance",
         "tags": ["measurement"]
+      }
+    },
+    "/v1/products/{product_id}/pipeline/execute-next": {
+      "post": {
+        "operationId": "execute_next_pipeline_action_v1_products__product_id__pipeline_execute_next_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "product_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Product Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteNextPipelineActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineExecutionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Execute Next Pipeline Action",
+        "tags": ["orchestration"]
       }
     },
     "/v1/products/{product_id}/pipeline/next-action": {

@@ -25,15 +25,22 @@ from creative_marketer.orchestration.domain import (
     SupervisorContextManifest,
     SupervisorReport,
 )
+from creative_marketer.orchestration.execution import (
+    PipelineExecutionOutcome,
+    PipelineExecutionResult,
+)
 from creative_marketer.orchestration.pipeline import (
     CreativePipelineState,
     NextPipelineAction,
     PipelineAction,
+    PipelineExecutionBehavior,
+    PipelineLocator,
     PipelineStage,
     ProducerPipelineState,
     ResearchPipelineState,
 )
 from creative_marketer_api.orchestration_routes import (
+    ExecuteNextPipelineActionRequest,
     PipelineLocatorRequest,
     StartCycleRequest,
     create_orchestration_router,
@@ -144,18 +151,67 @@ class Service:
             ProducerPipelineState.NOT_STARTED,
         )
 
+    async def execute(
+        self,
+        _ctx,
+        locator,
+        *,
+        expected_action,
+        explicit_approval=None,
+    ):
+        self.reject()
+        assert expected_action is PipelineAction.RUN_RESEARCH
+        assert explicit_approval == "I_APPROVE_RUN_RESEARCH"
+        before = await self.resolve_next_action()
+        run_id = uuid4()
+        updated = PipelineLocator(locator.product_id, research_run_id=run_id)
+        after = replace(
+            before,
+            action=PipelineAction.WAIT_FOR_RESEARCH,
+            costs_money=False,
+            human_approval_required=False,
+            provider_execution_permitted=False,
+            research_state=ResearchPipelineState.PENDING,
+            research_run_id=run_id,
+        )
+        return PipelineExecutionResult(
+            PipelineExecutionOutcome.EXECUTED,
+            PipelineExecutionBehavior.EXECUTE,
+            "request_researcher",
+            "POST /v1/products/{product_id}/pipeline/execute-next",
+            before,
+            after,
+            updated,
+            "agent_run",
+            run_id,
+        )
+
 
 @pytest.mark.asyncio
 async def test_orchestration_handlers_render_full_cycle_and_safe_errors() -> None:
     ctx = context(uuid4())
     service = Service(ctx)
-    router = create_orchestration_router(None, None, service, service, "test", None)
+    router = create_orchestration_router(None, None, service, service, service, "test", None)
     product_id = service.cycle.product_id
     assert (await endpoint(router, "readiness")(product_id, ctx)).state == "READY"
     next_action = await endpoint(router, "next_pipeline_action")(
         product_id, PipelineLocatorRequest(), ctx
     )
     assert next_action.next_action == "RUN_RESEARCH"
+    assert next_action.execution_behavior == "EXECUTE"
+    executed = await endpoint(router, "execute_next_pipeline_action")(
+        product_id,
+        ExecuteNextPipelineActionRequest(
+            expected_action=PipelineAction.RUN_RESEARCH,
+            explicit_approval="I_APPROVE_RUN_RESEARCH",
+        ),
+        ctx,
+    )
+    assert executed.outcome == "EXECUTED"
+    assert executed.resource_type == "agent_run"
+    assert executed.after is not None
+    assert executed.after.next_action == "WAIT_FOR_RESEARCH"
+    assert executed.provider_execution_occurred is False
     started = await endpoint(router, "start")(product_id, StartCycleRequest(), ctx)
     assert started.provider_mode == "DEMO_FAKE"
     next_cycle = await endpoint(router, "start_from_experiment")(uuid4(), ctx)
@@ -199,7 +255,7 @@ async def test_orchestration_authentication_dependency_fails_closed(failure, sta
         async def authenticate(self, _credential):
             raise failure
 
-    router = create_orchestration_router(Authenticator(), None, None, None, "test", None)
+    router = create_orchestration_router(Authenticator(), None, None, None, None, "test", None)
     route = cast(
         APIRoute,
         next(route for route in router.routes if getattr(route, "name", None) == "readiness"),

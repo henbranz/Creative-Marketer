@@ -166,7 +166,7 @@ def test_creative_transition_matrix_covers_every_declared_state() -> None:
         (ProducerPipelineState.NOT_STARTED, PipelineAction.RUN_PRODUCER),
         (ProducerPipelineState.PENDING, PipelineAction.WAIT_FOR_PRODUCER),
         (ProducerPipelineState.RUNNING, PipelineAction.WAIT_FOR_PRODUCER),
-        (ProducerPipelineState.SUCCEEDED, PipelineAction.REVIEW_PRODUCTION_PLAN),
+        (ProducerPipelineState.SUCCEEDED, PipelineAction.RECOVER_PRODUCER_INVARIANT),
         (ProducerPipelineState.FAILED_NO_RESPONSE, PipelineAction.RETRY_PRODUCER),
         (ProducerPipelineState.FAILED_RESPONSE, PipelineAction.RERUN_PRODUCER),
         (
@@ -175,8 +175,16 @@ def test_creative_transition_matrix_covers_every_declared_state() -> None:
         ),
         (ProducerPipelineState.PRODUCTION_PLAN_INVALID, PipelineAction.RERUN_PRODUCER),
         (
+            ProducerPipelineState.CURRENT_CONTRACT_RETRY_EXHAUSTED,
+            PipelineAction.ESCALATE_PRODUCER_INVALID_OUTPUT,
+        ),
+        (
             ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED,
             PipelineAction.UPGRADE_PRODUCER_CONTRACT,
+        ),
+        (
+            ProducerPipelineState.INVARIANT_VIOLATION,
+            PipelineAction.RECOVER_PRODUCER_INVARIANT,
         ),
         (
             ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED,
@@ -216,7 +224,9 @@ def test_producer_transition_matrix_covers_every_declared_state() -> None:
         ProducerPipelineState.FAILED_RESPONSE,
         ProducerPipelineState.OUTCOME_UNKNOWN,
         ProducerPipelineState.PRODUCTION_PLAN_INVALID,
+        ProducerPipelineState.CURRENT_CONTRACT_RETRY_EXHAUSTED,
         ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED,
+        ProducerPipelineState.INVARIANT_VIOLATION,
         ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED,
         ProducerPipelineState.PRODUCTION_PLAN_REJECTED,
         ProducerPipelineState.APPROVED_FOR_GENERATION,

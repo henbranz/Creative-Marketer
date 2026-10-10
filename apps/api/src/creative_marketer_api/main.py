@@ -75,6 +75,7 @@ from creative_marketer.observability.logging import configure_structured_logging
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
 from creative_marketer.observability.runtime import ObservabilityRuntime
 from creative_marketer.orchestration.application import CreativeCycleService, PipelineStateService
+from creative_marketer.orchestration.execution import PipelineActionExecutor
 from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import MediaKind
 from creative_marketer.production.service import ProductionService
@@ -259,6 +260,12 @@ def create_app(
         ),
         telemetry,
     )
+    creative_service = CreativeService(creative_uow)
+    production_service = ProductionService(
+        production_uow,
+        initial_media_router(),
+        resolved_settings.production_max_plan_cost_usd,
+    )
     application.include_router(
         create_research_router(
             authenticator,
@@ -275,7 +282,7 @@ def create_app(
             authenticator,
             identity_uow,
             agent_service,
-            CreativeService(creative_uow),
+            creative_service,
             resolved_settings.app_env,
             resolved_identity_audit,
         )
@@ -285,11 +292,7 @@ def create_app(
             authenticator,
             identity_uow,
             agent_service,
-            ProductionService(
-                production_uow,
-                initial_media_router(),
-                resolved_settings.production_max_plan_cost_usd,
-            ),
+            production_service,
             resolved_settings.app_env,
             resolved_identity_audit,
             frozenset(
@@ -379,12 +382,14 @@ def create_app(
             resolved_identity_audit,
         )
     )
+    orchestration_uow = SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory)
+    pipeline_state = PipelineStateService(orchestration_uow)
     application.include_router(
         create_orchestration_router(
             authenticator,
             identity_uow,
             CreativeCycleService(
-                SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory),
+                orchestration_uow,
                 catalog_service,
                 agent_service,
                 assembly_service,
@@ -398,7 +403,13 @@ def create_app(
                 workflow_coordinator,
                 workflow_coordinator,
             ),
-            PipelineStateService(SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory)),
+            pipeline_state,
+            PipelineActionExecutor(
+                pipeline_state,
+                agent_service,
+                creative_service,
+                production_service,
+            ),
             resolved_settings.app_env,
             resolved_identity_audit,
         )

@@ -30,6 +30,9 @@ from creative_marketer.production.application import (
     initial_producer_route,
 )
 from creative_marketer_api.config import REPOSITORY_ROOT, Settings
+from scripts.bootstrap_creative_strategist import creative_strategist_configuration
+from scripts.bootstrap_producer import producer_configuration
+from scripts.bootstrap_researcher import researcher_configuration
 
 STATE_PATH = REPOSITORY_ROOT / ".creative-marketer" / "live-validation.json"
 SAFE_HTTP_DETAIL_MAX_LENGTH = 128
@@ -1204,21 +1207,177 @@ def resolve_live_pipeline(api: LocalApi, product: str, state: LiveState | None) 
     value = api.request(
         f"/v1/products/{product}/pipeline/next-action",
         method="POST",
-        body={
-            "research_run_id": state.researcher_run_id if state else None,
-            "creative_run_id": state.creative_run_id if state else None,
-            "concept_id": state.creative_concept_id if state else None,
-            "creative_revalidation_id": state.creative_revalidation_id if state else None,
-            "producer_run_id": state.producer_run_id if state else None,
-            "production_plan_id": state.production_plan_id if state else None,
-            # A checkpoint binds exact immutable lineage. Without one, inspect the
-            # product's latest canonical state instead of reporting a false start.
-            "use_latest_when_unbound": state is None,
-        },
+        body=_pipeline_locator_body(state),
     )
     if not isinstance(value, dict) or not isinstance(value.get("next_action"), str):
         raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
     return value
+
+
+def _pipeline_locator_body(state: LiveState | None) -> dict[str, Any]:
+    return {
+        "research_run_id": state.researcher_run_id if state else None,
+        "creative_run_id": state.creative_run_id if state else None,
+        "concept_id": state.creative_concept_id if state else None,
+        "creative_revalidation_id": state.creative_revalidation_id if state else None,
+        "producer_run_id": state.producer_run_id if state else None,
+        "production_plan_id": state.production_plan_id if state else None,
+        # A checkpoint binds exact immutable lineage. Without one, inspect the
+        # product's latest canonical state instead of reporting a false start.
+        "use_latest_when_unbound": state is None,
+    }
+
+
+def _paid_action_exposure(action: str) -> tuple[str, str, Decimal, str]:
+    if action in {"RUN_RESEARCH", "REFRESH_RESEARCH", "RERUN_RESEARCH"}:
+        route = initial_researcher_route()
+        budget = researcher_configuration().run_budget_policy
+    elif action in {
+        "RUN_CREATIVE",
+        "RERUN_CREATIVE",
+        "REPLACE_OUTPUT_LIMITED_CREATIVE",
+        "RESTRATEGIZE_CREATIVE",
+    }:
+        route = initial_creative_strategist_route()
+        budget = creative_strategist_configuration().run_budget_policy
+    elif action in {"RUN_PRODUCER", "RERUN_PRODUCER", "UPGRADE_PRODUCER_CONTRACT"}:
+        route = initial_producer_route()
+        budget = producer_configuration().run_budget_policy
+    else:
+        raise RuntimeError("LIVE_PIPELINE_PAID_ACTION_CONFIGURATION_MISSING")
+    return route.provider, route.model, budget.max_cost, budget.currency
+
+
+def _bind_execution_locator(
+    state: LiveState,
+    locator: dict[str, Any],
+    action: str,
+) -> None:
+    if valid_id(locator.get("product_id"), "product_id") != state.product_id:
+        raise RuntimeError("LIVE_PIPELINE_EXECUTION_PROVENANCE_MISMATCH")
+    values = {
+        "researcher_run_id": locator.get("research_run_id"),
+        "creative_run_id": locator.get("creative_run_id"),
+        "creative_concept_id": locator.get("concept_id"),
+        "creative_revalidation_id": locator.get("creative_revalidation_id"),
+        "producer_run_id": locator.get("producer_run_id"),
+        "production_plan_id": locator.get("production_plan_id"),
+    }
+    normalized = {
+        field: valid_id(value, field) if value is not None else None
+        for field, value in values.items()
+    }
+    new_research = normalized["researcher_run_id"]
+    if state.researcher_run_id is not None and new_research != state.researcher_run_id:
+        if action not in {"REFRESH_RESEARCH", "RERUN_RESEARCH"}:
+            raise RuntimeError("LIVE_PIPELINE_EXECUTION_PROVENANCE_MISMATCH")
+        if state.researcher_run_id not in state.researcher_history_run_ids:
+            state.researcher_history_run_ids.append(state.researcher_run_id)
+    new_creative = normalized["creative_run_id"]
+    if state.creative_run_id is not None and new_creative != state.creative_run_id:
+        if action not in {
+            "RERUN_CREATIVE",
+            "REPLACE_OUTPUT_LIMITED_CREATIVE",
+            "RESTRATEGIZE_CREATIVE",
+        }:
+            raise RuntimeError("LIVE_PIPELINE_EXECUTION_PROVENANCE_MISMATCH")
+        if state.creative_run_id not in state.creative_history_run_ids:
+            state.creative_history_run_ids.append(state.creative_run_id)
+    for field_name, value in normalized.items():
+        setattr(state, field_name, value)
+
+
+def live_next(
+    settings: Settings,
+    explicit_approval: str | None = None,
+    store: StateStore | None = None,
+) -> int:
+    """Resolve and execute only the one authoritative normal pipeline action."""
+
+    api = api_for(settings, paid=False)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved))
+    resolution = resolve_live_pipeline(api, product, state)
+    required = {
+        "current_stage",
+        "next_action",
+        "execution_behavior",
+        "canonical_operation",
+        "api_boundary",
+        "provider_cost",
+        "human_approval_required",
+        "provider_execution_permitted",
+    }
+    if not required.issubset(resolution):
+        raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
+    action = str(resolution["next_action"])
+    behavior = str(resolution["execution_behavior"])
+    print(f"Current stage: {resolution['current_stage']}")
+    print(f"Next action: {action}")
+    print(f"Behavior: {behavior}")
+    print(f"Blocking reason: {resolution.get('blocking_reason') or 'none'}")
+    print(f"Canonical operation: {resolution['canonical_operation']}")
+    print(f"Action surface: {resolution['api_boundary']}")
+    print(f"Provider cost: {'yes' if resolution['provider_cost'] else 'no'}")
+    print(f"Human approval required: {'yes' if resolution['human_approval_required'] else 'no'}")
+    print(
+        "Provider execution permitted: "
+        f"{'yes' if resolution['provider_execution_permitted'] else 'no'}"
+    )
+
+    if behavior != "EXECUTE":
+        if explicit_approval is not None:
+            raise RuntimeError("LIVE_PIPELINE_APPROVAL_NOT_APPLICABLE")
+        print("No transition was executed.")
+        return 0 if behavior == "TERMINAL" else 3
+
+    if resolution["provider_cost"]:
+        provider, model, maximum, currency = _paid_action_exposure(action)
+        print(f"Provider/model: {provider} / {model}")
+        print(f"Maximum reserved exposure: {maximum} {currency}")
+        print("Unresolved provider operation: no (authoritative resolver admitted EXECUTE)")
+        required_approval = f"I_APPROVE_{action}"
+        if explicit_approval is None:
+            print(f"Approval required: make live-next-approved APPROVAL={required_approval}")
+            print("No AgentRun was admitted and no provider execution occurred.")
+            return 3
+        if explicit_approval != required_approval:
+            raise RuntimeError("LIVE_PIPELINE_ACTION_APPROVAL_MISMATCH")
+        settings.require_live_spend_authorization()
+    elif explicit_approval is not None:
+        raise RuntimeError("LIVE_PIPELINE_APPROVAL_NOT_APPLICABLE")
+
+    body = _pipeline_locator_body(state)
+    body.update(
+        {
+            "expected_action": action,
+            "explicit_approval": explicit_approval,
+        }
+    )
+    result = api.request(
+        f"/v1/products/{product}/pipeline/execute-next",
+        method="POST",
+        body=body,
+    )
+    if (
+        not isinstance(result, dict)
+        or result.get("outcome") != "EXECUTED"
+        or result.get("execution_behavior") != "EXECUTE"
+        or result.get("provider_execution_occurred") is not False
+        or not isinstance(result.get("locator"), dict)
+        or not isinstance(result.get("before"), dict)
+        or result["before"].get("next_action") != action
+    ):
+        raise RuntimeError("LIVE_PIPELINE_EXECUTION_RESPONSE_INVALID")
+    _bind_execution_locator(state, result["locator"], action)
+    saved.save(state)
+    print(f"Transition admitted: {result.get('resource_type')} {result.get('resource_id')}")
+    if resolution["provider_cost"]:
+        print("A governed PENDING AgentRun was admitted; provider execution did not occur here.")
+    else:
+        print("The deterministic free transition completed; no provider execution occurred.")
+    return 0
 
 
 def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:

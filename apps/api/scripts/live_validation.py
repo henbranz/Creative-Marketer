@@ -128,12 +128,15 @@ async def _main() -> int:
             "producer-replace",
             "image-smoke",
             "seedance-smoke",
+            "next",
             "e2e",
             "reset",
             "status",
         ),
     )
-    command = parser.parse_args().command
+    parser.add_argument("--approval")
+    arguments = parser.parse_args()
+    command = arguments.command
     if command == "reset":
         return acceptance.reset_session()
     settings = Settings()
@@ -156,6 +159,8 @@ async def _main() -> int:
             return acceptance.media_smoke(settings, "IMAGE")
         if command == "seedance-smoke":
             return acceptance.media_smoke(settings, "VIDEO")
+        if command == "next":
+            return acceptance.live_next(settings, arguments.approval)
         if command == "status":
             return acceptance.session_status(settings)
         return acceptance.e2e(settings)

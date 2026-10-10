@@ -1,4 +1,4 @@
-.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap creative-strategist-bootstrap producer-bootstrap intelligence-bootstrap commerce-agent-bootstrap commerce-tools-bootstrap commerce-demo-bootstrap commerce-worker media-tools-bootstrap media-execution-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker orchestration-worker live-provider-preflight live-openai-smoke live-research-refresh live-creative-revalidate live-creative-restrategy live-creative-replace live-producer-replace live-image-smoke live-seedance-smoke live-e2e live-e2e-reset live-e2e-status production-worker assembly-worker demo-bootstrap openai-contract-audit openai-contract-gate openai-contract-gate-approved agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
+.PHONY: bootstrap env-init env-check dev-up dev-down db-migrate api-dev web-dev lint format-check typecheck test test-postgres temporal-up temporal-down temporal-test researcher-bootstrap creative-strategist-bootstrap producer-bootstrap intelligence-bootstrap commerce-agent-bootstrap commerce-tools-bootstrap commerce-demo-bootstrap commerce-worker media-tools-bootstrap media-execution-bootstrap social-tools-bootstrap social-demo-bootstrap measurement-demo-conversion agent-worker orchestration-worker live-provider-preflight live-openai-smoke live-research-refresh live-creative-revalidate live-creative-restrategy live-creative-replace live-producer-replace live-image-smoke live-seedance-smoke live-next live-next-approved live-e2e live-e2e-reset live-e2e-status pipeline-action-audit production-worker assembly-worker demo-bootstrap openai-contract-audit openai-contract-gate openai-contract-gate-approved agent-runs-stranded agent-run-abandon agent-run-rerun agent-run-reconcile-cost obsidian-setup obsidian-sync obsidian-rebuild obsidian-watch phase0-gate architecture-security build check
 
 bootstrap:
 	./scripts/bootstrap.sh
@@ -147,6 +147,13 @@ live-image-smoke:
 live-seedance-smoke:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation seedance-smoke
 
+live-next:
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation next
+
+live-next-approved:
+	@test -n "$(APPROVAL)" || (echo "APPROVAL is required" && exit 2)
+	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation next --approval "$(APPROVAL)"
+
 live-e2e:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation e2e
 
@@ -155,6 +162,9 @@ live-e2e-reset:
 
 live-e2e-status:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python -m scripts.live_validation status
+
+pipeline-action-audit:
+	cd apps/api && uv run python -m scripts.pipeline_operator_simulation
 
 researcher-live-smoke:
 	cd apps/api && uv run dotenv -f ../../.env run --no-override -- python scripts/researcher_live_smoke.py
