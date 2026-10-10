@@ -998,9 +998,13 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             ),
             {"job_id": video_job.id},
         )
-    # Simulate the immutable route tuple on a historical, pre-ModelArk record. The runtime
-    # role intentionally cannot rewrite approved plan decisions or generation jobs.
+    # Seed the immutable route tuple as if this record predated ModelArk. Production
+    # records cannot be rewritten by the runtime role, and the fixture restores the
+    # immutable trigger before exercising authority through the runtime connection.
     async with admin_engine.begin() as connection:
+        await connection.execute(
+            text("ALTER TABLE production.plan_decisions DISABLE TRIGGER protect_plan_decisions")
+        )
         await connection.execute(
             text(
                 "UPDATE production.plan_decisions SET video_route_version = :route, "
@@ -1024,6 +1028,9 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 "pricing": LEGACY_SEEDANCE_LAS_PRICING_VERSION,
                 "job_id": video_job.id,
             },
+        )
+        await connection.execute(
+            text("ALTER TABLE production.plan_decisions ENABLE TRIGGER protect_plan_decisions")
         )
     resumed_legacy_video = await authority.prepare(context.tenant_id, video_job.id, MediaKind.VIDEO)
     assert resumed_legacy_video.job.route_version == LEGACY_SEEDANCE_LAS_ROUTE_VERSION
