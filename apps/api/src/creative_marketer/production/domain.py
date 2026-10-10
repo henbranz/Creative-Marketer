@@ -65,6 +65,23 @@ class ProductionPermissionDenied(ProductionError):
     code = "PRODUCTION_PERMISSION_DENIED"
 
 
+@dataclass(frozen=True, slots=True)
+class MediaSpendRequirement:
+    configured_cap: Decimal
+    committed_product_spend: Decimal
+    reserved_media_amount: Decimal
+    minimum_required_cap: Decimal
+    currency: str = "USD"
+
+
+class ProductionSpendCapReached(ProductionPermissionDenied):
+    code = "LIVE_E2E_SPEND_CAP_REACHED"
+
+    def __init__(self, requirement: MediaSpendRequirement) -> None:
+        super().__init__("LIVE_E2E_MAX_USD spend cap reached")
+        self.requirement = requirement
+
+
 class ProductionNotFound(ProductionError):
     code = "PRODUCTION_NOT_FOUND"
 
@@ -136,6 +153,7 @@ class ProductionPlanDecisionState(StrEnum):
 class GenerationJobStatus(StrEnum):
     PENDING_APPROVAL = "PENDING_APPROVAL"
     READY = "READY"
+    BLOCKED_SPEND_CAP = "BLOCKED_SPEND_CAP"
     STARTING = "STARTING"
     PROCESSING = "PROCESSING"
     IMPORTING = "IMPORTING"
@@ -599,7 +617,11 @@ class GenerationJob:
     ) -> GenerationJob:
         allowed = {
             GenerationJobStatus.PENDING_APPROVAL: {GenerationJobStatus.READY},
-            GenerationJobStatus.READY: {GenerationJobStatus.STARTING},
+            GenerationJobStatus.READY: {
+                GenerationJobStatus.STARTING,
+                GenerationJobStatus.BLOCKED_SPEND_CAP,
+            },
+            GenerationJobStatus.BLOCKED_SPEND_CAP: {GenerationJobStatus.READY},
             GenerationJobStatus.STARTING: {
                 GenerationJobStatus.PROCESSING,
                 GenerationJobStatus.IMPORTING,

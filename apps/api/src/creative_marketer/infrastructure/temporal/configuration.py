@@ -30,6 +30,7 @@ GENERATION_RETRY_POLICY = RetryPolicy(
     backoff_coefficient=2.0,
     maximum_interval=timedelta(seconds=10),
     maximum_attempts=5,
+    non_retryable_error_types=["LIVE_E2E_SPEND_CAP_REACHED"],
 )
 RESEARCHER_RETRY_POLICY = RetryPolicy(
     initial_interval=timedelta(seconds=2),

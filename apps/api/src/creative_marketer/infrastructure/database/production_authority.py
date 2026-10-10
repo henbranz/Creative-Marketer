@@ -7,7 +7,7 @@ from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
 
-from sqlalchemy import case, func, insert, select, text, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from creative_marketer.agent_runtime.domain import canonical_digest
@@ -43,6 +43,7 @@ from creative_marketer.production.domain import (
     ProductionPlanDecisionState,
     ProductionPricingChanged,
     ProductionRightsChanged,
+    ProductionSpendCapReached,
 )
 from creative_marketer.production.execution import ExecutableGeneration
 from creative_marketer.production.media import MaterializedReference
@@ -58,9 +59,9 @@ from .production_schema import (
     generation_jobs,
     generation_segments,
     media_budget_usage,
-    production_plans,
     production_shots,
 )
+from .production_spend import product_media_spend_requirement
 from .schema import memberships, tenants, users
 
 
@@ -141,7 +142,6 @@ class SqlAlchemyGenerationAuthority:
                 or decision.estimated_max_cost != plan.cost.estimated_total_cost
             ):
                 raise ProductionPermissionDenied("ProductionPlan approval binding is stale")
-            await self._enforce_live_spend_cap(session, tenant_id, plan.product_id)
             route = initial_media_router().resolve(job.media_profile)
             expected_route = (
                 decision.image_route_version
@@ -207,6 +207,10 @@ class SqlAlchemyGenerationAuthority:
                 specification["quality"] = await self._image_quality(
                     session, plan.id, dict(segment)
                 )
+            # This is deliberately the final gate before an execution can reach
+            # Tool Gateway. All immutable authority is revalidated first.
+            if job.status is GenerationJobStatus.READY:
+                await self._enforce_live_spend_cap(session, tenant_id, plan.product_id)
             self._prepared[job.id] = _Prepared(tenant_id, context, requested_agent)
             return ExecutableGeneration(
                 job,
@@ -230,61 +234,80 @@ class SqlAlchemyGenerationAuthority:
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"live-e2e-spend:{tenant_id}:{product_id}"},
         )
-        model_amount = await session.scalar(
-            select(
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                agent_runs.c.status.in_(("SUCCEEDED", "FAILED")),
-                                agent_runs.c.estimated_cost,
-                            ),
-                            else_=agent_runs.c.reserved_cost,
-                        )
-                    ),
-                    0,
-                )
-            ).where(
-                agent_runs.c.tenant_id == tenant_id,
-                agent_runs.c.product_id == product_id,
-                agent_runs.c.currency == "USD",
-            )
+        requirement = await product_media_spend_requirement(
+            session, tenant_id, product_id, self._live_spend_cap
         )
-        media_amount = await session.scalar(
-            select(
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                generation_jobs.c.status == "SUCCEEDED",
-                                generation_jobs.c.actual_cost,
-                            ),
-                            (
-                                generation_jobs.c.status == "OUTCOME_UNKNOWN",
-                                generation_jobs.c.unknown_cost,
-                            ),
-                            (generation_jobs.c.status == "FAILED", Decimal(0)),
-                            else_=generation_jobs.c.reserved_cost,
-                        )
+        if requirement.committed_product_spend > requirement.configured_cap:
+            raise ProductionSpendCapReached(requirement)
+
+    async def spend_cap_blocked(self, tenant_id: UUID, job_id: UUID) -> None:
+        """Persist a safe pre-provider denial without releasing its reservation."""
+
+        async with self._factory() as session, session.begin():
+            await self._tenant(session, tenant_id)
+            repository = SqlAlchemyProductionRepository(session)
+            current = await repository.get_job(job_id)
+            if current is None or current.tenant_id != tenant_id:
+                raise ProductionNotFound("GenerationJob not found")
+            if current.status is GenerationJobStatus.BLOCKED_SPEND_CAP:
+                return
+            if (
+                current.status is not GenerationJobStatus.READY
+                or current.provider_operation_ref is not None
+                or current.actual_cost != 0
+                or current.unknown_cost != 0
+            ):
+                raise ProductionPermissionDenied(
+                    "GenerationJob is not safely blockable before provider execution"
+                )
+            plan_record = await repository.get_plan(current.production_plan_id)
+            if plan_record is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            context, requested_agent = await self._execution_context(
+                session, plan_record.plan.agent_run_id
+            )
+            changed = current.transition(
+                GenerationJobStatus.BLOCKED_SPEND_CAP,
+                failure_code=ProductionSpendCapReached.code,
+                executed_by_workload_id=self._workload.workload_id,
+            )
+            result = await session.execute(
+                update(generation_jobs)
+                .where(
+                    generation_jobs.c.id == job_id,
+                    generation_jobs.c.status == GenerationJobStatus.READY.value,
+                    generation_jobs.c.provider_operation_ref.is_(None),
+                    generation_jobs.c.actual_cost == 0,
+                    generation_jobs.c.unknown_cost == 0,
+                )
+                .values(
+                    status=changed.status.value,
+                    failure_code=changed.failure_code,
+                    executed_by_workload_id=changed.executed_by_workload_id,
+                    updated_at=changed.updated_at,
+                )
+            )
+            if result.rowcount != 1:  # type: ignore[attr-defined]
+                raise ProductionPermissionDenied("stale GenerationJob block transition rejected")
+            await PostgresAuditWriter(session).append(
+                tenant_audit(
+                    context,
+                    action="production.generation.blocked_spend_cap",
+                    outcome=AuditOutcome.FAILED,
+                    reason_code=ProductionSpendCapReached.code,
+                    resource_type="generation_job",
+                    resource_id=str(job_id),
+                    agent_definition_id=requested_agent,
+                    metadata=safe_metadata(
+                        {
+                            "status": GenerationJobStatus.BLOCKED_SPEND_CAP.value,
+                            "provider_operation_present": False,
+                            "actual_cost": "0",
+                            "unknown_cost": "0",
+                        }
                     ),
-                    0,
                 )
             )
-            .select_from(
-                generation_jobs.join(
-                    production_plans,
-                    generation_jobs.c.production_plan_id == production_plans.c.id,
-                )
-            )
-            .where(
-                generation_jobs.c.tenant_id == tenant_id,
-                production_plans.c.product_id == product_id,
-                generation_jobs.c.currency == "USD",
-            )
-        )
-        committed = Decimal(model_amount or 0) + Decimal(media_amount or 0)
-        if committed > self._live_spend_cap:
-            raise ProductionPermissionDenied("LIVE_E2E_MAX_USD spend cap reached")
 
     @staticmethod
     async def _tenant(session: AsyncSession, tenant_id: UUID) -> None:

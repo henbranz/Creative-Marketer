@@ -91,6 +91,45 @@ async def test_approved_plan_event_starts_ids_only_production_workflow() -> None
 
 
 @pytest.mark.asyncio
+async def test_retry_event_resolves_same_persisted_job_ids() -> None:
+    tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()
+    context = ExecutionContext(
+        tenant_id,
+        Actor(ActorKind.USER, user_id),
+        user_id,
+        MembershipRole.OWNER,
+        MembershipStatus.ACTIVE,
+        "test",
+        AuthenticationAssurance(datetime.now(UTC), "test", "mfa"),
+        uuid4(),
+    )
+    event_type = "production.media.retry_requested.v1"
+    transition_id = uuid4()
+    expected_image, expected_video = uuid4(), uuid4()
+    event = tenant_event(
+        context,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=plan_id,
+        occurred_at=datetime.now(UTC),
+        payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+        payload={
+            "production_plan_id": str(plan_id),
+            "transition_id": str(transition_id),
+            "generation_job_ids": [str(expected_image), str(expected_video)],
+        },
+        event_id=transition_id,
+    )
+    starter = Starter()
+    resolver = Resolver(expected_image, expected_video)
+    await StartMediaProductionWorkflow(starter, resolver)(event, object())  # type: ignore[arg-type]
+    request = starter.requests[0]
+    assert request.image_job_ids == (str(expected_image),)
+    assert request.video_job_ids == (str(expected_video),)
+
+
+@pytest.mark.asyncio
 async def test_production_bridge_rejects_event_identity_mismatch() -> None:
     starter, resolver = Starter(), Resolver(uuid4(), uuid4())
     tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()

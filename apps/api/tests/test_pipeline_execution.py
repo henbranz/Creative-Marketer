@@ -19,6 +19,7 @@ from creative_marketer.orchestration.pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
     AssemblyPipelineState,
     CreativePipelineState,
+    MediaPipelineState,
     NextPipelineAction,
     PipelineAction,
     PipelineLocator,
@@ -45,6 +46,7 @@ def action_state(
     assembly_plan_id=None,
     final_creative_id=None,
     assembly=AssemblyPipelineState.NOT_STARTED,
+    media=MediaPipelineState.NOT_OBSERVED,
 ) -> NextPipelineAction:
     definition = EXECUTION_BEHAVIOR_REGISTRY[action]
     return NextPipelineAction(
@@ -67,6 +69,7 @@ def action_state(
         assembly_plan_id=assembly_plan_id,
         final_creative_id=final_creative_id,
         assembly_state=assembly,
+        media_state=media,
     )
 
 
@@ -121,9 +124,14 @@ class Creative:
 class Production:
     def __init__(self, feedback: str | None = None) -> None:
         self.feedback = feedback
+        self.retry_calls: list[tuple[object, object]] = []
 
     async def get_plan(self, _context, _plan_id):
         return SimpleNamespace(decision=SimpleNamespace(rejection_feedback=self.feedback))
+
+    async def retry_after_spend_cap_increase(self, _context, plan_id, *, transition_id):
+        self.retry_calls.append((plan_id, transition_id))
+        return (SimpleNamespace(id=uuid4()),)
 
 
 class Assembly:
@@ -463,3 +471,45 @@ async def test_free_assembly_plan_creation_uses_exact_plan_and_never_calls_provi
     assert result.locator.assembly_plan_id == result.resource_id
     assert result.provider_execution_occurred is False
     assert not agents.calls
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_recovery_reuses_plan_and_requires_exact_approval() -> None:
+    ctx = context(uuid4())
+    plan_id = uuid4()
+    before = action_state(
+        PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.BLOCKED_SPEND_CAP,
+    )
+    after = action_state(
+        PipelineAction.WAIT_FOR_MEDIA,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY,
+    )
+    production = Production()
+    executor = PipelineActionExecutor(State(before, after), Agents(), Creative(), production)
+    with pytest.raises(PipelineApprovalRequired):
+        await executor.execute(
+            ctx,
+            PipelineLocator(uuid4()),
+            expected_action=PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
+        )
+    assert not production.retry_calls
+
+    result = await PipelineActionExecutor(
+        State(before, after), Agents(), Creative(), production
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
+        explicit_approval=pipeline_approval_phrase(
+            PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE
+        ),
+    )
+    assert production.retry_calls[0][0] == plan_id
+    assert result.resource_type == "production_plan"
+    assert result.resource_id == plan_id
+    assert result.provider_execution_occurred is False

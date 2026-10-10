@@ -44,6 +44,7 @@ from creative_marketer.orchestration.pipeline import (
     ProducerPipelineState,
     ResearchPipelineState,
 )
+from creative_marketer.production.domain import ProductionError
 
 
 class Contract(BaseModel):
@@ -85,6 +86,14 @@ class PipelineLocatorResponse(Contract):
     use_latest_when_unbound: bool
 
 
+class MediaSpendRequirementResponse(Contract):
+    configured_cap: str
+    committed_product_spend: str
+    reserved_media_amount: str
+    minimum_required_cap: str
+    currency: str
+
+
 class NextPipelineActionResponse(Contract):
     current_stage: PipelineStage
     next_action: PipelineAction
@@ -110,6 +119,7 @@ class NextPipelineActionResponse(Contract):
     production_plan_id: UUID | None
     assembly_plan_id: UUID | None
     final_creative_id: UUID | None
+    media_spend_requirement: MediaSpendRequirementResponse | None
 
 
 class PipelineExecutionResponse(Contract):
@@ -258,6 +268,17 @@ def _next_pipeline_action_response(value: Any) -> NextPipelineActionResponse:
         production_plan_id=value.production_plan_id,
         assembly_plan_id=value.assembly_plan_id,
         final_creative_id=value.final_creative_id,
+        media_spend_requirement=(
+            MediaSpendRequirementResponse(
+                configured_cap=str(value.media_spend_requirement.configured_cap),
+                committed_product_spend=str(value.media_spend_requirement.committed_product_spend),
+                reserved_media_amount=str(value.media_spend_requirement.reserved_media_amount),
+                minimum_required_cap=str(value.media_spend_requirement.minimum_required_cap),
+                currency=value.media_spend_requirement.currency,
+            )
+            if value.media_spend_requirement is not None
+            else None
+        ),
     )
 
 
@@ -443,7 +464,13 @@ def create_orchestration_router(
                     _next_pipeline_action_response(value.after) if value.after is not None else None
                 ),
             )
-        except (OrchestrationError, AgentRuntimeError, CreativeError, ValueError) as error:
+        except (
+            OrchestrationError,
+            AgentRuntimeError,
+            CreativeError,
+            ProductionError,
+            ValueError,
+        ) as error:
             raise problem(error) from error
 
     @router.post(

@@ -1,6 +1,7 @@
 from typing import Any
 
 from temporalio.client import Client, WorkflowExecutionStatus
+from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from creative_marketer.infrastructure.temporal.configuration import (
@@ -165,6 +166,8 @@ class TemporalMediaProductionWorkflowStarter:
                 request,
                 id=workflow_id,
                 task_queue=self._task_queue,
+                id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY,
+                id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
             )
         except WorkflowAlreadyStartedError:
             handle = self._client.get_workflow_handle(workflow_id)

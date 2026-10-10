@@ -8,6 +8,7 @@ from temporalio.exceptions import ApplicationError
 from creative_marketer.agent_runtime.application import AgentRunService
 from creative_marketer.agent_runtime.domain import AgentRunRecoveryRequired
 from creative_marketer.observability.ports import NullTelemetry, OperationalTelemetry
+from creative_marketer.production.domain import ProductionSpendCapReached
 from creative_marketer.tool_execution.application import ToolGateway
 from creative_marketer.tool_execution.domain import (
     GatewayResult,
@@ -351,7 +352,14 @@ class TemporalActivities:
             )
         # Correlation is carried for tracing only and never supplies authority.
         UUID(correlation_id)
-        return await self.production_jobs.execute(UUID(tenant_id), UUID(plan_id), UUID(job_id))
+        try:
+            return await self.production_jobs.execute(UUID(tenant_id), UUID(plan_id), UUID(job_id))
+        except ProductionSpendCapReached as error:
+            raise ApplicationError(
+                "live media spend cap reached before provider execution",
+                type=error.code,
+                non_retryable=True,
+            ) from error
 
     async def _generation_call(
         self,

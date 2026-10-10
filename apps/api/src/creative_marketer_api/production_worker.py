@@ -102,7 +102,12 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
             (
                 ConsumerRegistration(
                     "production-temporal-starter",
-                    frozenset({"production.plan.approved_for_generation.v1"}),
+                    frozenset(
+                        {
+                            "production.plan.approved_for_generation.v1",
+                            "production.media.retry_requested.v1",
+                        }
+                    ),
                     "v1",
                     handler,
                 ),
@@ -115,7 +120,10 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
         now = datetime.now(UTC)
         claimed = await publisher.claim_ready_types(
             worker_id,
-            event_types=("production.plan.approved_for_generation.v1",),
+            event_types=(
+                "production.plan.approved_for_generation.v1",
+                "production.media.retry_requested.v1",
+            ),
             batch_size=25,
             now=now,
             lease_duration=timedelta(seconds=30),

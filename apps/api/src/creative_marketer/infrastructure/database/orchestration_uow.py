@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import TracebackType
 from uuid import UUID
 
@@ -21,10 +22,18 @@ class SqlAlchemyOrchestrationUnitOfWork:
     audit: AuditWriter
     outbox: OutboxWriter
 
-    def __init__(self, factory: async_sessionmaker[AsyncSession], tenant_id: UUID) -> None:
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        tenant_id: UUID,
+        live_spend_cap: Decimal | None = None,
+        live_product_id: UUID | None = None,
+    ) -> None:
         self.factory, self.tenant_id = factory, tenant_id
         self.session: AsyncSession | None = None
         self.transaction: AsyncSessionTransaction | None = None
+        self.live_spend_cap = live_spend_cap
+        self.live_product_id = live_product_id
 
     async def __aenter__(self) -> "SqlAlchemyOrchestrationUnitOfWork":
         self.session = self.factory()
@@ -33,7 +42,11 @@ class SqlAlchemyOrchestrationUnitOfWork:
             text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
             {"tenant": str(self.tenant_id)},
         )
-        self.cycles = SqlAlchemyOrchestrationRepository(self.session)
+        self.cycles = SqlAlchemyOrchestrationRepository(
+            self.session,
+            live_spend_cap=self.live_spend_cap,
+            live_product_id=self.live_product_id,
+        )
         self.audit = PostgresAuditWriter(self.session)
         self.outbox = PostgresOutboxWriter(self.session)
         return self
@@ -56,8 +69,21 @@ class SqlAlchemyOrchestrationUnitOfWork:
 
 
 class SqlAlchemyOrchestrationUnitOfWorkFactory:
-    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        *,
+        live_spend_cap: Decimal | None = None,
+        live_product_id: UUID | None = None,
+    ) -> None:
         self.factory = factory
+        self.live_spend_cap = live_spend_cap
+        self.live_product_id = live_product_id
 
     def __call__(self, tenant_id: UUID) -> OrchestrationUnitOfWork:
-        return SqlAlchemyOrchestrationUnitOfWork(self.factory, tenant_id)
+        return SqlAlchemyOrchestrationUnitOfWork(
+            self.factory,
+            tenant_id,
+            self.live_spend_cap,
+            self.live_product_id,
+        )

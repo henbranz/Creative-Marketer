@@ -3468,11 +3468,25 @@ export interface components {
     MediaPipelineState:
       | "NOT_OBSERVED"
       | "READY"
+      | "BLOCKED_SPEND_CAP"
       | "RUNNING"
       | "SUCCEEDED"
       | "FAILED"
       | "OUTCOME_UNKNOWN"
       | "INVARIANT_VIOLATION";
+    /** MediaSpendRequirementResponse */
+    MediaSpendRequirementResponse: {
+      /** Committed Product Spend */
+      committed_product_spend: string;
+      /** Configured Cap */
+      configured_cap: string;
+      /** Currency */
+      currency: string;
+      /** Minimum Required Cap */
+      minimum_required_cap: string;
+      /** Reserved Media Amount */
+      reserved_media_amount: string;
+    };
     /** NextPipelineActionResponse */
     NextPipelineActionResponse: {
       /** Api Boundary */
@@ -3498,6 +3512,8 @@ export interface components {
       final_creative_state: components["schemas"]["FinalCreativePipelineState"];
       /** Human Approval Required */
       human_approval_required: boolean;
+      media_spend_requirement:
+        components["schemas"]["MediaSpendRequirementResponse"] | null;
       media_state: components["schemas"]["MediaPipelineState"];
       next_action: components["schemas"]["PipelineAction"];
       /** Producer Run Id */
@@ -3588,6 +3604,7 @@ export interface components {
       | "REVIEW_PRODUCTION_PLAN"
       | "READY_FOR_GENERATION"
       | "WAIT_FOR_MEDIA"
+      | "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
       | "RECOVER_MEDIA_FAILURE"
       | "RECONCILE_MEDIA_OUTCOME"
       | "RECOVER_MEDIA_INVARIANT"

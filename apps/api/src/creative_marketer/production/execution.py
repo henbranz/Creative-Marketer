@@ -28,7 +28,12 @@ from creative_marketer.tool_execution.domain import (
 from creative_marketer.tool_governance.domain import ResolvedToolVersion
 from creative_marketer.workflow_orchestration.contracts import MediaProductionJobResult
 
-from .domain import GenerationJob, GenerationJobStatus, MediaKind
+from .domain import (
+    GenerationJob,
+    GenerationJobStatus,
+    MediaKind,
+    ProductionSpendCapReached,
+)
 from .media import (
     ImageGenerationRequest,
     ImageProvider,
@@ -70,6 +75,7 @@ class GenerationAuthority(Protocol):
     async def succeeded(self, job_id: UUID, asset_id: UUID, actual_cost: Decimal) -> None: ...
     async def authorize_resource(self, tenant_id: UUID, job_id: UUID) -> None: ...
     async def current_job(self, tenant_id: UUID, job_id: UUID) -> GenerationJob: ...
+    async def spend_cap_blocked(self, tenant_id: UUID, job_id: UUID) -> None: ...
 
 
 class GeneratedAssetImporter(Protocol):
@@ -149,9 +155,14 @@ class GovernedProductionJobExecutor:
             GenerationJobStatus.SUCCEEDED,
             GenerationJobStatus.FAILED,
             GenerationJobStatus.OUTCOME_UNKNOWN,
+            GenerationJobStatus.BLOCKED_SPEND_CAP,
         }:
             return MediaProductionJobResult(str(job.id), job.status.value, job.failure_code)
-        execution = await self.authority.prepare(tenant_id, job_id, job.kind)
+        try:
+            execution = await self.authority.prepare(tenant_id, job_id, job.kind)
+        except ProductionSpendCapReached:
+            await self.authority.spend_cap_blocked(tenant_id, job_id)
+            raise
         if execution.initiating_context is None or execution.requested_agent_definition_id is None:
             raise ValueError("GenerationJob lacks authoritative invocation identity")
         tool_key = self._tool(job)

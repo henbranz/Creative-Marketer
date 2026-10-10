@@ -265,6 +265,8 @@ def create_app(
         production_uow,
         initial_media_router(),
         resolved_settings.production_max_plan_cost_usd,
+        resolved_settings.live_e2e_max_usd,
+        resolved_settings.live_e2e_product_id,
     )
     application.include_router(
         create_research_router(
@@ -382,7 +384,11 @@ def create_app(
             resolved_identity_audit,
         )
     )
-    orchestration_uow = SqlAlchemyOrchestrationUnitOfWorkFactory(session_factory)
+    orchestration_uow = SqlAlchemyOrchestrationUnitOfWorkFactory(
+        session_factory,
+        live_spend_cap=resolved_settings.live_e2e_max_usd,
+        live_product_id=resolved_settings.live_e2e_product_id,
+    )
     pipeline_state = PipelineStateService(orchestration_uow)
     application.include_router(
         create_orchestration_router(

@@ -99,6 +99,7 @@ class LiveState:
     video_job_ids: list[str] = field(default_factory=list)
     assembly_plan_id: str | None = None
     final_creative_id: str | None = None
+    pending_media_recovery_action: str | None = None
 
 
 FIELDS = set(LiveState.__dataclass_fields__)
@@ -106,8 +107,14 @@ FIELDS_V1 = FIELDS - {
     "creative_history_run_ids",
     "researcher_history_run_ids",
     "creative_revalidation_id",
+    "pending_media_recovery_action",
 }
-FIELDS_V2 = FIELDS - {"researcher_history_run_ids", "creative_revalidation_id"}
+FIELDS_V2 = FIELDS - {
+    "researcher_history_run_ids",
+    "creative_revalidation_id",
+    "pending_media_recovery_action",
+}
+FIELDS_V3 = FIELDS - {"pending_media_recovery_action"}
 OPTIONAL_IDS = FIELDS - {
     "version",
     "session_id",
@@ -117,6 +124,7 @@ OPTIONAL_IDS = FIELDS - {
     "video_job_ids",
     "creative_history_run_ids",
     "researcher_history_run_ids",
+    "pending_media_recovery_action",
 }
 
 
@@ -143,17 +151,22 @@ class StateStore:
         if not isinstance(raw, dict):
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
         if set(raw) == FIELDS_V1 and raw.get("version") == 1:
-            raw["version"] = 3
+            raw["version"] = 4
             raw["creative_history_run_ids"] = []
             raw["researcher_history_run_ids"] = []
             raw["creative_revalidation_id"] = None
+            raw["pending_media_recovery_action"] = None
         elif set(raw) == FIELDS_V2 and raw.get("version") in {1, 2}:
-            raw["version"] = 3
+            raw["version"] = 4
             raw["researcher_history_run_ids"] = []
             raw["creative_revalidation_id"] = None
-        elif set(raw) == FIELDS and raw.get("version") in {1, 2}:
-            raw["version"] = 3
-        elif set(raw) != FIELDS or raw.get("version") != 3:
+            raw["pending_media_recovery_action"] = None
+        elif set(raw) == FIELDS_V3 and raw.get("version") == 3:
+            raw["version"] = 4
+            raw["pending_media_recovery_action"] = None
+        elif set(raw) == FIELDS and raw.get("version") in {1, 2, 3}:
+            raw["version"] = 4
+        elif set(raw) != FIELDS or raw.get("version") != 4:
             raise RuntimeError("LIVE_VALIDATION_STATE_INVALID_SCHEMA")
         for name in ("session_id", "tenant_id", "product_id", *OPTIONAL_IDS):
             if raw[name] is not None:
@@ -207,7 +220,7 @@ def session(
 ) -> LiveState | None:
     value = store.load()
     if value is None and create:
-        value = LiveState(3, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
+        value = LiveState(4, str(uuid4()), str(UUID(api.tenant_id)), str(UUID(product)))
         store.save(value)
         print(f"Live acceptance session started: {value.session_id}")
     if value is not None and (
@@ -1317,6 +1330,16 @@ def live_next(
         raise RuntimeError("LIVE_PIPELINE_RESOLUTION_INVALID")
     action = str(resolution["next_action"])
     behavior = str(resolution["execution_behavior"])
+    if (
+        explicit_approval is not None
+        and state.pending_media_recovery_action == "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
+        and action == "WAIT_FOR_MEDIA"
+    ):
+        action = state.pending_media_recovery_action
+        behavior = "EXECUTE"
+        resolution["provider_cost"] = True
+        resolution["human_approval_required"] = True
+        resolution["provider_execution_permitted"] = True
     print(f"Current stage: {resolution['current_stage']}")
     print(f"Next action: {action}")
     print(f"Behavior: {behavior}")
@@ -1329,6 +1352,25 @@ def live_next(
         "Provider execution permitted: "
         f"{'yes' if resolution['provider_execution_permitted'] else 'no'}"
     )
+    spend = resolution.get("media_spend_requirement")
+    if isinstance(spend, dict):
+        print(f"Configured live cap: {spend.get('configured_cap')} {spend.get('currency')}")
+        print(
+            "Committed Product spend: "
+            f"{spend.get('committed_product_spend')} {spend.get('currency')}"
+        )
+        print(
+            "Currently reserved media: "
+            f"{spend.get('reserved_media_amount')} {spend.get('currency')}"
+        )
+        print(f"Minimum required cap: {spend.get('minimum_required_cap')} {spend.get('currency')}")
+    if (
+        action == "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
+        and explicit_approval is None
+        and state.pending_media_recovery_action != action
+    ):
+        state.pending_media_recovery_action = action
+        saved.save(state)
 
     checkpoint_changed = False
     for field_name, response_name in (
@@ -1352,7 +1394,14 @@ def live_next(
         return 0 if behavior == "TERMINAL" else 3
 
     if resolution["provider_cost"]:
-        provider, model, maximum, currency = _paid_action_exposure(action)
+        if action == "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE":
+            if not isinstance(spend, dict):
+                raise RuntimeError("LIVE_MEDIA_SPEND_REQUIREMENT_MISSING")
+            provider, model = "approved media providers", "immutable approved routes"
+            maximum = Decimal(str(spend["reserved_media_amount"]))
+            currency = str(spend["currency"])
+        else:
+            provider, model, maximum, currency = _paid_action_exposure(action)
         print(f"Provider/model: {provider} / {model}")
         print(f"Maximum reserved exposure: {maximum} {currency}")
         print("Unresolved provider operation: no (authoritative resolver admitted EXECUTE)")
@@ -1390,6 +1439,8 @@ def live_next(
     ):
         raise RuntimeError("LIVE_PIPELINE_EXECUTION_RESPONSE_INVALID")
     _bind_execution_locator(state, result["locator"], action)
+    if action == "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE":
+        state.pending_media_recovery_action = None
     saved.save(state)
     print(f"Transition admitted: {result.get('resource_type')} {result.get('resource_id')}")
     if resolution["provider_cost"]:
@@ -1876,4 +1927,20 @@ def session_status(settings: Settings, store: StateStore | None = None) -> int:
     print(f"Session-bound actual cost: {actual} USD")
     print(f"Session-bound reserved cost: {reserved} USD")
     print(f"Session-bound unknown potential cost: {unknown} USD")
+    spend = (
+        resolve_live_pipeline(api, state.product_id, state).get("media_spend_requirement")
+        if state.production_plan_id is not None
+        else None
+    )
+    if isinstance(spend, dict):
+        print(f"Configured live cap: {spend.get('configured_cap')} {spend.get('currency')}")
+        print(
+            "Committed Product spend: "
+            f"{spend.get('committed_product_spend')} {spend.get('currency')}"
+        )
+        print(
+            "Currently reserved media: "
+            f"{spend.get('reserved_media_amount')} {spend.get('currency')}"
+        )
+        print(f"Minimum required cap: {spend.get('minimum_required_cap')} {spend.get('currency')}")
     return 0

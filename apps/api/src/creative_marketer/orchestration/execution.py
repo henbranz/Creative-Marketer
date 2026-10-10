@@ -21,10 +21,12 @@ from .domain import (
 )
 from .pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
+    MediaPipelineState,
     NextPipelineAction,
     PipelineAction,
     PipelineExecutionBehavior,
     PipelineLocator,
+    PipelineStage,
 )
 
 
@@ -101,6 +103,24 @@ class PipelineActionExecutor:
         explicit_approval: str | None = None,
     ) -> PipelineExecutionResult:
         before = await self.state.resolve_next_action(context, locator)
+        if (
+            expected_action is PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE
+            and before.action is PipelineAction.WAIT_FOR_MEDIA
+            and before.media_state is MediaPipelineState.READY
+            and before.production_plan_id is not None
+        ):
+            # Compatibility for jobs left READY by the historical generic cap
+            # exception. The ProductionService still revalidates every safe
+            # before-provider invariant and Temporal prevents a second active run.
+            before = replace(
+                before,
+                stage=PipelineStage.MEDIA_RECOVERY,
+                action=expected_action,
+                blocking_reason="LEGACY_READY_SPEND_CAP_RECOVERY",
+                costs_money=True,
+                human_approval_required=True,
+                provider_execution_permitted=True,
+            )
         if before.action is not expected_action:
             raise PipelineActionMismatch(
                 f"expected {expected_action.value}, current action is {before.action.value}"
@@ -312,6 +332,20 @@ class PipelineActionExecutor:
                 "assembly_plan",
                 record.plan.id,
                 replace(locator, assembly_plan_id=record.plan.id),
+            )
+
+        if action is PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant("media recovery requires a ProductionPlan")
+            await self.production.retry_after_spend_cap_increase(
+                context,
+                before.production_plan_id,
+                transition_id=transition_id,
+            )
+            return (
+                "production_plan",
+                before.production_plan_id,
+                locator,
             )
 
         raise PipelineExecutionInvariant(f"no executable operation for {action.value}")

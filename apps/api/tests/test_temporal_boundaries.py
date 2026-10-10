@@ -1,11 +1,13 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,assignment,return-value"
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
 
 from creative_marketer.events.domain import DomainEvent, EventScopeKind
@@ -15,9 +17,16 @@ from creative_marketer.identity.application.authentication import (
     AuthenticationAssurance,
     ExecutionContext,
 )
-from creative_marketer.infrastructure.temporal.activities import ToolGatewayWorkflowService
-from creative_marketer.infrastructure.temporal.client import TemporalWorkflowSignalClient
+from creative_marketer.infrastructure.temporal.activities import (
+    TemporalActivities,
+    ToolGatewayWorkflowService,
+)
+from creative_marketer.infrastructure.temporal.client import (
+    TemporalMediaProductionWorkflowStarter,
+    TemporalWorkflowSignalClient,
+)
 from creative_marketer.infrastructure.temporal.worker import connect_client, main
+from creative_marketer.production.domain import MediaSpendRequirement, ProductionSpendCapReached
 from creative_marketer.tool_execution.domain import (
     GatewayResult,
     GatewayStatus,
@@ -26,11 +35,43 @@ from creative_marketer.tool_execution.domain import (
 )
 from creative_marketer.workflow_orchestration.contracts import (
     GenerationWorkflowInput,
+    MediaProductionWorkflowInput,
     ToolWorkflowInput,
 )
 from creative_marketer.workflow_orchestration.signal_bridge import SignalApprovalWorkflow
 
 pytestmark = pytest.mark.temporal
+
+
+@pytest.mark.asyncio
+async def test_media_workflow_restart_allows_only_failed_prior_run_and_conflicts_running() -> None:
+    temporal = SimpleNamespace(start_workflow=AsyncMock())
+    request = MediaProductionWorkflowInput(
+        str(uuid4()), str(uuid4()), (str(uuid4()),), (str(uuid4()),), str(uuid4())
+    )
+    await TemporalMediaProductionWorkflowStarter(temporal).start_media_production(request)
+    kwargs = temporal.start_workflow.await_args.kwargs
+    assert kwargs["id_reuse_policy"] is WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
+    assert kwargs["id_conflict_policy"] is WorkflowIDConflictPolicy.FAIL
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_activity_error_is_nonretryable() -> None:
+    production = SimpleNamespace(
+        execute=AsyncMock(
+            side_effect=ProductionSpendCapReached(
+                MediaSpendRequirement(Decimal("1"), Decimal("2"), Decimal("0.5"), Decimal("2"))
+            )
+        )
+    )
+    activities = TemporalActivities(object(), object(), production_jobs=production)
+    with pytest.raises(ApplicationError) as captured:
+        await activities.execute_production_job(
+            str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
+        )
+    assert captured.value.type == "LIVE_E2E_SPEND_CAP_REACHED"
+    assert captured.value.non_retryable is True
+    production.execute.assert_awaited_once()
 
 
 def valid_tool_input(**changes):

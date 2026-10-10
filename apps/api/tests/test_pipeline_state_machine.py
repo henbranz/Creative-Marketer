@@ -270,6 +270,10 @@ def test_only_provider_actions_are_marked_as_permitted_and_billable() -> None:
         (MediaPipelineState.NOT_OBSERVED, PipelineAction.READY_FOR_GENERATION),
         (MediaPipelineState.READY, PipelineAction.WAIT_FOR_MEDIA),
         (MediaPipelineState.RUNNING, PipelineAction.WAIT_FOR_MEDIA),
+        (
+            MediaPipelineState.BLOCKED_SPEND_CAP,
+            PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
+        ),
         (MediaPipelineState.FAILED, PipelineAction.RECOVER_MEDIA_FAILURE),
         (MediaPipelineState.OUTCOME_UNKNOWN, PipelineAction.RECONCILE_MEDIA_OUTCOME),
         (
@@ -299,6 +303,7 @@ def test_media_transition_matrix_covers_every_declared_state() -> None:
         MediaPipelineState.NOT_OBSERVED,
         MediaPipelineState.READY,
         MediaPipelineState.RUNNING,
+        MediaPipelineState.BLOCKED_SPEND_CAP,
         MediaPipelineState.FAILED,
         MediaPipelineState.OUTCOME_UNKNOWN,
         MediaPipelineState.INVARIANT_VIOLATION,

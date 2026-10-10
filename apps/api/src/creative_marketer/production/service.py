@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import TracebackType
 from typing import Protocol
@@ -23,6 +24,7 @@ from .domain import (
     GenerationJob,
     GenerationJobStatus,
     MediaKind,
+    MediaSpendRequirement,
     ProductionDecisionConflict,
     ProductionNotFound,
     ProductionPermissionDenied,
@@ -52,6 +54,11 @@ class ProductionRepository(Protocol):
     async def add_jobs(self, values: tuple[GenerationJob, ...]) -> None: ...
     async def list_jobs(self, plan_id: UUID) -> tuple[GenerationJob, ...]: ...
     async def get_job(self, job_id: UUID) -> GenerationJob | None: ...
+    async def spend_requirement(
+        self, plan_id: UUID, configured_cap: Decimal
+    ) -> MediaSpendRequirement: ...
+    async def requeue_spend_cap_jobs(self, plan_id: UUID) -> tuple[GenerationJob, ...]: ...
+    async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None: ...
 
 
 class ProductionUnitOfWork(Protocol):
@@ -78,6 +85,8 @@ class ProductionService:
     uow_factory: ProductionUnitOfWorkFactory
     media_router: MediaRouter
     maximum_plan_cost: Decimal = Decimal("100")
+    live_spend_cap: Decimal | None = None
+    live_product_id: UUID | None = None
 
     @staticmethod
     def _can_spend(context: ExecutionContext) -> bool:
@@ -229,6 +238,120 @@ class ProductionService:
                 )
             await uow.commit()
             return ProductionPlanRecord(plan, decision, record.planning_cost)
+
+    async def retry_after_spend_cap_increase(
+        self,
+        context: ExecutionContext,
+        plan_id: UUID,
+        *,
+        transition_id: UUID,
+    ) -> tuple[GenerationJob, ...]:
+        """Re-admit the exact reserved jobs; never create jobs or call a provider."""
+
+        if not self._can_spend(context):
+            raise ProductionPermissionDenied("media recovery requires owner or admin")
+        if self.live_spend_cap is None:
+            raise ProductionPermissionDenied("live media spend cap is not configured")
+        async with self.uow_factory(context.tenant_id) as uow:
+            record = await uow.production.get_plan(plan_id, for_update=True)
+            if record is None or record.decision is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            plan, decision = record.plan, record.decision
+            if self.live_product_id is not None and plan.product_id != self.live_product_id:
+                raise ProductionPermissionDenied("ProductionPlan is outside LIVE_E2E_PRODUCT_ID")
+            if decision.state is not ProductionPlanDecisionState.APPROVED_FOR_GENERATION:
+                raise ProductionPermissionDenied("ProductionPlan is not approved")
+            image = self.media_router.resolve("production_image")
+            video = self.media_router.resolve("production_video")
+            if (
+                image.route_version != decision.image_route_version
+                or image.pricing_version != decision.image_pricing_version
+                or video.route_version != decision.video_route_version
+                or video.pricing_version != decision.video_pricing_version
+            ):
+                raise ProductionPricingChanged("approved media route or pricing changed")
+            jobs = await uow.production.list_jobs(plan_id)
+            if any(
+                (route := image if job.kind is MediaKind.IMAGE else video).route_version
+                != job.route_version
+                or route.pricing_version != job.pricing_version
+                or route.provider != job.provider
+                or route.model != job.model
+                for job in jobs
+            ):
+                raise ProductionPricingChanged("GenerationJob route or pricing changed")
+            await uow.production.validate_spend_cap_retry(plan)
+            allowed = {
+                GenerationJobStatus.BLOCKED_SPEND_CAP,
+                GenerationJobStatus.READY,
+                GenerationJobStatus.SUCCEEDED,
+            }
+            if not jobs or any(job.status not in allowed for job in jobs):
+                raise ProductionPermissionDenied(
+                    "media jobs are not safely retryable after a spend-cap block"
+                )
+            affected = tuple(
+                job
+                for job in jobs
+                if job.status in {GenerationJobStatus.BLOCKED_SPEND_CAP, GenerationJobStatus.READY}
+            )
+            if affected and all(
+                job.failure_code == "LIVE_E2E_SPEND_CAP_RETRY_APPROVED" for job in affected
+            ):
+                return affected
+            if not affected or any(
+                job.provider_operation_ref is not None
+                or job.actual_cost != 0
+                or job.unknown_cost != 0
+                or job.failure_code not in {None, "LIVE_E2E_SPEND_CAP_REACHED"}
+                for job in affected
+            ):
+                raise ProductionPermissionDenied(
+                    "media jobs do not prove a before-provider retry boundary"
+                )
+            requirement = await uow.production.spend_requirement(plan_id, self.live_spend_cap)
+            if requirement.committed_product_spend > requirement.configured_cap:
+                raise ProductionPermissionDenied("LIVE_E2E_MAX_USD is still below required spend")
+            requeued = await uow.production.requeue_spend_cap_jobs(plan_id)
+            await uow.outbox.append(
+                tenant_event(
+                    context,
+                    event_type="production.media.retry_requested.v1",
+                    schema_version=1,
+                    aggregate_type="production_plan",
+                    aggregate_id=plan.id,
+                    payload={
+                        "production_plan_id": str(plan.id),
+                        "transition_id": str(transition_id),
+                        "generation_job_ids": [str(job.id) for job in requeued],
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(
+                        "production.media.retry_requested.v1"
+                    ),
+                    occurred_at=datetime.now(UTC),
+                    agent_run_id=plan.agent_run_id,
+                    event_id=transition_id,
+                )
+            )
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="production.media.spend_cap_retry_approved",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="production_plan",
+                    resource_id=str(plan.id),
+                    agent_run_id=plan.agent_run_id,
+                    metadata=safe_metadata(
+                        {
+                            "job_count": len(requeued),
+                            "configured_cap": str(requirement.configured_cap),
+                            "committed_product_spend": str(requirement.committed_product_spend),
+                        }
+                    ),
+                )
+            )
+            await uow.commit()
+            return requeued
 
     @staticmethod
     def _jobs(

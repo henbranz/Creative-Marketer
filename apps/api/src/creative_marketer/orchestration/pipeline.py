@@ -6,6 +6,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from uuid import UUID
 
+from creative_marketer.production.domain import MediaSpendRequirement
+
 
 class ResearchPipelineState(StrEnum):
     NOT_STARTED = "NOT_STARTED"
@@ -55,6 +57,7 @@ class ProducerPipelineState(StrEnum):
 class MediaPipelineState(StrEnum):
     NOT_OBSERVED = "NOT_OBSERVED"
     READY = "READY"
+    BLOCKED_SPEND_CAP = "BLOCKED_SPEND_CAP"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
@@ -128,6 +131,7 @@ class PipelineAction(StrEnum):
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
     WAIT_FOR_MEDIA = "WAIT_FOR_MEDIA"
+    RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE = "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
     RECOVER_MEDIA_FAILURE = "RECOVER_MEDIA_FAILURE"
     RECONCILE_MEDIA_OUTCOME = "RECONCILE_MEDIA_OUTCOME"
     RECOVER_MEDIA_INVARIANT = "RECOVER_MEDIA_INVARIANT"
@@ -380,6 +384,15 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "GET /v1/production/plans/{production_plan_id}/jobs",
         resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
     ),
+    PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "revalidate_and_resume_spend_cap_blocked_media",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Media:READY", "Media:RUNNING"),
+    ),
     PipelineAction.RECOVER_MEDIA_FAILURE: _execution(
         PipelineExecutionBehavior.RECOVERY_GATE,
         "recover_failed_generation_job",
@@ -552,6 +565,7 @@ class PipelineObservation:
     media: MediaPipelineState = MediaPipelineState.NOT_OBSERVED
     assembly: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
     final_creative: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
+    media_spend_requirement: MediaSpendRequirement | None = None
 
     def __post_init__(self) -> None:
         if self.producer_current_contract_invalid_attempts < 0:
@@ -581,6 +595,7 @@ class NextPipelineAction:
     media_state: MediaPipelineState = MediaPipelineState.NOT_OBSERVED
     assembly_state: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
     final_creative_state: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
+    media_spend_requirement: MediaSpendRequirement | None = None
 
 
 class PipelineStateResolver:
@@ -783,6 +798,11 @@ class PipelineStateResolver:
                 PipelineAction.WAIT_FOR_MEDIA,
                 "GENERATION_JOBS_IN_PROGRESS",
             ),
+            MediaPipelineState.BLOCKED_SPEND_CAP: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
+                "LIVE_E2E_SPEND_CAP_REACHED",
+            ),
             MediaPipelineState.FAILED: (
                 PipelineStage.MEDIA_RECOVERY,
                 PipelineAction.RECOVER_MEDIA_FAILURE,
@@ -895,4 +915,5 @@ class PipelineStateResolver:
             media_state=state.media,
             assembly_state=state.assembly,
             final_creative_state=state.final_creative,
+            media_spend_requirement=state.media_spend_requirement,
         )

@@ -1,9 +1,11 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,var-annotated,index"
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -20,12 +22,14 @@ from creative_marketer.identity.domain import MembershipRole, MembershipStatus
 from creative_marketer.production.application import initial_media_router, validate_production_plan
 from creative_marketer.production.domain import (
     GenerationJobStatus,
+    MediaSpendRequirement,
     ProductionDecisionConflict,
     ProductionNotFound,
     ProductionPermissionDenied,
     ProductionPlanDecisionState,
     ProductionPricingChanged,
     ProductionRejectionFeedbackRequired,
+    ProductionSpendCapReached,
 )
 from creative_marketer.production.execution import (
     ExecutableGeneration,
@@ -74,7 +78,8 @@ class Writer:
 class Repository:
     def __init__(self, record) -> None:
         self.record = record
-        self.jobs = ()
+        self.jobs: tuple[Any, ...] = ()
+        self.committed_spend = Decimal("0")
 
     async def get_plan(self, plan_id, *, for_update=False):
         return self.record if plan_id == self.record.plan.id else None
@@ -94,6 +99,31 @@ class Repository:
     async def get_job(self, job_id):
         return next((item for item in self.jobs if item.id == job_id), None)
 
+    async def spend_requirement(self, _plan_id, configured_cap):
+        return MediaSpendRequirement(
+            configured_cap,
+            self.committed_spend,
+            sum((job.reserved_cost for job in self.jobs), Decimal(0)),
+            self.committed_spend,
+        )
+
+    async def requeue_spend_cap_jobs(self, _plan_id):
+        self.jobs = tuple(
+            replace(
+                job.transition(GenerationJobStatus.READY),
+                failure_code="LIVE_E2E_SPEND_CAP_RETRY_APPROVED",
+            )
+            if job.status is GenerationJobStatus.BLOCKED_SPEND_CAP
+            else replace(job, failure_code="LIVE_E2E_SPEND_CAP_RETRY_APPROVED")
+            if job.status is GenerationJobStatus.READY
+            else job
+            for job in self.jobs
+        )
+        return tuple(job for job in self.jobs if job.status is GenerationJobStatus.READY)
+
+    async def validate_spend_cap_retry(self, _plan):
+        return None
+
 
 class Uow:
     def __init__(self, repository) -> None:
@@ -101,11 +131,14 @@ class Uow:
         self.audit = Writer()
         self.outbox = Writer()
         self.committed = False
+        self.lock = asyncio.Lock()
 
     async def __aenter__(self):
+        await self.lock.acquire()
         return self
 
     async def __aexit__(self, *_args):
+        self.lock.release()
         return None
 
     async def commit(self):
@@ -192,6 +225,112 @@ async def test_member_and_cost_cap_fail_before_jobs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spend_cap_recovery_reuses_jobs_reservations_and_is_idempotent() -> None:
+    service, repository, uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    original = repository.jobs
+    repository.jobs = tuple(
+        job.transition(
+            GenerationJobStatus.BLOCKED_SPEND_CAP,
+            failure_code="LIVE_E2E_SPEND_CAP_REACHED",
+        )
+        for job in original
+    )
+    repository.committed_spend = Decimal("6")
+    service.live_spend_cap = Decimal("6")
+    transition_id = uuid4()
+    first = await service.retry_after_spend_cap_increase(
+        context, repository.record.plan.id, transition_id=transition_id
+    )
+    second = await service.retry_after_spend_cap_increase(
+        context, repository.record.plan.id, transition_id=transition_id
+    )
+    assert [job.id for job in first] == [job.id for job in second] == [job.id for job in original]
+    assert [job.reserved_cost for job in first] == [job.reserved_cost for job in original]
+    retry_events = [
+        event
+        for event in uow.outbox.values
+        if event.event_type == "production.media.retry_requested.v1"
+    ]
+    assert len(retry_events) == 1
+    assert retry_events[0].event_id == transition_id
+
+
+@pytest.mark.asyncio
+async def test_concurrent_spend_cap_recovery_emits_one_logical_continuation() -> None:
+    service, repository, uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    original_ids = tuple(job.id for job in repository.jobs)
+    repository.jobs = tuple(
+        job.transition(
+            GenerationJobStatus.BLOCKED_SPEND_CAP,
+            failure_code="LIVE_E2E_SPEND_CAP_REACHED",
+        )
+        for job in repository.jobs
+    )
+    repository.committed_spend = service.live_spend_cap = Decimal("6")
+    transition_id = uuid4()
+    results = await asyncio.gather(
+        *(
+            service.retry_after_spend_cap_increase(
+                context, repository.record.plan.id, transition_id=transition_id
+            )
+            for _ in range(2)
+        )
+    )
+    assert all(tuple(job.id for job in result) == original_ids for result in results)
+    assert (
+        len(
+            [
+                event
+                for event in uow.outbox.values
+                if event.event_type == "production.media.retry_requested.v1"
+            ]
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_recovery_rejects_unknown_outcome_and_insufficient_cap() -> None:
+    service, repository, _uow = service_fixture()
+    context = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        context,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    repository.committed_spend = Decimal("7")
+    service.live_spend_cap = Decimal("6")
+    with pytest.raises(ProductionPermissionDenied, match="still below"):
+        await service.retry_after_spend_cap_increase(
+            context, repository.record.plan.id, transition_id=uuid4()
+        )
+    first, second = repository.jobs
+    repository.jobs = (
+        first.transition(GenerationJobStatus.STARTING).transition(
+            GenerationJobStatus.OUTCOME_UNKNOWN
+        ),
+        second,
+    )
+    service.live_spend_cap = Decimal("10")
+    with pytest.raises(ProductionPermissionDenied, match="not safely retryable"):
+        await service.retry_after_spend_cap_increase(
+            context, repository.record.plan.id, transition_id=uuid4()
+        )
+
+
+@pytest.mark.asyncio
 async def test_deterministic_media_fakes_cover_success_failure_and_unknown() -> None:
     image = FakeImageProvider()
     result = await image.generate(ImageGenerationRequest("render", "1024x1024", "medium"))
@@ -262,6 +401,17 @@ class Authority:
     async def current_job(self, tenant_id, job_id):
         await self.authorize_resource(tenant_id, job_id)
         return self.execution.job
+
+    async def spend_cap_blocked(self, tenant_id, job_id):
+        await self.authorize_resource(tenant_id, job_id)
+        self.states.append(("blocked_spend_cap", None))
+        self.execution = replace(
+            self.execution,
+            job=self.execution.job.transition(
+                GenerationJobStatus.BLOCKED_SPEND_CAP,
+                failure_code="LIVE_E2E_SPEND_CAP_REACHED",
+            ),
+        )
 
 
 class Importer:
@@ -477,6 +627,41 @@ async def test_governed_job_dispatch_and_resource_resolution_are_id_only() -> No
         await GovernedProductionJobExecutor(authority, gateway).execute(
             video_job.tenant_id, video_job.production_plan_id, video_job.id
         )
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_denial_blocks_before_gateway_without_unknown_spend() -> None:
+    service, repository, _uow = service_fixture()
+    actor = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        actor,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image_job = repository.jobs[0]
+
+    class CappedAuthority(Authority):
+        async def prepare(self, tenant_id, job_id, kind):
+            await self.authorize_resource(tenant_id, job_id)
+            raise ProductionSpendCapReached(
+                MediaSpendRequirement(Decimal("1"), Decimal("2"), Decimal("0.5"), Decimal("2"))
+            )
+
+    authority = CappedAuthority(ExecutableGeneration(image_job, {}, ()))
+    gateway = Gateway(authority)
+    with pytest.raises(ProductionSpendCapReached):
+        await GovernedProductionJobExecutor(authority, gateway).execute(
+            image_job.tenant_id, image_job.production_plan_id, image_job.id
+        )
+    blocked = authority.execution.job
+    assert blocked.id == image_job.id
+    assert blocked.status is GenerationJobStatus.BLOCKED_SPEND_CAP
+    assert blocked.failure_code == "LIVE_E2E_SPEND_CAP_REACHED"
+    assert blocked.provider_operation_ref is None
+    assert blocked.actual_cost == blocked.unknown_cost == 0
+    assert blocked.reserved_cost == image_job.reserved_cost
+    assert authority.states == [("blocked_spend_cap", None)]
+    assert not gateway.calls
 
 
 def test_governed_job_tool_selection_covers_video_lifecycle() -> None:

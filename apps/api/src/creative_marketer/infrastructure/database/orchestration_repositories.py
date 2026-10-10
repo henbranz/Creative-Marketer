@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 from typing import Any, cast
 from uuid import UUID
 
@@ -55,6 +56,9 @@ from creative_marketer.infrastructure.database.production_schema import (
     plan_decisions,
     production_plans,
     production_shots,
+)
+from creative_marketer.infrastructure.database.production_spend import (
+    product_media_spend_requirement,
 )
 from creative_marketer.infrastructure.database.publishing_schema import (
     publication_decisions,
@@ -201,8 +205,16 @@ def _transition(row: Mapping[str, Any]) -> CycleTransition:
 
 
 class SqlAlchemyOrchestrationRepository:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        live_spend_cap: Decimal | None = None,
+        live_product_id: UUID | None = None,
+    ) -> None:
         self.session = session
+        self.live_spend_cap = live_spend_cap
+        self.live_product_id = live_product_id
 
     async def preflight(self, product_id: UUID) -> CyclePreflight:
         product = (
@@ -1115,6 +1127,7 @@ class SqlAlchemyOrchestrationRepository:
         media_state = MediaPipelineState.NOT_OBSERVED
         assembly_state = AssemblyPipelineState.NOT_STARTED
         final_state = FinalCreativePipelineState.NOT_STARTED
+        media_spend_requirement = None
         assembly_plan_id: UUID | None = None
         final_creative_id: UUID | None = None
         if producer_state is ProducerPipelineState.APPROVED_FOR_GENERATION and plan_id is not None:
@@ -1136,12 +1149,41 @@ class SqlAlchemyOrchestrationRepository:
             elif "FAILED" in job_statuses:
                 media_state = MediaPipelineState.FAILED
                 blocking_reason = "GENERATION_JOB_FAILED"
+            elif "BLOCKED_SPEND_CAP" in job_statuses:
+                media_state = MediaPipelineState.BLOCKED_SPEND_CAP
+                blocking_reason = "LIVE_E2E_SPEND_CAP_REACHED"
             elif all(status == "SUCCEEDED" for status in job_statuses):
                 media_state = MediaPipelineState.SUCCEEDED
             elif any(status in {"STARTING", "PROCESSING", "IMPORTING"} for status in job_statuses):
                 media_state = MediaPipelineState.RUNNING
             else:
                 media_state = MediaPipelineState.READY
+
+            if (
+                self.live_spend_cap is not None
+                and (self.live_product_id is None or self.live_product_id == locator.product_id)
+                and media_state in {MediaPipelineState.READY, MediaPipelineState.BLOCKED_SPEND_CAP}
+            ):
+                tenant_id = await self.session.scalar(
+                    select(products.c.tenant_id).where(products.c.id == locator.product_id)
+                )
+                if tenant_id is None:
+                    return None
+                media_spend_requirement = await product_media_spend_requirement(
+                    self.session,
+                    tenant_id,
+                    locator.product_id,
+                    self.live_spend_cap,
+                )
+                # Backward-compatible projection for jobs left READY by the old
+                # generic exception path. No data is changed by this read.
+                if (
+                    media_state is MediaPipelineState.READY
+                    and media_spend_requirement.committed_product_spend
+                    > media_spend_requirement.configured_cap
+                ):
+                    media_state = MediaPipelineState.BLOCKED_SPEND_CAP
+                    blocking_reason = "LIVE_E2E_SPEND_CAP_REACHED"
 
             if media_state is MediaPipelineState.SUCCEEDED:
                 assembly_repository = SqlAlchemyAssemblyRepository(self.session)
@@ -1224,6 +1266,7 @@ class SqlAlchemyOrchestrationRepository:
             media=media_state,
             assembly=assembly_state,
             final_creative=final_state,
+            media_spend_requirement=media_spend_requirement,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

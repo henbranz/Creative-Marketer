@@ -186,6 +186,7 @@ def tenant_event(
     agent_definition_id: UUID | None = None,
     agent_version_id: UUID | None = None,
     agent_run_id: UUID | None = None,
+    event_id: UUID | None = None,
 ) -> DomainEvent:
     """Build a tenant event only from authoritative runtime context."""
     return DomainEvent(
@@ -205,6 +206,7 @@ def tenant_event(
         agent_run_id=agent_run_id,
         payload=payload,
         payload_schema_digest=payload_schema_digest,
+        event_id=event_id or uuid4(),
     )
 
 

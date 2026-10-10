@@ -4,22 +4,37 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import insert, select, text
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from creative_marketer.infrastructure.database.agent_runtime_schema import agent_runs
+from creative_marketer.infrastructure.database.agent_runtime_schema import (
+    agent_runs,
+    research_snapshots,
+)
+from creative_marketer.infrastructure.database.catalog_schema import (
+    assets,
+    product_knowledge_snapshots,
+)
+from creative_marketer.infrastructure.database.creative_schema import (
+    concept_decisions,
+    concepts,
+)
 from creative_marketer.production.domain import (
     FrozenAssetReference,
     GenerationJob,
     GenerationJobStatus,
     GenerationSegment,
     MediaKind,
+    MediaSpendRequirement,
     ProductionCost,
+    ProductionCreativeRefreshRequired,
+    ProductionPermissionDenied,
     ProductionPlan,
     ProductionPlanDecision,
     ProductionPlanDecisionState,
     ProductionPlanningContext,
     ProductionPlanningRequest,
+    ProductionRightsChanged,
     ProductionScene,
     ProductionShot,
     SourceStrategy,
@@ -35,6 +50,7 @@ from .production_schema import (
     production_scenes,
     production_shots,
 )
+from .production_spend import product_media_spend_requirement
 
 
 def _asset(value: object) -> FrozenAssetReference:
@@ -320,6 +336,125 @@ class SqlAlchemyProductionRepository:
             )
         ).first()
         return self._job(row) if row else None
+
+    async def spend_requirement(
+        self, plan_id: UUID, configured_cap: Decimal
+    ) -> MediaSpendRequirement:
+        row = (
+            await self._session.execute(
+                select(production_plans.c.tenant_id, production_plans.c.product_id).where(
+                    production_plans.c.id == plan_id
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            raise ValueError("ProductionPlan is unavailable")
+        return await product_media_spend_requirement(
+            self._session, row.tenant_id, row.product_id, configured_cap
+        )
+
+    async def requeue_spend_cap_jobs(self, plan_id: UUID) -> tuple[GenerationJob, ...]:
+        await self._session.execute(
+            update(generation_jobs)
+            .where(
+                generation_jobs.c.production_plan_id == plan_id,
+                generation_jobs.c.status.in_(
+                    (
+                        GenerationJobStatus.BLOCKED_SPEND_CAP.value,
+                        GenerationJobStatus.READY.value,
+                    )
+                ),
+                generation_jobs.c.provider_operation_ref.is_(None),
+                generation_jobs.c.actual_cost == 0,
+                generation_jobs.c.unknown_cost == 0,
+                generation_jobs.c.failure_code.is_(None)
+                | (generation_jobs.c.failure_code == "LIVE_E2E_SPEND_CAP_REACHED"),
+            )
+            .values(
+                status=GenerationJobStatus.READY.value,
+                failure_code="LIVE_E2E_SPEND_CAP_RETRY_APPROVED",
+                updated_at=datetime.now(UTC),
+            )
+        )
+        jobs = await self.list_jobs(plan_id)
+        return tuple(job for job in jobs if job.status is GenerationJobStatus.READY)
+
+    async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None:
+        product_snapshot = (
+            await self._session.execute(
+                select(product_knowledge_snapshots.c.id, product_knowledge_snapshots.c.digest)
+                .where(product_knowledge_snapshots.c.product_id == plan.product_id)
+                .order_by(
+                    product_knowledge_snapshots.c.created_at.desc(),
+                    product_knowledge_snapshots.c.id.desc(),
+                )
+                .limit(1)
+            )
+        ).first()
+        research = (
+            await self._session.execute(
+                select(research_snapshots.c.id, research_snapshots.c.semantic_digest)
+                .where(research_snapshots.c.product_id == plan.product_id)
+                .order_by(research_snapshots.c.created_at.desc(), research_snapshots.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        concept = (
+            await self._session.execute(
+                select(concepts.c.semantic_digest).where(concepts.c.id == plan.context.concept_id)
+            )
+        ).first()
+        decision = (
+            await self._session.execute(
+                select(concept_decisions.c.id, concept_decisions.c.state)
+                .where(concept_decisions.c.concept_id == plan.context.concept_id)
+                .order_by(concept_decisions.c.created_at.desc(), concept_decisions.c.id.desc())
+                .limit(1)
+            )
+        ).first()
+        if (
+            product_snapshot is None
+            or product_snapshot.id != plan.context.product_snapshot_id
+            or product_snapshot.digest != plan.context.product_snapshot_digest
+            or research is None
+            or research.id != plan.context.research_snapshot_id
+            or research.semantic_digest != plan.context.research_snapshot_digest
+            or concept is None
+            or concept.semantic_digest != plan.context.concept_digest
+            or decision is None
+            or decision.id != plan.context.creative_decision_id
+            or decision.state != "APPROVED_FOR_PRODUCTION"
+        ):
+            raise ProductionCreativeRefreshRequired("ProductionPlan input provenance is outdated")
+        for job in await self.list_jobs(plan.id):
+            reserved = await self._session.scalar(
+                select(func.coalesce(func.sum(media_budget_usage.c.amount), 0)).where(
+                    media_budget_usage.c.generation_job_id == job.id,
+                    media_budget_usage.c.entry_kind == "RESERVED",
+                    media_budget_usage.c.currency == job.currency,
+                )
+            )
+            if Decimal(reserved or 0) != job.reserved_cost:
+                raise ProductionPermissionDenied("GenerationJob spend reservation is unavailable")
+            for reference in job.input_assets:
+                row = (
+                    await self._session.execute(
+                        select(
+                            assets.c.status,
+                            assets.c.rights_status,
+                            assets.c.allowed_uses,
+                            assets.c.digest,
+                        ).where(assets.c.id == reference.asset_id)
+                    )
+                ).first()
+                if (
+                    row is None
+                    or row.status != "ready"
+                    or row.rights_status != "confirmed"
+                    or "generation_input" not in (row.allowed_uses or ())
+                    or row.digest != reference.digest
+                ):
+                    raise ProductionRightsChanged("generation reference rights or digest changed")
 
     @staticmethod
     def _job(row: object) -> GenerationJob:

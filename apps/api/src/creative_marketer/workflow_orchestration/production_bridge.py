@@ -49,7 +49,11 @@ class StartMediaProductionWorkflow:
 
     async def __call__(self, event: DomainEvent, _uow: ConsumerUnitOfWork) -> None:
         if (
-            event.event_type != "production.plan.approved_for_generation.v1"
+            event.event_type
+            not in {
+                "production.plan.approved_for_generation.v1",
+                "production.media.retry_requested.v1",
+            }
             or event.scope_kind is not EventScopeKind.TENANT
             or event.tenant_id is None
             or event.aggregate_type != "production_plan"

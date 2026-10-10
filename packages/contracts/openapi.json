@@ -4018,6 +4018,7 @@
         "enum": [
           "NOT_OBSERVED",
           "READY",
+          "BLOCKED_SPEND_CAP",
           "RUNNING",
           "SUCCEEDED",
           "FAILED",
@@ -4026,6 +4027,40 @@
         ],
         "title": "MediaPipelineState",
         "type": "string"
+      },
+      "MediaSpendRequirementResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "committed_product_spend": {
+            "title": "Committed Product Spend",
+            "type": "string"
+          },
+          "configured_cap": {
+            "title": "Configured Cap",
+            "type": "string"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "minimum_required_cap": {
+            "title": "Minimum Required Cap",
+            "type": "string"
+          },
+          "reserved_media_amount": {
+            "title": "Reserved Media Amount",
+            "type": "string"
+          }
+        },
+        "required": [
+          "configured_cap",
+          "committed_product_spend",
+          "reserved_media_amount",
+          "minimum_required_cap",
+          "currency"
+        ],
+        "title": "MediaSpendRequirementResponse",
+        "type": "object"
       },
       "NextPipelineActionResponse": {
         "additionalProperties": false,
@@ -4128,6 +4163,16 @@
             "title": "Human Approval Required",
             "type": "boolean"
           },
+          "media_spend_requirement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaSpendRequirementResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "media_state": {
             "$ref": "#/components/schemas/MediaPipelineState"
           },
@@ -4221,7 +4266,8 @@
           "producer_run_id",
           "production_plan_id",
           "assembly_plan_id",
-          "final_creative_id"
+          "final_creative_id",
+          "media_spend_requirement"
         ],
         "title": "NextPipelineActionResponse",
         "type": "object"
@@ -4339,6 +4385,7 @@
           "REVIEW_PRODUCTION_PLAN",
           "READY_FOR_GENERATION",
           "WAIT_FOR_MEDIA",
+          "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE",
           "RECOVER_MEDIA_FAILURE",
           "RECONCILE_MEDIA_OUTCOME",
           "RECOVER_MEDIA_INVARIANT",
