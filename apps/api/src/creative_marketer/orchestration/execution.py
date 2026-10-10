@@ -348,6 +348,35 @@ class PipelineActionExecutor:
                 locator,
             )
 
+        if action is PipelineAction.RECOVER_STRANDED_MEDIA_START:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant("media recovery requires a ProductionPlan")
+            jobs = await self.production.recover_stranded_media_start(
+                context,
+                before.production_plan_id,
+                job_ids=before.stranded_media_start_job_ids,
+            )
+            return (
+                "generation_job",
+                jobs[0].id,
+                locator,
+            )
+
+        if action is PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant("media retry requires a ProductionPlan")
+            jobs = await self.production.abandon_unknown_media_and_retry(
+                context,
+                before.production_plan_id,
+                job_ids=before.retryable_unknown_media_job_ids,
+                transition_id=transition_id,
+            )
+            return (
+                "generation_job",
+                jobs[0].id,
+                locator,
+            )
+
         raise PipelineExecutionInvariant(f"no executable operation for {action.value}")
 
     @staticmethod

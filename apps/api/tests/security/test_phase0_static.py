@@ -355,6 +355,9 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "production.media.ambiguity_retry_requested.v1": (
+            "sha256:f42029fd501b13bfcfe3f4ea8711aae96735a9d3032379df7dcf68d74d6adde9"
+        ),
         "production.media.retry_requested.v1": (
             "sha256:1b582fb49f395d82e7d6e292c7b2c72bfc0e86242bbe6d8a81a438bccd488be1"
         ),

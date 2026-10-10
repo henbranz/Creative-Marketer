@@ -20,6 +20,7 @@ from creative_marketer.orchestration.application import (
     CyclePreflight,
     CycleReadinessEngine,
     ExperimentHandoff,
+    MediaWorkflowExecutionState,
     PipelineStateService,
     require_cycle_mutation,
 )
@@ -283,6 +284,72 @@ async def test_pipeline_state_service_resolves_or_fails_closed() -> None:
     repository.pipeline_observation = None
     with pytest.raises(CycleNotFound):
         await service.resolve_next_action(ctx, locator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workflow_state", "expected"),
+    [
+        (MediaWorkflowExecutionState.ACTIVE, PipelineAction.WAIT_FOR_MEDIA),
+        (
+            MediaWorkflowExecutionState.TERMINAL,
+            PipelineAction.RECOVER_STRANDED_MEDIA_START,
+        ),
+        (
+            MediaWorkflowExecutionState.MISSING,
+            PipelineAction.RECOVER_STRANDED_MEDIA_START,
+        ),
+    ],
+)
+async def test_pipeline_distinguishes_active_and_stranded_media_starts(
+    workflow_state, expected
+) -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    plan_id, job_id = uuid4(), uuid4()
+    repository.pipeline_observation = PipelineObservation(
+        uuid4(),
+        ResearchPipelineState.SUCCEEDED_CURRENT,
+        CreativePipelineState.APPROVED_FOR_PRODUCTION,
+        ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.RUNNING,
+        stranded_media_start_job_ids=(job_id,),
+    )
+
+    class Workflows:
+        async def status(self, tenant_id, production_plan_id):
+            assert (tenant_id, production_plan_id) == (ctx.tenant_id, plan_id)
+            return workflow_state
+
+    result = await PipelineStateService(
+        lambda _tenant: MemoryUow(repository), Workflows()
+    ).resolve_next_action(ctx, PipelineLocator(repository.pipeline_observation.product_id))
+
+    assert result.action is expected
+    assert result.stranded_media_start_job_ids == (job_id,)
+
+
+@pytest.mark.asyncio
+async def test_exact_unknown_media_start_exposes_explicit_ambiguity_action() -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    plan_id, job_id = uuid4(), uuid4()
+    repository.pipeline_observation = PipelineObservation(
+        uuid4(),
+        ResearchPipelineState.SUCCEEDED_CURRENT,
+        CreativePipelineState.APPROVED_FOR_PRODUCTION,
+        ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.OUTCOME_UNKNOWN,
+        retryable_unknown_media_job_ids=(job_id,),
+    )
+    result = await PipelineStateService(lambda _tenant: MemoryUow(repository)).resolve_next_action(
+        ctx, PipelineLocator(repository.pipeline_observation.product_id)
+    )
+    assert result.action is PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY
+    assert result.human_approval_required is True
+    assert result.provider_execution_permitted is True
 
 
 @pytest.mark.asyncio

@@ -150,6 +150,14 @@ same task after restart. Temporal uses timers/activities and an intentional maxi
 The transactional approval event is consumed through Inbox semantics; the handler reloads the
 committed tenant-scoped jobs and starts the deterministic `MediaProductionWorkflow` with IDs only.
 
+`STARTING` is considered in progress only while the authoritative ProductionPlan workflow is
+active. When the exact Job has no task identity, Asset, actual cost, or unknown cost and Temporal is
+terminal or missing, `live-next` exposes `RECOVER_STRANDED_MEDIA_START`; this records
+`OUTCOME_UNKNOWN` without provider execution. A retry remains fail-closed until an owner/admin uses
+the separately action-bound `ABANDON_UNKNOWN_MEDIA_AND_RETRY` approval, accepting duplicate-provider
+risk after current authority, rights, route compatibility, pricing, reservation, and budget checks.
+That continuation uses a recovery-only Temporal restart and the existing ModelArk execution path.
+
 Successful temporary output locators trigger immediate bounded download, signature/MIME/size
 validation, SHA-256 calculation, private ObjectStore import, and a normal READY generated Asset.
 Generated media has conservative configurable rights. Multi-parent lineage supports Product Asset →

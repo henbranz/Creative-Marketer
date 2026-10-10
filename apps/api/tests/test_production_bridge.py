@@ -27,9 +27,13 @@ from creative_marketer.workflow_orchestration.production_bridge import (
 class Starter:
     def __init__(self) -> None:
         self.requests: list[MediaProductionWorkflowInput] = []
+        self.restarts: list[MediaProductionWorkflowInput] = []
 
     async def start_media_production(self, request: MediaProductionWorkflowInput) -> None:
         self.requests.append(request)
+
+    async def restart_media_production(self, request: MediaProductionWorkflowInput) -> None:
+        self.restarts.append(request)
 
 
 class Resolver:
@@ -127,6 +131,47 @@ async def test_retry_event_resolves_same_persisted_job_ids() -> None:
     request = starter.requests[0]
     assert request.image_job_ids == (str(expected_image),)
     assert request.video_job_ids == (str(expected_video),)
+
+
+@pytest.mark.asyncio
+async def test_ambiguity_retry_uses_recovery_specific_temporal_restart() -> None:
+    tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()
+    context = ExecutionContext(
+        tenant_id,
+        Actor(ActorKind.USER, user_id),
+        user_id,
+        MembershipRole.OWNER,
+        MembershipStatus.ACTIVE,
+        "test",
+        AuthenticationAssurance(datetime.now(UTC), "test", "mfa"),
+        uuid4(),
+    )
+    event_type = "production.media.ambiguity_retry_requested.v1"
+    transition_id, video_job = uuid4(), uuid4()
+    event = tenant_event(
+        context,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=plan_id,
+        occurred_at=datetime.now(UTC),
+        payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+        payload={
+            "production_plan_id": str(plan_id),
+            "transition_id": str(transition_id),
+            "generation_job_ids": [str(video_job)],
+            "duplicate_provider_risk_accepted": True,
+        },
+        event_id=transition_id,
+    )
+    starter = Starter()
+    await StartMediaProductionWorkflow(starter, Resolver(uuid4(), video_job))(
+        event,
+        object(),  # type: ignore[arg-type]
+    )
+    assert not starter.requests
+    assert len(starter.restarts) == 1
+    assert starter.restarts[0].video_job_ids == (str(video_job),)
 
 
 @pytest.mark.asyncio

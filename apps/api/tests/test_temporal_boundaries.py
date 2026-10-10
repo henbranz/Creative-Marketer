@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
+from temporalio.client import WorkflowExecutionStatus
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import ApplicationError
+from temporalio.service import RPCError, RPCStatusCode
 
 from creative_marketer.events.domain import DomainEvent, EventScopeKind
 from creative_marketer.identity.application.authentication import (
@@ -23,9 +25,11 @@ from creative_marketer.infrastructure.temporal.activities import (
 )
 from creative_marketer.infrastructure.temporal.client import (
     TemporalMediaProductionWorkflowStarter,
+    TemporalMediaWorkflowStatusReader,
     TemporalWorkflowSignalClient,
 )
 from creative_marketer.infrastructure.temporal.worker import connect_client, main
+from creative_marketer.orchestration.application import MediaWorkflowExecutionState
 from creative_marketer.production.domain import MediaSpendRequirement, ProductionSpendCapReached
 from creative_marketer.tool_execution.domain import (
     GatewayResult,
@@ -53,6 +57,45 @@ async def test_media_workflow_restart_allows_only_failed_prior_run_and_conflicts
     kwargs = temporal.start_workflow.await_args.kwargs
     assert kwargs["id_reuse_policy"] is WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY
     assert kwargs["id_conflict_policy"] is WorkflowIDConflictPolicy.FAIL
+
+
+@pytest.mark.asyncio
+async def test_media_recovery_restart_allows_terminal_reuse_but_forbids_active_conflict() -> None:
+    temporal = SimpleNamespace(start_workflow=AsyncMock())
+    request = MediaProductionWorkflowInput(
+        str(uuid4()), str(uuid4()), (), (str(uuid4()),), str(uuid4())
+    )
+    await TemporalMediaProductionWorkflowStarter(temporal).restart_media_production(request)
+    kwargs = temporal.start_workflow.await_args.kwargs
+    assert kwargs["id_reuse_policy"] is WorkflowIDReusePolicy.ALLOW_DUPLICATE
+    assert kwargs["id_conflict_policy"] is WorkflowIDConflictPolicy.FAIL
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (WorkflowExecutionStatus.RUNNING, MediaWorkflowExecutionState.ACTIVE),
+        (WorkflowExecutionStatus.COMPLETED, MediaWorkflowExecutionState.TERMINAL),
+        (WorkflowExecutionStatus.FAILED, MediaWorkflowExecutionState.TERMINAL),
+    ],
+)
+async def test_media_status_reader_uses_authoritative_temporal_status(status, expected) -> None:
+    handle = SimpleNamespace(describe=AsyncMock(return_value=SimpleNamespace(status=status)))
+    temporal = SimpleNamespace(get_workflow_handle=lambda _workflow_id: handle)
+    assert await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4()) is expected
+
+
+@pytest.mark.asyncio
+async def test_media_status_reader_classifies_missing_workflow() -> None:
+    handle = SimpleNamespace(
+        describe=AsyncMock(side_effect=RPCError("missing", RPCStatusCode.NOT_FOUND, b""))
+    )
+    temporal = SimpleNamespace(get_workflow_handle=lambda _workflow_id: handle)
+    assert (
+        await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4())
+        is MediaWorkflowExecutionState.MISSING
+    )
 
 
 @pytest.mark.asyncio

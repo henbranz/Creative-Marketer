@@ -464,6 +464,7 @@ async def _approved_plan_observation(
     monkeypatch,
     *,
     job_statuses: tuple[str, ...],
+    provider_operation_refs: tuple[str | None, ...] | None = None,
     assembly_plan_id=None,
     final_creative_id=None,
 ):
@@ -495,7 +496,20 @@ async def _approved_plan_observation(
             {"id": uuid4(), "state": "APPROVED_FOR_PRODUCTION"},
             {"id": plan_id},
             {"state": "APPROVED_FOR_GENERATION"},
-            job_statuses,
+            tuple(
+                {
+                    "id": uuid4(),
+                    "status": status,
+                    "provider_operation_ref": (
+                        provider_operation_refs[index] if provider_operation_refs else None
+                    ),
+                    "actual_cost": 0,
+                    "unknown_cost": 1 if status == "OUTCOME_UNKNOWN" else 0,
+                    "output_asset_id": None,
+                    "failure_code": None,
+                }
+                for index, status in enumerate(job_statuses)
+            ),
         ],
     )
     repository = _repository(monkeypatch, session, research, creative, producer)
@@ -541,6 +555,21 @@ async def test_approved_plan_projects_every_non_success_media_state(
     assert observation is not None
     assert observation.media is expected
     assert observation.blocking_reason == reason
+
+
+@pytest.mark.asyncio
+async def test_processing_job_with_provider_reference_remains_normal_running_media(
+    monkeypatch,
+) -> None:
+    observation, _plan_id = await _approved_plan_observation(
+        monkeypatch,
+        job_statuses=("PROCESSING",),
+        provider_operation_refs=("modelark-task-123",),
+    )
+
+    assert observation is not None
+    assert observation.media is MediaPipelineState.RUNNING
+    assert observation.stranded_media_start_job_ids == ()
 
 
 @pytest.mark.asyncio

@@ -732,8 +732,8 @@ def test_generation_job_unknown_and_lineage() -> None:
         .transition(GenerationJobStatus.OUTCOME_UNKNOWN)
     )
     assert unknown.unknown_cost == Decimal("1.2")
-    with pytest.raises(ValueError):
-        unknown.transition(GenerationJobStatus.READY)
+    retry = unknown.transition(GenerationJobStatus.READY)
+    assert retry.unknown_cost == Decimal("1.2")
     with pytest.raises(ValueError, match="workload identity"):
         replace(job, executed_by_workload_id=" ")
     assert (

@@ -106,6 +106,7 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
                         {
                             "production.plan.approved_for_generation.v1",
                             "production.media.retry_requested.v1",
+                            "production.media.ambiguity_retry_requested.v1",
                         }
                     ),
                     "v1",
@@ -123,6 +124,7 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
             event_types=(
                 "production.plan.approved_for_generation.v1",
                 "production.media.retry_requested.v1",
+                "production.media.ambiguity_retry_requested.v1",
             ),
             batch_size=25,
             now=now,

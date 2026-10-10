@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 import pytest_asyncio
 from temporalio import activity
-from temporalio.client import WorkflowFailureError
+from temporalio.client import WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker
@@ -32,6 +32,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     CreativeCycleWorkflow,
     FinalCreativeAssemblyWorkflow,
     MediaGenerationWorkflow,
+    MediaProductionWorkflow,
     PerformanceCollectionWorkflow,
     PublicationWorkflow,
     ResearcherWorkflow,
@@ -55,6 +56,8 @@ from creative_marketer.workflow_orchestration.contracts import (
     GenerationWorkflowInput,
     MeasurementActivityResult,
     MeasurementWorkflowInput,
+    MediaProductionJobResult,
+    MediaProductionWorkflowInput,
     PublicationWorkflowInput,
     PublicationWorkflowResult,
     ResearcherWorkflowInput,
@@ -67,6 +70,7 @@ from creative_marketer.workflow_orchestration.contracts import (
     creative_cycle_workflow_id,
     generation_workflow_id,
     measurement_workflow_id,
+    media_production_workflow_id,
     publication_workflow_id,
     researcher_workflow_id,
     tool_workflow_id,
@@ -111,6 +115,39 @@ def generation_input(*, poll: int = 60, maximum: int = 600):
         poll_interval_seconds=poll,
         maximum_generation_seconds=maximum,
     )
+
+
+@pytest.mark.asyncio
+async def test_media_application_failure_returns_normally_and_temporal_is_completed(
+    temporal_environment,
+) -> None:
+    class Jobs:
+        def __init__(self):
+            self.calls = []
+
+        async def execute(self, tenant_id, plan_id, job_id):
+            self.calls.append((tenant_id, plan_id, job_id))
+            return MediaProductionJobResult(job_id, "OUTCOME_UNKNOWN", "START_STRANDED")
+
+    jobs = Jobs()
+    activities = TemporalActivities(
+        FakeGatewayService(), FakeGenerationService(), production_jobs=jobs
+    )
+    request = MediaProductionWorkflowInput(
+        str(uuid4()), str(uuid4()), (), (str(uuid4()),), str(uuid4())
+    )
+    async with create_worker(temporal_environment.client, activities):
+        handle = await temporal_environment.client.start_workflow(
+            MediaProductionWorkflow.run,
+            request,
+            id=media_production_workflow_id(request),
+            task_queue=WORKFLOW_TASK_QUEUE,
+        )
+        result = await handle.result()
+        description = await handle.describe()
+    assert result[0].status == "OUTCOME_UNKNOWN"
+    assert description.status is WorkflowExecutionStatus.COMPLETED
+    assert len(jobs.calls) == 1
 
 
 class FakeGatewayService:

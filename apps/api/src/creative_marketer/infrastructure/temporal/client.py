@@ -3,6 +3,7 @@ from typing import Any
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from creative_marketer.infrastructure.temporal.configuration import (
     COMMERCE_TASK_QUEUE,
@@ -20,6 +21,7 @@ from creative_marketer.infrastructure.temporal.workflows import (
     PublicationWorkflow,
     ResearcherWorkflow,
 )
+from creative_marketer.orchestration.application import MediaWorkflowExecutionState
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
     CommerceActionWorkflowInput,
@@ -178,6 +180,45 @@ class TemporalMediaProductionWorkflowStarter:
                 WorkflowExecutionStatus.FAILED,
             }:
                 raise
+
+    async def restart_media_production(self, request: MediaProductionWorkflowInput) -> None:
+        """Start a new run only after the prior execution is terminal.
+
+        The conflict policy is the concurrency guard. ALLOW_DUPLICATE is scoped to
+        this recovery operation and deliberately not used for normal approval events.
+        """
+
+        await self._client.start_workflow(
+            MediaProductionWorkflow.run,
+            request,
+            id=media_production_workflow_id(request),
+            task_queue=self._task_queue,
+            id_reuse_policy=WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+            id_conflict_policy=WorkflowIDConflictPolicy.FAIL,
+        )
+
+
+class TemporalMediaWorkflowStatusReader:
+    def __init__(self, client: Client) -> None:
+        self._client = client
+
+    async def status(self, tenant_id: Any, production_plan_id: Any) -> MediaWorkflowExecutionState:
+        request = MediaProductionWorkflowInput(
+            str(tenant_id), str(production_plan_id), (), (), "00000000-0000-0000-0000-000000000000"
+        )
+        try:
+            description = await self._client.get_workflow_handle(
+                media_production_workflow_id(request)
+            ).describe()
+        except RPCError as error:
+            if error.status is RPCStatusCode.NOT_FOUND:
+                return MediaWorkflowExecutionState.MISSING
+            raise
+        return (
+            MediaWorkflowExecutionState.ACTIVE
+            if description.status is WorkflowExecutionStatus.RUNNING
+            else MediaWorkflowExecutionState.TERMINAL
+        )
 
 
 class TemporalFinalCreativeAssemblyWorkflowStarter:

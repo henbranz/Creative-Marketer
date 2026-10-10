@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from types import TracebackType
 from typing import Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -39,6 +40,7 @@ from .domain import (
 )
 from .pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
+    MediaPipelineState,
     NextPipelineAction,
     PipelineAction,
     PipelineExecutionBehavior,
@@ -140,6 +142,18 @@ class OrchestrationUnitOfWork(Protocol):
 
 class OrchestrationUnitOfWorkFactory(Protocol):
     def __call__(self, tenant_id: UUID) -> OrchestrationUnitOfWork: ...
+
+
+class MediaWorkflowExecutionState(StrEnum):
+    ACTIVE = "ACTIVE"
+    TERMINAL = "TERMINAL"
+    MISSING = "MISSING"
+
+
+class MediaWorkflowStatusReader(Protocol):
+    async def status(
+        self, tenant_id: UUID, production_plan_id: UUID
+    ) -> MediaWorkflowExecutionState: ...
 
 
 class AssemblyCoordinator(Protocol):
@@ -395,6 +409,7 @@ class PipelineStateService:
     """Read-only application boundary for the governed pre-generation workflow."""
 
     uow_factory: OrchestrationUnitOfWorkFactory
+    media_workflows: MediaWorkflowStatusReader | None = None
     resolver: PipelineStateResolver = field(default_factory=PipelineStateResolver)
 
     async def resolve_next_action(
@@ -404,6 +419,36 @@ class PipelineStateService:
             observation = await uow.cycles.observe_pipeline(locator)
         if observation is None:
             raise CycleNotFound("Product pipeline was not found")
+        if (
+            observation.media is MediaPipelineState.RUNNING
+            and observation.production_plan_id is not None
+            and observation.stranded_media_start_job_ids
+        ):
+            if self.media_workflows is None:
+                raise CycleNotReady("Media workflow status is unavailable")
+            workflow_state = await self.media_workflows.status(
+                context.tenant_id, observation.production_plan_id
+            )
+            if workflow_state in {
+                MediaWorkflowExecutionState.TERMINAL,
+                MediaWorkflowExecutionState.MISSING,
+            }:
+                observation = replace(
+                    observation,
+                    media=MediaPipelineState.STRANDED_START,
+                    blocking_reason="GENERATION_JOB_START_STRANDED_AFTER_TERMINAL_WORKFLOW",
+                )
+        elif (
+            observation.media is MediaPipelineState.OUTCOME_UNKNOWN
+            and observation.retryable_unknown_media_job_ids
+        ):
+            observation = replace(
+                observation,
+                media=MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
+                blocking_reason=(
+                    "GENERATION_START_OUTCOME_UNKNOWN_REQUIRES_DUPLICATE_RISK_ACCEPTANCE"
+                ),
+            )
         return self.resolver.resolve(observation)
 
 

@@ -379,6 +379,88 @@ class SqlAlchemyProductionRepository:
         jobs = await self.list_jobs(plan_id)
         return tuple(job for job in jobs if job.status is GenerationJobStatus.READY)
 
+    async def recover_stranded_starts(
+        self, plan_id: UUID, job_ids: tuple[UUID, ...]
+    ) -> tuple[GenerationJob, ...]:
+        now = datetime.now(UTC)
+        rows = (
+            await self._session.execute(
+                update(generation_jobs)
+                .where(
+                    generation_jobs.c.production_plan_id == plan_id,
+                    generation_jobs.c.id.in_(job_ids),
+                    generation_jobs.c.status == GenerationJobStatus.STARTING.value,
+                    generation_jobs.c.provider_operation_ref.is_(None),
+                    generation_jobs.c.actual_cost == 0,
+                    generation_jobs.c.unknown_cost == 0,
+                    generation_jobs.c.output_asset_id.is_(None),
+                )
+                .values(
+                    status=GenerationJobStatus.OUTCOME_UNKNOWN.value,
+                    unknown_cost=generation_jobs.c.reserved_cost,
+                    failure_code="STRANDED_MEDIA_START_OUTCOME_UNKNOWN",
+                    updated_at=now,
+                )
+                .returning(
+                    generation_jobs.c.id,
+                    generation_jobs.c.tenant_id,
+                    generation_jobs.c.reserved_cost,
+                    generation_jobs.c.currency,
+                )
+            )
+        ).all()
+        if len(rows) != len(job_ids):
+            raise ProductionPermissionDenied("stale stranded media transition rejected")
+        await self._session.execute(
+            insert(media_budget_usage),
+            [
+                {
+                    "id": uuid4(),
+                    "tenant_id": row.tenant_id,
+                    "generation_job_id": row.id,
+                    "entry_kind": "UNKNOWN",
+                    "amount": row.reserved_cost,
+                    "currency": row.currency,
+                    "created_at": now,
+                }
+                for row in rows
+            ],
+        )
+        jobs = await self.list_jobs(plan_id)
+        selected = set(job_ids)
+        return tuple(job for job in jobs if job.id in selected)
+
+    async def retry_unknown_media_jobs(
+        self, plan_id: UUID, job_ids: tuple[UUID, ...]
+    ) -> tuple[GenerationJob, ...]:
+        rows = (
+            await self._session.execute(
+                update(generation_jobs)
+                .where(
+                    generation_jobs.c.production_plan_id == plan_id,
+                    generation_jobs.c.id.in_(job_ids),
+                    generation_jobs.c.status == GenerationJobStatus.OUTCOME_UNKNOWN.value,
+                    generation_jobs.c.provider_operation_ref.is_(None),
+                    generation_jobs.c.actual_cost == 0,
+                    generation_jobs.c.unknown_cost > 0,
+                    generation_jobs.c.output_asset_id.is_(None),
+                )
+                .values(
+                    status=GenerationJobStatus.READY.value,
+                    failure_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+                    initiated_by_user_id=None,
+                    executed_by_workload_id=None,
+                    updated_at=datetime.now(UTC),
+                )
+                .returning(generation_jobs.c.id)
+            )
+        ).all()
+        if len(rows) != len(job_ids):
+            raise ProductionPermissionDenied("stale unknown media retry transition rejected")
+        jobs = await self.list_jobs(plan_id)
+        selected = set(job_ids)
+        return tuple(job for job in jobs if job.id in selected)
+
     async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None:
         product_snapshot = (
             await self._session.execute(

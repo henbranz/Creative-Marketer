@@ -75,7 +75,10 @@ from creative_marketer.infrastructure.database.tool_governance_uow import (
 )
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.infrastructure.object_storage.s3 import S3ObjectStore
-from creative_marketer.orchestration.application import PipelineStateService
+from creative_marketer.orchestration.application import (
+    MediaWorkflowExecutionState,
+    PipelineStateService,
+)
 from creative_marketer.orchestration.execution import (
     PipelineActionExecutor,
     pipeline_approval_phrase,
@@ -327,6 +330,7 @@ async def _complete_approved_concept_to_final(
     )
     media = await state.resolve_next_action(context, locator)
     assert media.action is PipelineAction.WAIT_FOR_MEDIA
+    media_executor = await _media_executor(sessions, store)
 
     if exercise_spend_cap_recovery:
         assert monkeypatch is not None
@@ -435,8 +439,97 @@ async def _complete_approved_concept_to_final(
         assert reservation_count == len(original_ids)
         assert tool_call_count == original_tool_call_count
 
+        image_job = next(job for job in requeued if job.kind.value == "IMAGE")
+        video_job = next(job for job in requeued if job.kind.value == "VIDEO")
+        image_result = await media_executor.execute(
+            context.tenant_id, review.production_plan_id, image_job.id
+        )
+        assert image_result.status == GenerationJobStatus.SUCCEEDED.value
+        async with inspection_sessions.begin() as session:
+            await session.execute(
+                update(generation_jobs)
+                .where(generation_jobs.c.id == video_job.id)
+                .values(
+                    status=GenerationJobStatus.STARTING.value,
+                    provider_operation_ref=None,
+                    actual_cost=Decimal(0),
+                    unknown_cost=Decimal(0),
+                    output_asset_id=None,
+                    initiated_by_user_id=context.user_id,
+                    executed_by_workload_id="governed-e2e-media-worker",
+                )
+            )
+            before_recovery_tool_calls = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(tool_calls.c.tenant_id == context.tenant_id)
+            )
+
+        class TerminalMediaWorkflow:
+            async def status(self, _tenant_id, _plan_id):
+                return MediaWorkflowExecutionState.TERMINAL
+
+        state.media_workflows = TerminalMediaWorkflow()
+        stranded = await state.resolve_next_action(context, locator)
+        assert stranded.action is PipelineAction.RECOVER_STRANDED_MEDIA_START
+        await executor.execute(
+            context,
+            locator,
+            expected_action=PipelineAction.RECOVER_STRANDED_MEDIA_START,
+        )
+        unknown = await production.get_job(context, video_job.id)
+        assert unknown.status is GenerationJobStatus.OUTCOME_UNKNOWN
+        assert unknown.provider_operation_ref is None
+        assert unknown.actual_cost == 0
+        assert unknown.unknown_cost == unknown.reserved_cost
+        assert (
+            await production.get_job(context, image_job.id)
+        ).status is GenerationJobStatus.SUCCEEDED
+        async with inspection_sessions.begin() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(tool_calls)
+                    .where(tool_calls.c.tenant_id == context.tenant_id)
+                )
+                == before_recovery_tool_calls
+            )
+
+        ambiguity = await state.resolve_next_action(context, locator)
+        assert ambiguity.action is PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY
+        await executor.execute(
+            context,
+            locator,
+            expected_action=PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+            explicit_approval=pipeline_approval_phrase(
+                PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY
+            ),
+        )
+        retry_ready = await production.get_job(context, video_job.id)
+        assert retry_ready.status is GenerationJobStatus.READY
+        assert retry_ready.unknown_cost == retry_ready.reserved_cost
+        async with inspection_sessions.begin() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(tool_calls)
+                    .where(tool_calls.c.tenant_id == context.tenant_id)
+                )
+                == before_recovery_tool_calls
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(media_budget_usage)
+                    .where(
+                        media_budget_usage.c.generation_job_id == video_job.id,
+                        media_budget_usage.c.entry_kind == "RESERVED",
+                    )
+                )
+                == 1
+            )
+
     jobs = await production.list_jobs(context, review.production_plan_id)
-    media_executor = await _media_executor(sessions, store)
     for job in jobs:
         for _ in range(6):
             result = await media_executor.execute(
@@ -449,6 +542,19 @@ async def _complete_approved_concept_to_final(
             }:
                 break
         assert result.status == GenerationJobStatus.SUCCEEDED.value
+
+    if exercise_spend_cap_recovery:
+        assert inspection_sessions is not None
+        async with inspection_sessions.begin() as session:
+            video_start_calls = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(
+                    tool_calls.c.tenant_id == context.tenant_id,
+                    tool_calls.c.tool_key == "media.video.generate.start",
+                )
+            )
+        assert video_start_calls == 1
 
     manual_gate = await state.resolve_next_action(context, locator)
     assert manual_gate.action is PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT

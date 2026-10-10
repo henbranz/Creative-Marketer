@@ -389,7 +389,12 @@ def create_app(
         live_spend_cap=resolved_settings.live_e2e_max_usd,
         live_product_id=resolved_settings.live_e2e_product_id,
     )
-    pipeline_state = PipelineStateService(orchestration_uow)
+    workflow_coordinator = LazyOrchestrationWorkflowCoordinator(
+        resolved_settings.temporal_address,
+        resolved_settings.temporal_namespace,
+        accelerated_demo=resolved_settings.app_env in {"development", "test"},
+    )
+    pipeline_state = PipelineStateService(orchestration_uow, workflow_coordinator)
     application.include_router(
         create_orchestration_router(
             authenticator,
@@ -399,13 +404,7 @@ def create_app(
                 catalog_service,
                 agent_service,
                 assembly_service,
-                (
-                    workflow_coordinator := LazyOrchestrationWorkflowCoordinator(
-                        resolved_settings.temporal_address,
-                        resolved_settings.temporal_namespace,
-                        accelerated_demo=resolved_settings.app_env in {"development", "test"},
-                    )
-                ),
+                workflow_coordinator,
                 workflow_coordinator,
                 workflow_coordinator,
             ),

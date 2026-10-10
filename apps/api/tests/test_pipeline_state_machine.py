@@ -271,11 +271,19 @@ def test_only_provider_actions_are_marked_as_permitted_and_billable() -> None:
         (MediaPipelineState.READY, PipelineAction.WAIT_FOR_MEDIA),
         (MediaPipelineState.RUNNING, PipelineAction.WAIT_FOR_MEDIA),
         (
+            MediaPipelineState.STRANDED_START,
+            PipelineAction.RECOVER_STRANDED_MEDIA_START,
+        ),
+        (
             MediaPipelineState.BLOCKED_SPEND_CAP,
             PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
         ),
         (MediaPipelineState.FAILED, PipelineAction.RECOVER_MEDIA_FAILURE),
         (MediaPipelineState.OUTCOME_UNKNOWN, PipelineAction.RECONCILE_MEDIA_OUTCOME),
+        (
+            MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
+            PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+        ),
         (
             MediaPipelineState.INVARIANT_VIOLATION,
             PipelineAction.RECOVER_MEDIA_INVARIANT,
@@ -303,9 +311,11 @@ def test_media_transition_matrix_covers_every_declared_state() -> None:
         MediaPipelineState.NOT_OBSERVED,
         MediaPipelineState.READY,
         MediaPipelineState.RUNNING,
+        MediaPipelineState.STRANDED_START,
         MediaPipelineState.BLOCKED_SPEND_CAP,
         MediaPipelineState.FAILED,
         MediaPipelineState.OUTCOME_UNKNOWN,
+        MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
         MediaPipelineState.INVARIANT_VIOLATION,
     }
     assert exercised | {MediaPipelineState.SUCCEEDED} == set(MediaPipelineState)

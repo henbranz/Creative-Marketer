@@ -6,10 +6,12 @@ from uuid import UUID
 from creative_marketer.infrastructure.temporal.client import (
     TemporalCreativeCycleWorkflowStarter,
     TemporalMeasurementWorkflowStarter,
+    TemporalMediaWorkflowStatusReader,
     TemporalPublicationWorkflowStarter,
 )
 from creative_marketer.infrastructure.temporal.configuration import ORCHESTRATION_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.worker import connect_client
+from creative_marketer.orchestration.application import MediaWorkflowExecutionState
 from creative_marketer.workflow_orchestration.contracts import (
     CreativeCycleWorkflowInput,
     MeasurementWorkflowInput,
@@ -27,6 +29,7 @@ class LazyOrchestrationWorkflowCoordinator:
         self._cycle: TemporalCreativeCycleWorkflowStarter | None = None
         self._publication: TemporalPublicationWorkflowStarter | None = None
         self._measurement: TemporalMeasurementWorkflowStarter | None = None
+        self._media_status: TemporalMediaWorkflowStatusReader | None = None
         self._lock = asyncio.Lock()
 
     async def _values(
@@ -49,10 +52,18 @@ class LazyOrchestrationWorkflowCoordinator:
                     self._measurement = TemporalMeasurementWorkflowStarter(
                         client, ORCHESTRATION_TASK_QUEUE
                     )
+                    self._media_status = TemporalMediaWorkflowStatusReader(client)
         assert self._cycle is not None
         assert self._publication is not None
         assert self._measurement is not None
         return self._cycle, self._publication, self._measurement
+
+    async def status(
+        self, tenant_id: UUID, production_plan_id: UUID
+    ) -> MediaWorkflowExecutionState:
+        await self._values()
+        assert self._media_status is not None
+        return await self._media_status.status(tenant_id, production_plan_id)
 
     async def start_cycle(self, tenant_id: UUID, cycle_id: UUID, correlation_id: UUID) -> None:
         cycle, _, _ = await self._values()

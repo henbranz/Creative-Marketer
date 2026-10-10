@@ -59,9 +59,11 @@ class MediaPipelineState(StrEnum):
     READY = "READY"
     BLOCKED_SPEND_CAP = "BLOCKED_SPEND_CAP"
     RUNNING = "RUNNING"
+    STRANDED_START = "STRANDED_START"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+    RETRYABLE_OUTCOME_UNKNOWN = "RETRYABLE_OUTCOME_UNKNOWN"
     INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
 
 
@@ -131,9 +133,11 @@ class PipelineAction(StrEnum):
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
     WAIT_FOR_MEDIA = "WAIT_FOR_MEDIA"
+    RECOVER_STRANDED_MEDIA_START = "RECOVER_STRANDED_MEDIA_START"
     RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE = "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
     RECOVER_MEDIA_FAILURE = "RECOVER_MEDIA_FAILURE"
     RECONCILE_MEDIA_OUTCOME = "RECONCILE_MEDIA_OUTCOME"
+    ABANDON_UNKNOWN_MEDIA_AND_RETRY = "ABANDON_UNKNOWN_MEDIA_AND_RETRY"
     RECOVER_MEDIA_INVARIANT = "RECOVER_MEDIA_INVARIANT"
     BIND_MANUAL_ASSEMBLY_INPUT = "BIND_MANUAL_ASSEMBLY_INPUT"
     RECOVER_ASSEMBLY_INPUT = "RECOVER_ASSEMBLY_INPUT"
@@ -384,6 +388,12 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "GET /v1/production/plans/{production_plan_id}/jobs",
         resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
     ),
+    PipelineAction.RECOVER_STRANDED_MEDIA_START: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "reconcile_stranded_media_start",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        resulting_states=("Media:OUTCOME_UNKNOWN",),
+    ),
     PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE: _execution(
         PipelineExecutionBehavior.EXECUTE,
         "revalidate_and_resume_spend_cap_blocked_media",
@@ -406,6 +416,15 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "operator GenerationJob reconciliation boundary",
         explicit_approval_required=True,
         resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
+    ),
+    PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "accept_unknown_media_duplicate_risk_and_retry",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Media:READY", "Media:RUNNING"),
     ),
     PipelineAction.RECOVER_MEDIA_INVARIANT: _execution(
         PipelineExecutionBehavior.RECOVERY_GATE,
@@ -566,6 +585,8 @@ class PipelineObservation:
     assembly: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
     final_creative: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
     media_spend_requirement: MediaSpendRequirement | None = None
+    stranded_media_start_job_ids: tuple[UUID, ...] = ()
+    retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
 
     def __post_init__(self) -> None:
         if self.producer_current_contract_invalid_attempts < 0:
@@ -596,6 +617,8 @@ class NextPipelineAction:
     assembly_state: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
     final_creative_state: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
     media_spend_requirement: MediaSpendRequirement | None = None
+    stranded_media_start_job_ids: tuple[UUID, ...] = ()
+    retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
 
 
 class PipelineStateResolver:
@@ -798,6 +821,11 @@ class PipelineStateResolver:
                 PipelineAction.WAIT_FOR_MEDIA,
                 "GENERATION_JOBS_IN_PROGRESS",
             ),
+            MediaPipelineState.STRANDED_START: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RECOVER_STRANDED_MEDIA_START,
+                "GENERATION_JOB_START_STRANDED_AFTER_TERMINAL_WORKFLOW",
+            ),
             MediaPipelineState.BLOCKED_SPEND_CAP: (
                 PipelineStage.MEDIA_RECOVERY,
                 PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
@@ -812,6 +840,11 @@ class PipelineStateResolver:
                 PipelineStage.MEDIA_RECOVERY,
                 PipelineAction.RECONCILE_MEDIA_OUTCOME,
                 "GENERATION_PROVIDER_OUTCOME_UNKNOWN",
+            ),
+            MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+                "GENERATION_START_OUTCOME_UNKNOWN_REQUIRES_DUPLICATE_RISK_ACCEPTANCE",
             ),
             MediaPipelineState.INVARIANT_VIOLATION: (
                 PipelineStage.MEDIA_RECOVERY,
@@ -916,4 +949,6 @@ class PipelineStateResolver:
             assembly_state=state.assembly,
             final_creative_state=state.final_creative,
             media_spend_requirement=state.media_spend_requirement,
+            stranded_media_start_job_ids=state.stranded_media_start_job_ids,
+            retryable_unknown_media_job_ids=state.retryable_unknown_media_job_ids,
         )

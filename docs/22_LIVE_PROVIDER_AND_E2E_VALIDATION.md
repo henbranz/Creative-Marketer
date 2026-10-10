@@ -274,6 +274,20 @@ AgentRuns and GenerationJobs. It prints no credentials. Assembly and final accep
 bound to the persisted ProductionPlan, generated assets, AssemblyPlan, and FinalCreative IDs; an
 older successful final cannot satisfy the current session.
 
+If `make live-next` reports `RECOVER_STRANDED_MEDIA_START`, the exact GenerationJob is `STARTING`
+without a task identity while its Temporal workflow is terminal or missing. Running `make live-next`
+performs only the audited `OUTCOME_UNKNOWN` reconciliation; it cannot call a provider. The next
+inspection reports `ABANDON_UNKNOWN_MEDIA_AND_RETRY` and remains fail-closed until the operator runs:
+
+```bash
+make live-next-approved APPROVAL=I_APPROVE_ABANDON_UNKNOWN_MEDIA_AND_RETRY
+```
+
+That approval explicitly accepts possible duplicate-provider risk. Current authority, source rights,
+route compatibility, pricing, reservation, and Product spend cap are revalidated before the same Job
+is re-admitted. The resulting recovery-specific Temporal continuation uses ModelArk and refuses to
+start while another workflow with the ProductionPlan workflow ID is active. See ADR-055.
+
 `LIVE_E2E_MAX_USD` covers reserved/actual Agent and media cost for the selected Product. The media
 authority locks and recomputes cumulative committed spend immediately before provider I/O. It
 blocks a different Product and execution above the cap. Increase the value explicitly in `.env` to

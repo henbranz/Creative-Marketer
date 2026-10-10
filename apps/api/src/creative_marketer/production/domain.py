@@ -637,11 +637,14 @@ class GenerationJob:
                 GenerationJobStatus.SUCCEEDED,
                 GenerationJobStatus.FAILED,
             },
+            GenerationJobStatus.OUTCOME_UNKNOWN: {GenerationJobStatus.READY},
         }
         if status not in allowed.get(self.status, set()):
             raise ValueError("invalid generation job transition")
         unknown = (
-            self.reserved_cost if status is GenerationJobStatus.OUTCOME_UNKNOWN else Decimal(0)
+            self.reserved_cost
+            if status is GenerationJobStatus.OUTCOME_UNKNOWN
+            else self.unknown_cost
         )
         return replace(
             self,
@@ -651,8 +654,16 @@ class GenerationJob:
             unknown_cost=unknown,
             output_asset_id=output_asset_id or self.output_asset_id,
             failure_code=failure_code,
-            initiated_by_user_id=initiated_by_user_id or self.initiated_by_user_id,
-            executed_by_workload_id=executed_by_workload_id or self.executed_by_workload_id,
+            initiated_by_user_id=(
+                None
+                if status is GenerationJobStatus.READY
+                else initiated_by_user_id or self.initiated_by_user_id
+            ),
+            executed_by_workload_id=(
+                None
+                if status is GenerationJobStatus.READY
+                else executed_by_workload_id or self.executed_by_workload_id
+            ),
             updated_at=datetime.now(UTC),
         )
 

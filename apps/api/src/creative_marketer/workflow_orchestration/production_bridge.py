@@ -11,6 +11,7 @@ from creative_marketer.workflow_orchestration.contracts import MediaProductionWo
 
 class MediaProductionWorkflowStarter(Protocol):
     async def start_media_production(self, request: MediaProductionWorkflowInput) -> None: ...
+    async def restart_media_production(self, request: MediaProductionWorkflowInput) -> None: ...
 
 
 class ProductionJobSetResolver(Protocol):
@@ -53,6 +54,7 @@ class StartMediaProductionWorkflow:
             not in {
                 "production.plan.approved_for_generation.v1",
                 "production.media.retry_requested.v1",
+                "production.media.ambiguity_retry_requested.v1",
             }
             or event.scope_kind is not EventScopeKind.TENANT
             or event.tenant_id is None
@@ -64,12 +66,14 @@ class StartMediaProductionWorkflow:
             raise ValueError("ProductionPlan event identity mismatch")
         parsed_plan_id = UUID(plan_id)
         image_jobs, video_jobs = await self.resolver.resolve(event.tenant_id, parsed_plan_id)
-        await self.client.start_media_production(
-            MediaProductionWorkflowInput(
-                str(event.tenant_id),
-                plan_id,
-                tuple(str(value) for value in image_jobs),
-                tuple(str(value) for value in video_jobs),
-                str(event.correlation_id),
-            )
+        request = MediaProductionWorkflowInput(
+            str(event.tenant_id),
+            plan_id,
+            tuple(str(value) for value in image_jobs),
+            tuple(str(value) for value in video_jobs),
+            str(event.correlation_id),
         )
+        if event.event_type == "production.media.ambiguity_retry_requested.v1":
+            await self.client.restart_media_production(request)
+        else:
+            await self.client.start_media_production(request)

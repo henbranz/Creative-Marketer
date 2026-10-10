@@ -26,7 +26,12 @@ from creative_marketer.infrastructure.database import (
 from creative_marketer.infrastructure.database.production_repositories import (
     SqlAlchemyProductionRepository,
 )
-from creative_marketer.production.application import initial_media_router, validate_production_plan
+from creative_marketer.production.application import (
+    LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+    LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+    initial_media_router,
+    validate_production_plan,
+)
 from creative_marketer.production.domain import (
     GenerationJobStatus,
     MediaSpendRequirement,
@@ -139,6 +144,32 @@ class Repository:
     async def validate_spend_cap_retry(self, _plan):
         return None
 
+    async def recover_stranded_starts(self, _plan_id, job_ids):
+        selected = set(job_ids)
+        self.jobs = tuple(
+            replace(
+                job.transition(GenerationJobStatus.OUTCOME_UNKNOWN),
+                failure_code="STRANDED_MEDIA_START_OUTCOME_UNKNOWN",
+            )
+            if job.id in selected
+            else job
+            for job in self.jobs
+        )
+        return tuple(job for job in self.jobs if job.id in selected)
+
+    async def retry_unknown_media_jobs(self, _plan_id, job_ids):
+        selected = set(job_ids)
+        self.jobs = tuple(
+            replace(
+                job.transition(GenerationJobStatus.READY),
+                failure_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+            )
+            if job.id in selected
+            else job
+            for job in self.jobs
+        )
+        return tuple(job for job in self.jobs if job.id in selected)
+
 
 class Uow:
     def __init__(self, repository) -> None:
@@ -237,6 +268,109 @@ async def test_member_and_cost_cap_fail_before_jobs() -> None:
             ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
         )
     assert repository.jobs == ()
+
+
+@pytest.mark.asyncio
+async def test_stranded_start_recovery_then_explicit_ambiguity_retry_is_governed() -> None:
+    service, repository, uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image, video = repository.jobs
+    image = (
+        image.transition(GenerationJobStatus.STARTING)
+        .transition(GenerationJobStatus.IMPORTING)
+        .transition(GenerationJobStatus.SUCCEEDED, output_asset_id=uuid4())
+    )
+    video = replace(
+        video.transition(GenerationJobStatus.STARTING),
+        route_version=LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+        provider="byteplus",
+        pricing_version=LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+    )
+    repository.jobs = (image, video)
+
+    recovered = await service.recover_stranded_media_start(
+        owner, repository.record.plan.id, job_ids=(video.id,)
+    )
+
+    assert recovered[0].status is GenerationJobStatus.OUTCOME_UNKNOWN
+    assert recovered[0].unknown_cost == video.reserved_cost
+    assert repository.jobs[0] == image
+    assert not [
+        event
+        for event in uow.outbox.values
+        if event.event_type == "production.media.ambiguity_retry_requested.v1"
+    ]
+
+    service.live_spend_cap = Decimal("100")
+    transition_id = uuid4()
+    requeued = await service.abandon_unknown_media_and_retry(
+        owner,
+        repository.record.plan.id,
+        job_ids=(video.id,),
+        transition_id=transition_id,
+    )
+    replay = await service.abandon_unknown_media_and_retry(
+        owner,
+        repository.record.plan.id,
+        job_ids=(video.id,),
+        transition_id=transition_id,
+    )
+
+    assert requeued == replay
+    assert requeued[0].id == video.id
+    assert requeued[0].status is GenerationJobStatus.READY
+    assert requeued[0].unknown_cost == video.reserved_cost
+    assert repository.jobs[0] == image
+    events = [
+        event
+        for event in uow.outbox.values
+        if event.event_type == "production.media.ambiguity_retry_requested.v1"
+    ]
+    assert len(events) == 1
+    assert events[0].event_id == transition_id
+    assert events[0].payload["duplicate_provider_risk_accepted"] is True
+    EventContractRegistry().validate_event(events[0])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_stranded_start_recovery_collapses_to_one_transition() -> None:
+    service, repository, uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image, video = repository.jobs
+    repository.jobs = (image, video.transition(GenerationJobStatus.STARTING))
+
+    results = await asyncio.gather(
+        *(
+            service.recover_stranded_media_start(
+                owner,
+                repository.record.plan.id,
+                job_ids=(video.id,),
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert all(result[0].status is GenerationJobStatus.OUTCOME_UNKNOWN for result in results)
+    assert (
+        len(
+            [
+                audit
+                for audit in uow.audit.values
+                if audit.action == "production.media.stranded_start_reconciled"
+            ]
+        )
+        == 1
+    )
 
 
 @pytest.mark.asyncio

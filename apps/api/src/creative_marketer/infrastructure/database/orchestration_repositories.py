@@ -1128,17 +1128,50 @@ class SqlAlchemyOrchestrationRepository:
         assembly_state = AssemblyPipelineState.NOT_STARTED
         final_state = FinalCreativePipelineState.NOT_STARTED
         media_spend_requirement = None
+        stranded_media_start_job_ids: tuple[UUID, ...] = ()
+        retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
         assembly_plan_id: UUID | None = None
         final_creative_id: UUID | None = None
         if producer_state is ProducerPipelineState.APPROVED_FOR_GENERATION and plan_id is not None:
-            job_statuses = tuple(
+            job_rows = tuple(
                 (
                     await self.session.execute(
-                        select(generation_jobs.c.status).where(
-                            generation_jobs.c.production_plan_id == plan_id
-                        )
+                        select(
+                            generation_jobs.c.id,
+                            generation_jobs.c.status,
+                            generation_jobs.c.provider_operation_ref,
+                            generation_jobs.c.actual_cost,
+                            generation_jobs.c.unknown_cost,
+                            generation_jobs.c.output_asset_id,
+                            generation_jobs.c.failure_code,
+                        ).where(generation_jobs.c.production_plan_id == plan_id)
                     )
-                ).scalars()
+                ).mappings()
+            )
+            job_statuses = tuple(row["status"] for row in job_rows)
+            stranded_media_start_job_ids = tuple(
+                row["id"]
+                for row in job_rows
+                if row["status"] == "STARTING"
+                and row["provider_operation_ref"] is None
+                and row["actual_cost"] == 0
+                and row["unknown_cost"] == 0
+                and row["output_asset_id"] is None
+            )
+            retryable_unknown_media_job_ids = tuple(
+                row["id"]
+                for row in job_rows
+                if row["status"] == "OUTCOME_UNKNOWN"
+                and row["provider_operation_ref"] is None
+                and row["actual_cost"] == 0
+                and row["unknown_cost"] > 0
+                and row["output_asset_id"] is None
+                and row["failure_code"]
+                in {
+                    "STRANDED_MEDIA_START_OUTCOME_UNKNOWN",
+                    "MEDIA_PROVIDER_OUTCOME_UNKNOWN",
+                    None,
+                }
             )
             if not job_statuses:
                 media_state = MediaPipelineState.INVARIANT_VIOLATION
@@ -1162,7 +1195,12 @@ class SqlAlchemyOrchestrationRepository:
             if (
                 self.live_spend_cap is not None
                 and (self.live_product_id is None or self.live_product_id == locator.product_id)
-                and media_state in {MediaPipelineState.READY, MediaPipelineState.BLOCKED_SPEND_CAP}
+                and media_state
+                in {
+                    MediaPipelineState.READY,
+                    MediaPipelineState.BLOCKED_SPEND_CAP,
+                    MediaPipelineState.OUTCOME_UNKNOWN,
+                }
             ):
                 tenant_id = await self.session.scalar(
                     select(products.c.tenant_id).where(products.c.id == locator.product_id)
@@ -1267,6 +1305,8 @@ class SqlAlchemyOrchestrationRepository:
             assembly=assembly_state,
             final_creative=final_state,
             media_spend_requirement=media_spend_requirement,
+            stranded_media_start_job_ids=stranded_media_start_job_ids,
+            retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

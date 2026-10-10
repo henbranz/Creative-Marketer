@@ -47,6 +47,8 @@ def action_state(
     final_creative_id=None,
     assembly=AssemblyPipelineState.NOT_STARTED,
     media=MediaPipelineState.NOT_OBSERVED,
+    stranded_media_start_job_ids=(),
+    retryable_unknown_media_job_ids=(),
 ) -> NextPipelineAction:
     definition = EXECUTION_BEHAVIOR_REGISTRY[action]
     return NextPipelineAction(
@@ -70,6 +72,8 @@ def action_state(
         final_creative_id=final_creative_id,
         assembly_state=assembly,
         media_state=media,
+        stranded_media_start_job_ids=stranded_media_start_job_ids,
+        retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
     )
 
 
@@ -125,6 +129,8 @@ class Production:
     def __init__(self, feedback: str | None = None) -> None:
         self.feedback = feedback
         self.retry_calls: list[tuple[object, object]] = []
+        self.stranded_calls: list[tuple[object, object]] = []
+        self.ambiguity_calls: list[tuple[object, object, object]] = []
 
     async def get_plan(self, _context, _plan_id):
         return SimpleNamespace(decision=SimpleNamespace(rejection_feedback=self.feedback))
@@ -132,6 +138,14 @@ class Production:
     async def retry_after_spend_cap_increase(self, _context, plan_id, *, transition_id):
         self.retry_calls.append((plan_id, transition_id))
         return (SimpleNamespace(id=uuid4()),)
+
+    async def recover_stranded_media_start(self, _context, plan_id, *, job_ids):
+        self.stranded_calls.append((plan_id, job_ids))
+        return (SimpleNamespace(id=job_ids[0]),)
+
+    async def abandon_unknown_media_and_retry(self, _context, plan_id, *, job_ids, transition_id):
+        self.ambiguity_calls.append((plan_id, job_ids, transition_id))
+        return (SimpleNamespace(id=job_ids[0]),)
 
 
 class Assembly:
@@ -512,4 +526,72 @@ async def test_spend_cap_recovery_reuses_plan_and_requires_exact_approval() -> N
     assert production.retry_calls[0][0] == plan_id
     assert result.resource_type == "production_plan"
     assert result.resource_id == plan_id
+    assert result.provider_execution_occurred is False
+
+
+@pytest.mark.asyncio
+async def test_stranded_start_reconciliation_is_free_and_provider_is_forbidden() -> None:
+    ctx, plan_id, job_id = context(uuid4()), uuid4(), uuid4()
+    before = action_state(
+        PipelineAction.RECOVER_STRANDED_MEDIA_START,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.STRANDED_START,
+        stranded_media_start_job_ids=(job_id,),
+    )
+    after = action_state(
+        PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
+        retryable_unknown_media_job_ids=(job_id,),
+    )
+    production = Production()
+    result = await PipelineActionExecutor(
+        State(before, after), Agents(), Creative(), production
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.RECOVER_STRANDED_MEDIA_START,
+    )
+    assert production.stranded_calls == [(plan_id, (job_id,))]
+    assert result.provider_execution_occurred is False
+    definition = EXECUTION_BEHAVIOR_REGISTRY[PipelineAction.RECOVER_STRANDED_MEDIA_START]
+    assert (definition.provider_cost, definition.provider_execution_permitted) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_unknown_media_retry_requires_action_bound_risk_acceptance() -> None:
+    ctx, plan_id, job_id = context(uuid4()), uuid4(), uuid4()
+    before = action_state(
+        PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
+        retryable_unknown_media_job_ids=(job_id,),
+    )
+    after = action_state(
+        PipelineAction.WAIT_FOR_MEDIA,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY,
+    )
+    production = Production()
+    executor = PipelineActionExecutor(State(before, after), Agents(), Creative(), production)
+    with pytest.raises(PipelineApprovalRequired):
+        await executor.execute(
+            ctx,
+            PipelineLocator(uuid4()),
+            expected_action=PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+        )
+    assert not production.ambiguity_calls
+    result = await PipelineActionExecutor(
+        State(before, after), Agents(), Creative(), production
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.ABANDON_UNKNOWN_MEDIA_AND_RETRY),
+    )
+    assert production.ambiguity_calls[0][:2] == (plan_id, (job_id,))
     assert result.provider_execution_occurred is False

@@ -23,6 +23,7 @@ from .domain import (
     FrozenAssetReference,
     GenerationJob,
     GenerationJobStatus,
+    InvalidProductionPlan,
     MediaKind,
     MediaSpendRequirement,
     ProductionDecisionConflict,
@@ -59,6 +60,12 @@ class ProductionRepository(Protocol):
     ) -> MediaSpendRequirement: ...
     async def requeue_spend_cap_jobs(self, plan_id: UUID) -> tuple[GenerationJob, ...]: ...
     async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None: ...
+    async def recover_stranded_starts(
+        self, plan_id: UUID, job_ids: tuple[UUID, ...]
+    ) -> tuple[GenerationJob, ...]: ...
+    async def retry_unknown_media_jobs(
+        self, plan_id: UUID, job_ids: tuple[UUID, ...]
+    ) -> tuple[GenerationJob, ...]: ...
 
 
 class ProductionUnitOfWork(Protocol):
@@ -346,6 +353,178 @@ class ProductionService:
                             "job_count": len(requeued),
                             "configured_cap": str(requirement.configured_cap),
                             "committed_product_spend": str(requirement.committed_product_spend),
+                        }
+                    ),
+                )
+            )
+            await uow.commit()
+            return requeued
+
+    async def recover_stranded_media_start(
+        self,
+        context: ExecutionContext,
+        plan_id: UUID,
+        *,
+        job_ids: tuple[UUID, ...],
+    ) -> tuple[GenerationJob, ...]:
+        """Converge a proven stranded pre-task start without external execution."""
+
+        if not self._can_spend(context):
+            raise ProductionPermissionDenied("media recovery requires owner or admin")
+        if not job_ids:
+            raise ProductionPermissionDenied("stranded media recovery requires exact jobs")
+        async with self.uow_factory(context.tenant_id) as uow:
+            record = await uow.production.get_plan(plan_id, for_update=True)
+            if record is None or record.decision is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            if record.decision.state is not ProductionPlanDecisionState.APPROVED_FOR_GENERATION:
+                raise ProductionPermissionDenied("ProductionPlan is not approved")
+            jobs = await uow.production.list_jobs(plan_id)
+            selected = tuple(job for job in jobs if job.id in set(job_ids))
+            if len(selected) != len(job_ids) or any(
+                job.status is not GenerationJobStatus.STARTING
+                or job.provider_operation_ref is not None
+                or job.actual_cost != 0
+                or job.unknown_cost != 0
+                or job.output_asset_id is not None
+                for job in selected
+            ):
+                already = tuple(
+                    job
+                    for job in jobs
+                    if job.id in set(job_ids)
+                    and job.status is GenerationJobStatus.OUTCOME_UNKNOWN
+                    and job.failure_code == "STRANDED_MEDIA_START_OUTCOME_UNKNOWN"
+                )
+                if len(already) == len(job_ids):
+                    return already
+                raise ProductionPermissionDenied("GenerationJob is not a stranded media start")
+            recovered = await uow.production.recover_stranded_starts(plan_id, job_ids)
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="production.media.stranded_start_reconciled",
+                    outcome=AuditOutcome.FAILED,
+                    reason_code="STRANDED_MEDIA_START_OUTCOME_UNKNOWN",
+                    resource_type="production_plan",
+                    resource_id=str(plan_id),
+                    agent_run_id=record.plan.agent_run_id,
+                    metadata=safe_metadata(
+                        {
+                            "generation_job_ids": [str(value) for value in job_ids],
+                            "provider_operation_present": False,
+                            "provider_execution_occurred": False,
+                            "actual_cost": "0",
+                            "prior_unknown_cost": "0",
+                        }
+                    ),
+                )
+            )
+            await uow.commit()
+            return recovered
+
+    async def abandon_unknown_media_and_retry(
+        self,
+        context: ExecutionContext,
+        plan_id: UUID,
+        *,
+        job_ids: tuple[UUID, ...],
+        transition_id: UUID,
+    ) -> tuple[GenerationJob, ...]:
+        """Accept bounded duplicate risk and re-admit the same immutable jobs."""
+
+        if not self._can_spend(context):
+            raise ProductionPermissionDenied("media ambiguity acceptance requires owner or admin")
+        if self.live_spend_cap is None:
+            raise ProductionPermissionDenied("live media spend cap is not configured")
+        if not job_ids:
+            raise ProductionPermissionDenied("media retry requires exact unknown jobs")
+        async with self.uow_factory(context.tenant_id) as uow:
+            record = await uow.production.get_plan(plan_id, for_update=True)
+            if record is None or record.decision is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            plan, decision = record.plan, record.decision
+            if self.live_product_id is not None and plan.product_id != self.live_product_id:
+                raise ProductionPermissionDenied("ProductionPlan is outside LIVE_E2E_PRODUCT_ID")
+            if decision.state is not ProductionPlanDecisionState.APPROVED_FOR_GENERATION:
+                raise ProductionPermissionDenied("ProductionPlan is not approved")
+            jobs = await uow.production.list_jobs(plan_id)
+            selected = tuple(job for job in jobs if job.id in set(job_ids))
+            already = tuple(
+                job
+                for job in selected
+                if job.status is GenerationJobStatus.READY
+                and job.failure_code == "UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED"
+            )
+            if len(already) == len(job_ids):
+                return already
+            if len(selected) != len(job_ids) or any(
+                job.status is not GenerationJobStatus.OUTCOME_UNKNOWN
+                or job.provider_operation_ref is not None
+                or job.actual_cost != 0
+                or job.unknown_cost <= 0
+                or job.output_asset_id is not None
+                for job in selected
+            ):
+                raise ProductionPermissionDenied("media outcome is not safely retryable")
+            for job in jobs:
+                try:
+                    route = self.media_router.resolve_execution(
+                        job.media_profile,
+                        job.route_version,
+                        job.provider,
+                        job.model,
+                        job.pricing_version,
+                    )
+                except InvalidProductionPlan as error:
+                    raise ProductionPricingChanged(
+                        "approved media execution route is unavailable"
+                    ) from error
+                if route.capabilities.media_kind is not job.kind:
+                    raise ProductionPricingChanged("approved media route kind changed")
+            await uow.production.validate_spend_cap_retry(plan)
+            requirement = await uow.production.spend_requirement(plan_id, self.live_spend_cap)
+            retry_reservation = sum((job.reserved_cost for job in selected), Decimal(0))
+            if requirement.committed_product_spend + retry_reservation > requirement.configured_cap:
+                raise ProductionPermissionDenied("LIVE_E2E_MAX_USD is below ambiguity retry spend")
+            requeued = await uow.production.retry_unknown_media_jobs(plan_id, job_ids)
+            await uow.outbox.append(
+                tenant_event(
+                    context,
+                    event_type="production.media.ambiguity_retry_requested.v1",
+                    schema_version=1,
+                    aggregate_type="production_plan",
+                    aggregate_id=plan.id,
+                    payload={
+                        "production_plan_id": str(plan.id),
+                        "transition_id": str(transition_id),
+                        "generation_job_ids": [str(job.id) for job in requeued],
+                        "duplicate_provider_risk_accepted": True,
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(
+                        "production.media.ambiguity_retry_requested.v1"
+                    ),
+                    occurred_at=datetime.now(UTC),
+                    agent_run_id=plan.agent_run_id,
+                    event_id=transition_id,
+                )
+            )
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="production.media.unknown_outcome_abandoned_and_retry_approved",
+                    outcome=AuditOutcome.SUCCESS,
+                    reason_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+                    resource_type="production_plan",
+                    resource_id=str(plan.id),
+                    agent_run_id=plan.agent_run_id,
+                    metadata=safe_metadata(
+                        {
+                            "generation_job_ids": [str(value) for value in job_ids],
+                            "duplicate_provider_risk_accepted": True,
+                            "prior_provider_operation_present": False,
+                            "prior_asset_present": False,
+                            "retry_reservation": str(retry_reservation),
                         }
                     ),
                 )

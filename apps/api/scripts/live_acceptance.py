@@ -1394,7 +1394,10 @@ def live_next(
         return 0 if behavior == "TERMINAL" else 3
 
     if resolution["provider_cost"]:
-        if action == "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE":
+        if action in {
+            "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE",
+            "ABANDON_UNKNOWN_MEDIA_AND_RETRY",
+        }:
             if not isinstance(spend, dict):
                 raise RuntimeError("LIVE_MEDIA_SPEND_REQUIREMENT_MISSING")
             provider, model = "approved media providers", "immutable approved routes"
@@ -1444,7 +1447,7 @@ def live_next(
     saved.save(state)
     print(f"Transition admitted: {result.get('resource_type')} {result.get('resource_id')}")
     if resolution["provider_cost"]:
-        print("A governed PENDING AgentRun was admitted; provider execution did not occur here.")
+        print("A governed paid continuation was admitted; provider execution did not occur here.")
     else:
         print("The deterministic free transition completed; no provider execution occurred.")
     return 0

@@ -45,13 +45,16 @@ async def product_media_spend_requirement(
             func.coalesce(
                 func.sum(
                     case(
-                        (generation_jobs.c.status == "SUCCEEDED", generation_jobs.c.actual_cost),
+                        (
+                            generation_jobs.c.status == "SUCCEEDED",
+                            generation_jobs.c.actual_cost + generation_jobs.c.unknown_cost,
+                        ),
                         (
                             generation_jobs.c.status == "OUTCOME_UNKNOWN",
                             generation_jobs.c.unknown_cost,
                         ),
-                        (generation_jobs.c.status == "FAILED", Decimal(0)),
-                        else_=generation_jobs.c.reserved_cost,
+                        (generation_jobs.c.status == "FAILED", generation_jobs.c.unknown_cost),
+                        else_=(generation_jobs.c.reserved_cost + generation_jobs.c.unknown_cost),
                     )
                 ),
                 0,
