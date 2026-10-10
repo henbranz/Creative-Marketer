@@ -204,6 +204,21 @@ continuation and requires a fresh Creative Strategist run; it never weakens Prod
 Research validation. Status shows the current Researcher, historical Research lineage, original
 Research authority, current Research authority, and revalidation result. See ADR-052.
 
+When revalidation reports `REQUIRES_RESTRATEGY`, keep the Agent worker stopped and admit the exact
+state-machine transition explicitly:
+
+```bash
+make live-creative-restrategy
+make live-e2e
+```
+
+The first command validates the session's current Research authority and immutable historical
+Concept/revalidation lineage, then creates one normal `PENDING` Creative Strategist run with
+`restrategy_of_concept_id`. It preserves historical Creative and Producer database rows, removes the
+historical Producer only from the active local checkpoint, and does not execute a provider. Repeated
+invocation reuses the session-bound pending run. The second command should report
+`WAIT_FOR_CREATIVE`; provider execution remains a separately controlled worker action.
+
 Only after successful revalidation, use the existing governed continuation:
 
 ```bash
@@ -247,12 +262,12 @@ worker, creates an AgentRun, calls a provider, approves an artifact, creates med
 mutates the live session/database. Optional session UUIDs only bind the projection to the selected
 history; PostgreSQL remains authoritative.
 
-When it reports `REQUIRES_RESTRATEGY`, start a new Creative run through the normal Creative API with
-`restrategy_of_concept_id` set to the exact historical Concept and a new bounded idempotency key.
-Admission verifies the current rejected decision or `REQUIRES_RESTRATEGY` authority and current
-Research, and freezes both in the new run. When it reports `READY_FOR_GENERATION`, the pre-generation
-acceptance path is complete. Image, video, and assembly remain separate explicit commands and are not
-part of this state inspection. See ADR-053.
+When it reports `REQUIRES_RESTRATEGY`, run `make live-creative-restrategy` with the Agent worker
+stopped. That operator transition uses the normal Creative API with `restrategy_of_concept_id` set to
+the exact historical Concept and a bounded authority-derived idempotency key. Admission verifies the
+current `REQUIRES_RESTRATEGY` authority and current Research, and freezes both in the new run. When it
+reports `READY_FOR_GENERATION`, the pre-generation acceptance path is complete. Image, video, and
+assembly remain separate explicit commands and are not part of this state inspection. See ADR-053.
 
 At any point, `make live-e2e-status` reports safe stage status and cost for only the exact persisted
 AgentRuns and GenerationJobs. It prints no credentials. Assembly and final acceptance are likewise

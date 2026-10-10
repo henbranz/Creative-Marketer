@@ -45,6 +45,23 @@ async def test_provider_preflight_checks_models_without_generation(monkeypatch, 
     assert "no inference or media-generation requests" in output
 
 
+@pytest.mark.asyncio
+async def test_live_cli_dispatches_explicit_creative_restrategy(monkeypatch) -> None:
+    configured = settings()
+    called = []
+
+    def restrategy(value):
+        called.append(value)
+        return 0
+
+    monkeypatch.setattr(live, "Settings", lambda: configured)
+    monkeypatch.setattr(live.acceptance, "restrategy_creative_concept", restrategy)
+    monkeypatch.setattr("sys.argv", ["live_validation", "creative-restrategy"])
+
+    assert await live._main() == 0
+    assert called == [configured]
+
+
 def test_live_api_requires_acknowledgement_product_and_local_identity(monkeypatch) -> None:
     settings = Settings(database_url=DATABASE)
     with pytest.raises(RuntimeError, match="ALLOW_BILLABLE_MEDIA"):
@@ -80,6 +97,9 @@ SNAPSHOT = "90000000-0000-0000-0000-000000000009"
 SUCCESSOR = "a0000000-0000-0000-0000-00000000000a"
 UNRELATED = "b0000000-0000-0000-0000-00000000000b"
 REVALIDATION = "c0000000-0000-0000-0000-00000000000c"
+PRODUCT_SNAPSHOT = "d0000000-0000-0000-0000-00000000000d"
+NEW_CONCEPT = "e0000000-0000-0000-0000-00000000000e"
+NEW_PRODUCER = "f0000000-0000-0000-0000-00000000000f"
 
 
 class FakeApi:
@@ -192,6 +212,44 @@ def producer_run(
         pricing_version=None if status is AgentRunStatus.PENDING else "producer-pricing",
     )
     return cast(dict[str, object], _agent_run(value).model_dump(mode="json"))
+
+
+def test_agent_run_response_exposes_only_bounded_creative_restrategy_metadata() -> None:
+    value = replace(
+        run(),
+        agent_type="creative_strategist",
+        input_context_kind="creative_strategy.v1",
+        input_context_refs=(
+            {
+                "kind": "strategy_request",
+                "concept_count": 3,
+                "channel_intent": "TIKTOK",
+            },
+            {
+                "kind": "creative_restrategy",
+                "concept_id": CONCEPT,
+                "historical_creative_run_id": CREATIVE,
+                "trigger_kind": "creative_revalidation",
+                "trigger_id": REVALIDATION,
+                "current_research_snapshot_id": SNAPSHOT,
+                "concept_digest": "sha256:" + "1" * 64,
+                "trigger_digest": "sha256:" + "2" * 64,
+            },
+        ),
+    )
+
+    response = _agent_run(value).model_dump(mode="json")
+
+    assert response["creative_concept_count"] == 3
+    assert response["creative_channel_intent"] == "TIKTOK"
+    assert response["restrategy_of_concept_id"] == CONCEPT
+    assert response["restrategy_historical_creative_run_id"] == CREATIVE
+    assert response["restrategy_trigger_kind"] == "creative_revalidation"
+    assert response["restrategy_trigger_id"] == REVALIDATION
+    assert response["restrategy_current_research_snapshot_id"] == SNAPSHOT
+    assert "concept_digest" not in response
+    assert "trigger_digest" not in response
+    assert "input_context_refs" not in response
 
 
 def saved_state(store, **values):
@@ -733,6 +791,405 @@ def test_live_deterministic_revalidation_binds_current_research_without_generati
     assert state is not None and state.creative_revalidation_id == REVALIDATION
     posts = [(path, body) for method, path, body in fake.calls if method == "POST"]
     assert posts == [(f"/v1/creative/concepts/{CONCEPT}/revalidate", None)]
+
+
+def _restrategy_resolution(**changes):
+    value = {
+        "current_stage": "CREATIVE_RESTRATEGY",
+        "next_action": "RESTRATEGIZE_CREATIVE",
+        "blocking_reason": "CURRENT_AUTHORITY_MATERIALLY_DIFFERS",
+        "provider_cost": True,
+        "human_approval_required": True,
+        "provider_execution_permitted": True,
+        "research_state": "SUCCEEDED_CURRENT",
+        "creative_state": "REQUIRES_RESTRATEGY",
+        "producer_state": "NOT_STARTED",
+        "research_run_id": RESEARCH,
+        "research_snapshot_id": SNAPSHOT,
+        "creative_run_id": CREATIVE,
+        "concept_id": CONCEPT,
+        "creative_revalidation_id": REVALIDATION,
+        "producer_run_id": None,
+        "production_plan_id": None,
+    }
+    value.update(changes)
+    return value
+
+
+def _current_research_snapshot():
+    return {
+        "id": SNAPSHOT,
+        "product_id": PRODUCT,
+        "agent_run_id": RESEARCH,
+        "product_snapshot_id": PRODUCT_SNAPSHOT,
+        "product_snapshot_digest": "sha256:" + "c" * 64,
+        "research_context_digest": "sha256:" + "d" * 64,
+        "freshness": "current",
+    }
+
+
+def _historical_concept_set():
+    return {
+        "id": str(UUID(int=41)),
+        "product_id": PRODUCT,
+        "agent_run_id": CREATIVE,
+        "concepts": [
+            {
+                "id": identifier,
+                "payload": {"channel_intent": "TIKTOK"},
+            }
+            for identifier in (CONCEPT, str(UUID(int=42)), str(UUID(int=43)))
+        ],
+    }
+
+
+def _pending_restrategy_run():
+    return recoverable_run(
+        SUCCESSOR,
+        acceptance.initial_creative_strategist_route(),
+        status="PENDING",
+        resolved_provider=None,
+        resolved_model=None,
+        model_route_version=None,
+        pricing_version=None,
+        product_snapshot_id=PRODUCT_SNAPSHOT,
+        input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        estimated_cost="0",
+        creative_concept_count=3,
+        creative_channel_intent="TIKTOK",
+        restrategy_of_concept_id=CONCEPT,
+        restrategy_historical_creative_run_id=CREATIVE,
+        restrategy_trigger_kind="creative_revalidation",
+        restrategy_trigger_id=REVALIDATION,
+        restrategy_current_research_snapshot_id=SNAPSHOT,
+    )
+
+
+def test_live_creative_restrategy_admits_once_preserves_history_and_reuses_pending_run(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+    )
+    historical_creative = recoverable_run(
+        CREATIVE,
+        acceptance.initial_creative_strategist_route(),
+        status="SUCCEEDED",
+        creative_concept_count=3,
+        creative_channel_intent="TIKTOK",
+    )
+    pending = _pending_restrategy_run()
+    historical_producer = recoverable_run(
+        PRODUCER,
+        acceptance.initial_producer_route(),
+        status="FAILED",
+        agent_type="producer",
+    )
+    created = False
+    resolutions = iter(
+        [
+            _restrategy_resolution(),
+            _restrategy_resolution(
+                current_stage="CREATIVE",
+                next_action="WAIT_FOR_CREATIVE",
+                blocking_reason="CREATIVE_RUN_PENDING",
+                creative_state="PENDING",
+                creative_run_id=SUCCESSOR,
+                concept_id=None,
+                creative_revalidation_id=None,
+            ),
+            _restrategy_resolution(
+                current_stage="CREATIVE",
+                next_action="WAIT_FOR_CREATIVE",
+                blocking_reason="CREATIVE_RUN_PENDING",
+                creative_state="PENDING",
+                creative_run_id=SUCCESSOR,
+                concept_id=None,
+                creative_revalidation_id=None,
+            ),
+        ]
+    )
+
+    def creative_runs():
+        return [historical_creative, pending] if created else [historical_creative]
+
+    def create_restrategy():
+        nonlocal created
+        created = True
+        return pending
+
+    revalidation = {
+        "id": REVALIDATION,
+        "product_id": PRODUCT,
+        "concept_id": CONCEPT,
+        "current_research_snapshot_id": SNAPSHOT,
+        "result": "REQUIRES_RESTRATEGY",
+    }
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): lambda: next(resolutions),
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(RESEARCH, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/research/snapshots"): [_current_research_snapshot()],
+            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): creative_runs,
+            ("GET", f"/v1/products/{PRODUCT}/creative/concept-sets"): [_historical_concept_set()],
+            ("GET", f"/v1/creative/concepts/{CONCEPT}/revalidations"): [revalidation],
+            ("GET", f"/v1/products/{PRODUCT}/production/runs"): [historical_producer],
+            ("POST", f"/v1/products/{PRODUCT}/creative/runs"): create_restrategy,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.restrategy_creative_concept(settings(), store) == 0
+    state = store.load()
+    assert state is not None
+    assert state.creative_run_id == SUCCESSOR
+    assert state.creative_history_run_ids == [CREATIVE]
+    assert state.creative_concept_id is None
+    assert state.creative_revalidation_id is None
+    assert state.producer_run_id is None
+    assert state.production_plan_id is None
+    assert historical_producer["id"] == PRODUCER
+    assert pending["recovery_of_run_id"] is None
+
+    assert acceptance.restrategy_creative_concept(settings(), store) == 0
+    posts = [call for call in fake.calls if call[0] == "POST"]
+    creative_posts = [call for call in posts if call[1].endswith("/creative/runs")]
+    assert len(creative_posts) == 1
+    body = creative_posts[0][2]
+    assert body["concept_count"] == 3
+    assert body["channel_intent"] == "TIKTOK"
+    assert body["restrategy_of_concept_id"] == CONCEPT
+    assert body["idempotency_key"].startswith("live-creative-restrategy-")
+    assert len(body["idempotency_key"]) <= 128
+    assert not any("responses" in path or "worker" in path for _, path, _ in fake.calls)
+    output = capsys.readouterr().out
+    assert f"Creative restrategy requested: {SUCCESSOR}" in output
+    assert f"Historical Creative retained: {CREATIVE}" in output
+    assert f"retained but unbound from active session: {PRODUCER}" in output
+    assert "Creative restrategy already bound" in output
+    assert output.count("No provider execution was started by this command.") == 2
+
+
+def test_live_creative_restrategy_wrong_action_has_zero_mutation(monkeypatch, tmp_path) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+    )
+    before = store.path.read_text()
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): _restrategy_resolution(
+                current_stage="CREATIVE_APPROVAL",
+                next_action="APPROVE_CREATIVE",
+                blocking_reason="CREATIVE_APPROVAL_REQUIRED",
+                creative_state="APPROVAL_REQUIRED",
+            )
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    with pytest.raises(RuntimeError, match="LIVE_CREATIVE_RESTRATEGY_NOT_ELIGIBLE"):
+        acceptance.restrategy_creative_concept(settings(), store)
+
+    assert store.path.read_text() == before
+    assert len(fake.calls) == 1
+
+
+def test_live_creative_restrategy_adopts_exact_preexisting_run_after_checkpoint_gap(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+    )
+    historical = recoverable_run(
+        CREATIVE,
+        acceptance.initial_creative_strategist_route(),
+        status="SUCCEEDED",
+        creative_concept_count=3,
+        creative_channel_intent="TIKTOK",
+    )
+    pending = _pending_restrategy_run()
+    producer = recoverable_run(
+        PRODUCER,
+        acceptance.initial_producer_route(),
+        status="FAILED",
+        agent_type="producer",
+    )
+    resolutions = iter(
+        [
+            _restrategy_resolution(),
+            _restrategy_resolution(
+                current_stage="CREATIVE",
+                next_action="WAIT_FOR_CREATIVE",
+                blocking_reason="CREATIVE_RUN_PENDING",
+                creative_state="PENDING",
+                creative_run_id=SUCCESSOR,
+                concept_id=None,
+                creative_revalidation_id=None,
+            ),
+        ]
+    )
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): lambda: next(resolutions),
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(RESEARCH, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/research/snapshots"): [_current_research_snapshot()],
+            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): [historical, pending],
+            ("GET", f"/v1/products/{PRODUCT}/creative/concept-sets"): [_historical_concept_set()],
+            ("GET", f"/v1/creative/concepts/{CONCEPT}/revalidations"): [
+                {
+                    "id": REVALIDATION,
+                    "product_id": PRODUCT,
+                    "concept_id": CONCEPT,
+                    "current_research_snapshot_id": SNAPSHOT,
+                    "result": "REQUIRES_RESTRATEGY",
+                }
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/production/runs"): [producer],
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.restrategy_creative_concept(settings(), store) == 0
+
+    state = store.load()
+    assert state is not None
+    assert state.creative_run_id == SUCCESSOR
+    assert state.creative_history_run_ids == [CREATIVE]
+    assert state.producer_run_id is None
+    assert all(
+        not (method == "POST" and path.endswith("/creative/runs")) for method, path, _ in fake.calls
+    )
+    assert f"Existing Creative restrategy adopted: {SUCCESSOR}" in capsys.readouterr().out
+
+
+def test_live_creative_restrategy_rejects_ambiguous_active_candidates(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        creative_revalidation_id=REVALIDATION,
+        producer_run_id=PRODUCER,
+    )
+    historical = recoverable_run(
+        CREATIVE,
+        acceptance.initial_creative_strategist_route(),
+        status="SUCCEEDED",
+        creative_concept_count=3,
+        creative_channel_intent="TIKTOK",
+    )
+    first = _pending_restrategy_run()
+    second = {**first, "id": UNRELATED}
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): _restrategy_resolution(),
+            ("GET", f"/v1/products/{PRODUCT}/research/runs"): [
+                succeeded(RESEARCH, acceptance.initial_researcher_route())
+            ],
+            ("GET", f"/v1/products/{PRODUCT}/research/snapshots"): [_current_research_snapshot()],
+            ("GET", f"/v1/products/{PRODUCT}/creative/runs"): [historical, first, second],
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    with pytest.raises(RuntimeError, match="ACTIVE_RUN_AMBIGUOUS"):
+        acceptance.restrategy_creative_concept(settings(), store)
+
+    assert all(
+        not (method == "POST" and path.endswith("/creative/runs")) for method, path, _ in fake.calls
+    )
+
+
+def test_restrategy_success_requires_approval_then_starts_new_normal_producer_lineage(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=SUCCESSOR,
+        creative_history_run_ids=[CREATIVE],
+    )
+    approval = _restrategy_resolution(
+        current_stage="CREATIVE_APPROVAL",
+        next_action="APPROVE_CREATIVE",
+        blocking_reason="CREATIVE_CONCEPT_SELECTION_REQUIRED",
+        creative_state="SUCCEEDED",
+        creative_run_id=SUCCESSOR,
+        concept_id=None,
+        creative_revalidation_id=None,
+    )
+    fake = FakeApi({("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): approval})
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.e2e(settings(), store) == 0
+    assert "Next action: APPROVE_CREATIVE" in capsys.readouterr().out
+
+    state = store.load()
+    assert state is not None
+    state.creative_concept_id = NEW_CONCEPT
+    store.save(state)
+    producer_resolution = _restrategy_resolution(
+        current_stage="PRODUCER",
+        next_action="RUN_PRODUCER",
+        blocking_reason=None,
+        creative_state="APPROVED_FOR_PRODUCTION",
+        creative_run_id=SUCCESSOR,
+        concept_id=NEW_CONCEPT,
+        creative_revalidation_id=None,
+    )
+    fake = FakeApi(
+        {
+            ("GET", f"/v1/products/{PRODUCT}"): workspace(),
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): producer_resolution,
+            ("POST", f"/v1/creative/concepts/{NEW_CONCEPT}/production/runs"): {
+                "id": NEW_PRODUCER,
+                "recovery_of_run_id": None,
+            },
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+
+    assert acceptance.openai_smoke(settings(), store) == 3
+    assert store.load().producer_run_id == NEW_PRODUCER
+    producer_posts = [
+        call for call in fake.calls if call[0] == "POST" and "/production/runs" in call[1]
+    ]
+    assert producer_posts == [
+        (
+            "POST",
+            f"/v1/creative/concepts/{NEW_CONCEPT}/production/runs",
+            {"idempotency_key": f"live-production-{state.session_id}"},
+        )
+    ]
+    assert all("replacement" not in path for _, path, _ in fake.calls)
 
 
 def test_live_e2e_only_reports_authoritative_next_action(monkeypatch, tmp_path, capsys) -> None:

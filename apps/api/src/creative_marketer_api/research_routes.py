@@ -250,6 +250,13 @@ class AgentRunResponse(Contract):
     input_context_kind: str
     input_context_schema_version: int
     input_context_digest: str
+    creative_concept_count: int | None
+    creative_channel_intent: str | None
+    restrategy_of_concept_id: UUID | None
+    restrategy_historical_creative_run_id: UUID | None
+    restrategy_trigger_kind: str | None
+    restrategy_trigger_id: UUID | None
+    restrategy_current_research_snapshot_id: UUID | None
     model_profile_key: str
     output_contract_key: str
     output_contract_version: int
@@ -461,6 +468,23 @@ def _social_evidence(value: SocialEvidenceSnapshot) -> SocialEvidenceResponse:
 
 
 def _agent_run(value: AgentRun) -> AgentRunResponse:
+    strategy = next(
+        (item for item in value.input_context_refs if item.get("kind") == "strategy_request"),
+        None,
+    )
+    restrategy = next(
+        (item for item in value.input_context_refs if item.get("kind") == "creative_restrategy"),
+        None,
+    )
+
+    def ref_uuid(ref: object) -> UUID | None:
+        try:
+            return UUID(str(ref)) if ref is not None else None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    concept_count = strategy.get("concept_count") if strategy else None
+    channel_intent = strategy.get("channel_intent") if strategy else None
     return AgentRunResponse(
         id=value.id,
         tenant_id=value.tenant_id,
@@ -479,6 +503,25 @@ def _agent_run(value: AgentRun) -> AgentRunResponse:
         input_context_kind=value.input_context_kind,
         input_context_schema_version=value.input_context_schema_version,
         input_context_digest=value.input_context_digest,
+        creative_concept_count=(
+            concept_count
+            if isinstance(concept_count, int) and not isinstance(concept_count, bool)
+            else None
+        ),
+        creative_channel_intent=channel_intent if isinstance(channel_intent, str) else None,
+        restrategy_of_concept_id=ref_uuid(restrategy.get("concept_id") if restrategy else None),
+        restrategy_historical_creative_run_id=ref_uuid(
+            restrategy.get("historical_creative_run_id") if restrategy else None
+        ),
+        restrategy_trigger_kind=(
+            str(restrategy["trigger_kind"])
+            if restrategy and isinstance(restrategy.get("trigger_kind"), str)
+            else None
+        ),
+        restrategy_trigger_id=ref_uuid(restrategy.get("trigger_id") if restrategy else None),
+        restrategy_current_research_snapshot_id=ref_uuid(
+            restrategy.get("current_research_snapshot_id") if restrategy else None
+        ),
         model_profile_key=value.model_profile_key,
         output_contract_key=value.output_contract_key,
         output_contract_version=value.output_contract_version,

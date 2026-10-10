@@ -1844,6 +1844,10 @@ export interface components {
        * Format: date-time
        */
       created_at: string;
+      /** Creative Channel Intent */
+      creative_channel_intent: string | null;
+      /** Creative Concept Count */
+      creative_concept_count: number | null;
       /** Currency */
       currency: string;
       /** Estimated Cost */
@@ -1921,6 +1925,16 @@ export interface components {
       resolved_model: string | null;
       /** Resolved Provider */
       resolved_provider: string | null;
+      /** Restrategy Current Research Snapshot Id */
+      restrategy_current_research_snapshot_id: string | null;
+      /** Restrategy Historical Creative Run Id */
+      restrategy_historical_creative_run_id: string | null;
+      /** Restrategy Of Concept Id */
+      restrategy_of_concept_id: string | null;
+      /** Restrategy Trigger Id */
+      restrategy_trigger_id: string | null;
+      /** Restrategy Trigger Kind */
+      restrategy_trigger_kind: string | null;
       /** Result Ref */
       result_ref: string | null;
       /** Started At */

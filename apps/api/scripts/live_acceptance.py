@@ -7,6 +7,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
@@ -19,6 +20,7 @@ from creative_marketer.agent_runtime.application import (
     initial_researcher_route,
 )
 from creative_marketer.agent_runtime.domain import ModelRoute
+from creative_marketer.creative.domain import ChannelIntent
 from creative_marketer.production.application import (
     OPENAI_IMAGE_MODEL,
     PRODUCTION_CONTRACT_KEY,
@@ -507,6 +509,371 @@ def revalidate_creative_concept(settings: Settings, store: StateStore | None = N
     print(f"  current Research authority: {result['current_research_snapshot_id']}")
     print("No Creative or Producer provider execution was started.")
     return 0 if result["result"] == "REVALIDATED_FOR_PRODUCTION" else 3
+
+
+def _restrategy_request(
+    api: LocalApi,
+    product: str,
+    historical_creative_run: dict[str, Any],
+    historical_creative_run_id: str,
+    concept_id: str,
+) -> tuple[int, str]:
+    """Recover the immutable request shape from the historical validated ConceptSet."""
+
+    sets = [
+        item
+        for item in items(api, f"/v1/products/{product}/creative/concept-sets")
+        if item.get("agent_run_id") == historical_creative_run_id
+    ]
+    if len(sets) != 1:
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_CONCEPT_SET_AMBIGUOUS")
+    concept_set = sets[0]
+    concepts = concept_set.get("concepts")
+    concept_count = historical_creative_run.get("creative_concept_count")
+    channel = historical_creative_run.get("creative_channel_intent")
+    if (
+        concept_set.get("product_id") != product
+        or not isinstance(concepts, list)
+        or not isinstance(concept_count, int)
+        or isinstance(concept_count, bool)
+        or not 3 <= concept_count <= 5
+        or len(concepts) != concept_count
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_CONCEPT_SET_INVALID")
+    selected = [
+        item for item in concepts if isinstance(item, dict) and item.get("id") == concept_id
+    ]
+    if len(selected) != 1 or not isinstance(selected[0].get("payload"), dict):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_CONCEPT_PROVENANCE_MISMATCH")
+    try:
+        channel_intent = ChannelIntent(str(channel)).value
+    except ValueError:
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_CHANNEL_INTENT_INVALID") from None
+    return concept_count, channel_intent
+
+
+def _validate_restrategy_run(
+    run: dict[str, Any],
+    *,
+    state: LiveState,
+    historical_creative_run_id: str,
+    current_research_snapshot: dict[str, Any],
+    concept_id: str,
+    revalidation_id: str,
+    concept_count: int,
+    channel_intent: str,
+    require_pending: bool,
+) -> str:
+    identifier = valid_id(run.get("id"), "creative_restrategy_run_id")
+    allowed_statuses = {"PENDING"} if require_pending else {"PENDING", "RUNNING"}
+    try:
+        ChannelIntent(channel_intent)
+    except ValueError:
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RUN_PROVENANCE_MISMATCH") from None
+    if (
+        not 3 <= concept_count <= 5
+        or identifier == historical_creative_run_id
+        or run.get("tenant_id") != state.tenant_id
+        or run.get("product_id") != state.product_id
+        or run.get("agent_type") != "creative_strategist"
+        or run.get("status") not in allowed_statuses
+        or run.get("recovery_of_run_id") is not None
+        or run.get("creative_concept_count") != concept_count
+        or run.get("creative_channel_intent") != channel_intent
+        or run.get("restrategy_of_concept_id") != concept_id
+        or run.get("restrategy_historical_creative_run_id") != historical_creative_run_id
+        or run.get("restrategy_trigger_kind") != "creative_revalidation"
+        or run.get("restrategy_trigger_id") != revalidation_id
+        or run.get("restrategy_current_research_snapshot_id") != current_research_snapshot.get("id")
+        or run.get("model_profile_key") != initial_creative_strategist_route().profile_key
+        or run.get("research_context_digest")
+        != current_research_snapshot.get("research_context_digest")
+        or run.get("product_snapshot_id") != current_research_snapshot.get("product_snapshot_id")
+        or run.get("product_snapshot_digest")
+        != current_research_snapshot.get("product_snapshot_digest")
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RUN_PROVENANCE_MISMATCH")
+    if require_pending and any(
+        run.get(field) not in {None, 0, "0", "0.000000"}
+        for field in (
+            "resolved_provider",
+            "resolved_model",
+            "model_route_version",
+            "pricing_version",
+            "input_tokens",
+            "output_tokens",
+            "total_tokens",
+            "result_ref",
+            "failure_code",
+        )
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RUN_NOT_PENDING")
+    return identifier
+
+
+def _restrategy_key(state: LiveState, resolution: dict[str, Any]) -> str:
+    material = ":".join(
+        (
+            state.session_id,
+            valid_id(resolution.get("research_snapshot_id"), "research_snapshot_id"),
+            valid_id(resolution.get("creative_revalidation_id"), "creative_revalidation_id"),
+            valid_id(resolution.get("concept_id"), "concept_id"),
+        )
+    )
+    return f"live-creative-restrategy-{sha256(material.encode()).hexdigest()[:48]}"
+
+
+def restrategy_creative_concept(settings: Settings, store: StateStore | None = None) -> int:
+    """Admit one normal Creative restrategy run; never execute a provider here."""
+
+    api = api_for(settings)
+    product = str(settings.live_e2e_product_id)
+    saved = store or StateStore()
+    state = cast(LiveState, session(api, product, saved, create=False))
+    if state is None:
+        raise RuntimeError("LIVE_ACCEPTANCE_SESSION_NOT_STARTED")
+    initial_ready = all(
+        value is not None
+        for value in (
+            state.researcher_run_id,
+            state.creative_run_id,
+            state.creative_concept_id,
+            state.creative_revalidation_id,
+            state.producer_run_id,
+        )
+    )
+    # A bound pending restrategy is the one intentional exception: it has already
+    # cleared Concept, revalidation, and active Producer checkpoints.
+    bound_pending = bool(
+        state.researcher_run_id is not None
+        and state.creative_run_id is not None
+        and state.creative_history_run_ids
+        and state.creative_concept_id is None
+        and state.creative_revalidation_id is None
+        and state.producer_run_id is None
+    )
+    if not initial_ready and not bound_pending:
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_STAGE_NOT_READY")
+    if (
+        state.production_plan_id is not None
+        or state.image_job_ids
+        or state.video_job_ids
+        or state.assembly_plan_id is not None
+        or state.final_creative_id is not None
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_STAGE_ALREADY_ADVANCED")
+
+    resolution = resolve_live_pipeline(api, product, state)
+    action = resolution.get("next_action")
+    if action == "WAIT_FOR_CREATIVE" and state.creative_history_run_ids:
+        if (
+            resolution.get("research_state") != "SUCCEEDED_CURRENT"
+            or resolution.get("creative_state") not in {"PENDING", "RUNNING"}
+            or resolution.get("producer_state") != "NOT_STARTED"
+            or resolution.get("research_run_id") != state.researcher_run_id
+            or resolution.get("creative_run_id") != state.creative_run_id
+            or any(
+                resolution.get(field) is not None
+                for field in (
+                    "concept_id",
+                    "creative_revalidation_id",
+                    "producer_run_id",
+                    "production_plan_id",
+                )
+            )
+        ):
+            raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RESOLUTION_MISMATCH")
+        snapshots = items(api, f"/v1/products/{product}/research/snapshots")
+        snapshot = exact(
+            snapshots,
+            valid_id(resolution.get("research_snapshot_id"), "research_snapshot_id"),
+            "research_snapshot",
+        )
+        creative_runs = items(api, f"/v1/products/{product}/creative/runs")
+        active = [item for item in creative_runs if item.get("status") in {"PENDING", "RUNNING"}]
+        if len(active) != 1 or active[0].get("id") != state.creative_run_id:
+            raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_ACTIVE_RUN_AMBIGUOUS")
+        active_concept_id = valid_id(
+            active[0].get("restrategy_of_concept_id"), "restrategy_of_concept_id"
+        )
+        active_revalidation_id = valid_id(
+            active[0].get("restrategy_trigger_id"), "restrategy_trigger_id"
+        )
+        active_count = active[0].get("creative_concept_count")
+        active_channel = active[0].get("creative_channel_intent")
+        if (
+            not isinstance(active_count, int)
+            or isinstance(active_count, bool)
+            or not 3 <= active_count <= 5
+            or not isinstance(active_channel, str)
+        ):
+            raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RUN_PROVENANCE_MISMATCH")
+        _validate_restrategy_run(
+            active[0],
+            state=state,
+            historical_creative_run_id=state.creative_history_run_ids[-1],
+            current_research_snapshot=snapshot,
+            concept_id=active_concept_id,
+            revalidation_id=active_revalidation_id,
+            concept_count=active_count,
+            channel_intent=active_channel,
+            require_pending=False,
+        )
+        print(f"Creative restrategy already bound: {state.creative_run_id} ({active[0]['status']})")
+        print(f"Historical Creative retained: {state.creative_history_run_ids[-1]}")
+        print("No provider execution was started by this command.")
+        return 0
+    if (
+        action != "RESTRATEGIZE_CREATIVE"
+        or resolution.get("current_stage") != "CREATIVE_RESTRATEGY"
+        or resolution.get("blocking_reason") != "CURRENT_AUTHORITY_MATERIALLY_DIFFERS"
+        or resolution.get("research_state") != "SUCCEEDED_CURRENT"
+        or resolution.get("creative_state") != "REQUIRES_RESTRATEGY"
+        or resolution.get("producer_state") != "NOT_STARTED"
+        or resolution.get("research_run_id") != state.researcher_run_id
+        or resolution.get("creative_run_id") != state.creative_run_id
+        or resolution.get("concept_id") != state.creative_concept_id
+        or resolution.get("creative_revalidation_id") != state.creative_revalidation_id
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_NOT_ELIGIBLE")
+
+    research_run_id = cast(str, state.researcher_run_id)
+    historical_creative_run_id = cast(str, state.creative_run_id)
+    concept_id = cast(str, state.creative_concept_id)
+    revalidation_id = cast(str, state.creative_revalidation_id)
+    historical_producer_run_id = cast(str, state.producer_run_id)
+    researcher = exact_run(api, product, "research", research_run_id, initial_researcher_route())
+    if (
+        researcher.get("status") != "SUCCEEDED"
+        or researcher.get("tenant_id") != state.tenant_id
+        or researcher.get("product_id") != state.product_id
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RESEARCH_MISMATCH")
+    snapshots = items(api, f"/v1/products/{product}/research/snapshots")
+    current_snapshot = exact(
+        snapshots,
+        valid_id(resolution.get("research_snapshot_id"), "research_snapshot_id"),
+        "research_snapshot",
+    )
+    if (
+        current_snapshot.get("agent_run_id") != research_run_id
+        or current_snapshot.get("product_id") != state.product_id
+        or str(current_snapshot.get("freshness", "")).lower() != "current"
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RESEARCH_SNAPSHOT_MISMATCH")
+
+    creative_runs = items(api, f"/v1/products/{product}/creative/runs")
+    historical_creative = exact(
+        creative_runs, historical_creative_run_id, "historical_creative_run"
+    )
+    if (
+        historical_creative.get("tenant_id") != state.tenant_id
+        or historical_creative.get("product_id") != state.product_id
+        or historical_creative.get("agent_type") != "creative_strategist"
+        or historical_creative.get("status") != "SUCCEEDED"
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_HISTORICAL_RUN_MISMATCH")
+    active = [item for item in creative_runs if item.get("status") in {"PENDING", "RUNNING"}]
+    if len(active) > 1:
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_ACTIVE_RUN_AMBIGUOUS")
+
+    concept_count, channel_intent = _restrategy_request(
+        api, product, historical_creative, historical_creative_run_id, concept_id
+    )
+    revalidation = exact(
+        items(api, f"/v1/creative/concepts/{concept_id}/revalidations"),
+        revalidation_id,
+        "creative_revalidation",
+    )
+    if (
+        revalidation.get("product_id") != state.product_id
+        or revalidation.get("concept_id") != concept_id
+        or revalidation.get("current_research_snapshot_id") != current_snapshot.get("id")
+        or revalidation.get("result") != "REQUIRES_RESTRATEGY"
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_REVALIDATION_MISMATCH")
+
+    producer_runs = items(api, f"/v1/products/{product}/production/runs")
+    historical_producer = exact(
+        producer_runs, historical_producer_run_id, "historical_producer_run"
+    )
+    if (
+        historical_producer.get("tenant_id") != state.tenant_id
+        or historical_producer.get("product_id") != state.product_id
+        or historical_producer.get("agent_type") != "producer"
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_PRODUCER_MISMATCH")
+
+    adopted = bool(active)
+    replacement = (
+        active[0]
+        if active
+        else api.request(
+            f"/v1/products/{product}/creative/runs",
+            method="POST",
+            body={
+                "idempotency_key": _restrategy_key(state, resolution),
+                "concept_count": concept_count,
+                "channel_intent": channel_intent,
+                "restrategy_of_concept_id": concept_id,
+            },
+        )
+    )
+    if not isinstance(replacement, dict):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_RESPONSE_INVALID")
+    replacement_id = _validate_restrategy_run(
+        replacement,
+        state=state,
+        historical_creative_run_id=historical_creative_run_id,
+        current_research_snapshot=current_snapshot,
+        concept_id=concept_id,
+        revalidation_id=revalidation_id,
+        concept_count=concept_count,
+        channel_intent=channel_intent,
+        require_pending=not adopted,
+    )
+
+    historical_creative_id = historical_creative_run_id
+    historical_producer_id = historical_producer_run_id
+    candidate = LiveState(**asdict(state))
+    if historical_creative_id not in candidate.creative_history_run_ids:
+        candidate.creative_history_run_ids.append(historical_creative_id)
+    candidate.creative_run_id = replacement_id
+    candidate.creative_concept_id = None
+    candidate.creative_revalidation_id = None
+    candidate.producer_run_id = None
+    candidate.production_plan_id = None
+    after = resolve_live_pipeline(api, product, candidate)
+    if (
+        after.get("current_stage") != "CREATIVE"
+        or after.get("next_action") != "WAIT_FOR_CREATIVE"
+        or after.get("research_state") != "SUCCEEDED_CURRENT"
+        or after.get("creative_state") != replacement.get("status")
+        or after.get("producer_state") != "NOT_STARTED"
+        or after.get("research_run_id") != candidate.researcher_run_id
+        or after.get("creative_run_id") != replacement_id
+        or any(
+            after.get(field) is not None
+            for field in (
+                "concept_id",
+                "creative_revalidation_id",
+                "producer_run_id",
+                "production_plan_id",
+            )
+        )
+    ):
+        raise RuntimeError("LIVE_CREATIVE_RESTRATEGY_POST_ADMISSION_STATE_MISMATCH")
+    saved.save(candidate)
+    if adopted:
+        print(f"Existing Creative restrategy adopted: {replacement_id}")
+    print(f"Creative restrategy requested: {replacement_id}")
+    print(f"Historical Creative retained: {historical_creative_id}")
+    print(
+        "Historical Producer lineage retained but unbound from active session: "
+        f"{historical_producer_id}"
+    )
+    print("No provider execution was started by this command.")
+    return 0
 
 
 def replace_output_limited_creative(settings: Settings, store: StateStore | None = None) -> int:

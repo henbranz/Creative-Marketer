@@ -42,6 +42,28 @@
             "title": "Created At",
             "type": "string"
           },
+          "creative_channel_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Channel Intent"
+          },
+          "creative_concept_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Creative Concept Count"
+          },
           "currency": {
             "title": "Currency",
             "type": "string"
@@ -221,6 +243,65 @@
             ],
             "title": "Resolved Provider"
           },
+          "restrategy_current_research_snapshot_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restrategy Current Research Snapshot Id"
+          },
+          "restrategy_historical_creative_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restrategy Historical Creative Run Id"
+          },
+          "restrategy_of_concept_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restrategy Of Concept Id"
+          },
+          "restrategy_trigger_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restrategy Trigger Id"
+          },
+          "restrategy_trigger_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restrategy Trigger Kind"
+          },
           "result_ref": {
             "anyOf": [
               {
@@ -280,6 +361,13 @@
           "input_context_kind",
           "input_context_schema_version",
           "input_context_digest",
+          "creative_concept_count",
+          "creative_channel_intent",
+          "restrategy_of_concept_id",
+          "restrategy_historical_creative_run_id",
+          "restrategy_trigger_kind",
+          "restrategy_trigger_id",
+          "restrategy_current_research_snapshot_id",
           "model_profile_key",
           "output_contract_key",
           "output_contract_version",
