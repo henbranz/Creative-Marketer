@@ -16,6 +16,7 @@ from creative_marketer.infrastructure.database.production_authority import (
 )
 from creative_marketer.production.application import initial_media_router
 from creative_marketer.production.domain import (
+    GenerationJobStatus,
     ProductionCapabilityChanged,
     ProductionNotFound,
     ProductionPermissionDenied,
@@ -134,6 +135,146 @@ async def test_live_spend_cap_is_product_scoped_and_checked_under_lock() -> None
         object(), object(), MediaWorkloadIdentity(uuid4(), "test-media-worker", "test")
     )
     await disabled._enforce_live_spend_cap(session, tenant_id, product_id)
+
+
+@pytest.mark.asyncio
+async def test_generation_authority_persists_spend_cap_block_safely(monkeypatch) -> None:
+    tenant_id, job_id, plan_id, agent_run_id, requested_agent = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    updated_at = SimpleNamespace()
+
+    class Session:
+        def __init__(self) -> None:
+            self.execute = AsyncMock(return_value=SimpleNamespace(rowcount=1))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+        def begin(self):
+            return self
+
+    session = Session()
+    current = SimpleNamespace(
+        tenant_id=tenant_id,
+        status=GenerationJobStatus.READY,
+        provider_operation_ref=None,
+        actual_cost=Decimal("0"),
+        unknown_cost=Decimal("0"),
+        production_plan_id=plan_id,
+    )
+
+    def transition(status, **values):
+        assert status is GenerationJobStatus.BLOCKED_SPEND_CAP
+        assert values["failure_code"] == "LIVE_E2E_SPEND_CAP_REACHED"
+        return SimpleNamespace(
+            status=status,
+            failure_code=values["failure_code"],
+            executed_by_workload_id=values["executed_by_workload_id"],
+            updated_at=updated_at,
+        )
+
+    current.transition = transition
+    repository = SimpleNamespace(
+        get_job=AsyncMock(return_value=current),
+        get_plan=AsyncMock(
+            return_value=SimpleNamespace(plan=SimpleNamespace(agent_run_id=agent_run_id))
+        ),
+    )
+    monkeypatch.setattr(
+        authority_module, "SqlAlchemyProductionRepository", lambda _session: repository
+    )
+    audit = SimpleNamespace(append=AsyncMock())
+    monkeypatch.setattr(authority_module, "PostgresAuditWriter", lambda _session: audit)
+    monkeypatch.setattr(authority_module, "tenant_audit", lambda *args, **kwargs: kwargs)
+    authority = SqlAlchemyGenerationAuthority(
+        lambda: session,
+        object(),
+        MediaWorkloadIdentity(uuid4(), "test-media-worker", "test"),
+    )
+    authority._tenant = AsyncMock()  # type: ignore[method-assign]
+    authority._execution_context = AsyncMock(  # type: ignore[method-assign]
+        return_value=(SimpleNamespace(), requested_agent)
+    )
+
+    await authority.spend_cap_blocked(tenant_id, job_id)
+
+    repository.get_job.assert_awaited_once_with(job_id)
+    repository.get_plan.assert_awaited_once_with(plan_id)
+    session.execute.assert_awaited_once()
+    audit.append.assert_awaited_once()
+    audit_record = audit.append.await_args.args[0]
+    assert audit_record["reason_code"] == "LIVE_E2E_SPEND_CAP_REACHED"
+    assert audit_record["resource_id"] == str(job_id)
+
+
+@pytest.mark.asyncio
+async def test_generation_authority_spend_cap_block_guards_fail_closed(monkeypatch) -> None:
+    tenant_id, job_id = uuid4(), uuid4()
+
+    class Session:
+        execute = AsyncMock(return_value=SimpleNamespace(rowcount=0))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            return None
+
+        def begin(self):
+            return self
+
+    session = Session()
+    repository = SimpleNamespace(get_job=AsyncMock(), get_plan=AsyncMock())
+    monkeypatch.setattr(
+        authority_module, "SqlAlchemyProductionRepository", lambda _session: repository
+    )
+    authority = SqlAlchemyGenerationAuthority(
+        lambda: session,
+        object(),
+        MediaWorkloadIdentity(uuid4(), "test-media-worker", "test"),
+    )
+    authority._tenant = AsyncMock()  # type: ignore[method-assign]
+
+    repository.get_job.return_value = None
+    with pytest.raises(ProductionNotFound, match="GenerationJob"):
+        await authority.spend_cap_blocked(tenant_id, job_id)
+
+    repository.get_job.return_value = SimpleNamespace(
+        tenant_id=tenant_id,
+        status=GenerationJobStatus.BLOCKED_SPEND_CAP,
+    )
+    await authority.spend_cap_blocked(tenant_id, job_id)
+
+    repository.get_job.return_value = SimpleNamespace(
+        tenant_id=tenant_id,
+        status=GenerationJobStatus.PROCESSING,
+        provider_operation_ref="provider-operation",
+        actual_cost=Decimal("0"),
+        unknown_cost=Decimal("0"),
+    )
+    with pytest.raises(ProductionPermissionDenied, match="safely blockable"):
+        await authority.spend_cap_blocked(tenant_id, job_id)
+
+    current = SimpleNamespace(
+        tenant_id=tenant_id,
+        status=GenerationJobStatus.READY,
+        provider_operation_ref=None,
+        actual_cost=Decimal("0"),
+        unknown_cost=Decimal("0"),
+        production_plan_id=uuid4(),
+    )
+    repository.get_job.return_value = current
+    repository.get_plan.return_value = None
+    with pytest.raises(ProductionNotFound, match="ProductionPlan"):
+        await authority.spend_cap_blocked(tenant_id, job_id)
 
 
 @pytest.mark.asyncio

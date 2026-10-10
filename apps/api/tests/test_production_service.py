@@ -19,10 +19,17 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.infrastructure.database import (
+    production_repositories as production_repository_module,
+)
+from creative_marketer.infrastructure.database.production_repositories import (
+    SqlAlchemyProductionRepository,
+)
 from creative_marketer.production.application import initial_media_router, validate_production_plan
 from creative_marketer.production.domain import (
     GenerationJobStatus,
     MediaSpendRequirement,
+    ProductionCreativeRefreshRequired,
     ProductionDecisionConflict,
     ProductionNotFound,
     ProductionPermissionDenied,
@@ -328,6 +335,140 @@ async def test_spend_cap_recovery_rejects_unknown_outcome_and_insufficient_cap()
         await service.retry_after_spend_cap_increase(
             context, repository.record.plan.id, transition_id=uuid4()
         )
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_recovery_authority_guards_fail_closed() -> None:
+    service, repository, _uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    service.live_spend_cap = Decimal("10")
+    with pytest.raises(ProductionPermissionDenied, match="owner or admin"):
+        await service.retry_after_spend_cap_increase(
+            execution_context(repository.record.plan.tenant_id, MembershipRole.MEMBER),
+            repository.record.plan.id,
+            transition_id=uuid4(),
+        )
+    with pytest.raises(ProductionNotFound, match="ProductionPlan"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    service.live_spend_cap = None
+    with pytest.raises(ProductionPermissionDenied, match="not configured"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+    service.live_spend_cap = Decimal("10")
+    service.live_product_id = uuid4()
+    with pytest.raises(ProductionPermissionDenied, match="outside LIVE_E2E_PRODUCT_ID"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+
+    service.live_product_id = repository.record.plan.product_id
+    decision = repository.record.decision
+    assert decision is not None
+    repository.record = replace(
+        repository.record,
+        decision=replace(decision, image_route_version="changed-route"),
+    )
+    with pytest.raises(ProductionPricingChanged, match="approved media route"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+
+    repository.record = replace(repository.record, decision=decision)
+    repository.jobs = (
+        replace(repository.jobs[0], route_version="changed-route"),
+        *repository.jobs[1:],
+    )
+    with pytest.raises(ProductionPricingChanged, match="GenerationJob route"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+
+    repository.jobs = (
+        replace(
+            repository.jobs[0],
+            route_version=initial_media_router().resolve("production_image").route_version,
+            failure_code="UNRELATED_FAILURE",
+        ),
+        *repository.jobs[1:],
+    )
+    with pytest.raises(ProductionPermissionDenied, match="before-provider retry boundary"):
+        await service.retry_after_spend_cap_increase(
+            owner, repository.record.plan.id, transition_id=uuid4()
+        )
+
+    rejected_service, rejected_repository, _ = service_fixture()
+    rejected_owner = execution_context(rejected_repository.record.plan.tenant_id)
+    rejected_service.live_spend_cap = Decimal("10")
+    await rejected_service.decide(
+        rejected_owner,
+        rejected_repository.record.plan.id,
+        ProductionPlanDecisionState.REJECTED,
+        rejection_feedback="Use a shorter opening and one product shot.",
+    )
+    with pytest.raises(ProductionPermissionDenied, match="not approved"):
+        await rejected_service.retry_after_spend_cap_increase(
+            rejected_owner,
+            rejected_repository.record.plan.id,
+            transition_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_sql_production_recovery_queries_preserve_existing_jobs(monkeypatch) -> None:
+    tenant_id, product_id, plan_id = uuid4(), uuid4(), uuid4()
+    expected = MediaSpendRequirement(Decimal("10"), Decimal("6"), Decimal("1"), Decimal("6"))
+    requirement_loader = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        production_repository_module,
+        "product_media_spend_requirement",
+        requirement_loader,
+    )
+    plan_row = SimpleNamespace(tenant_id=tenant_id, product_id=product_id)
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: plan_row))
+    )
+    repository = SqlAlchemyProductionRepository(session)
+
+    assert await repository.spend_requirement(plan_id, Decimal("10")) == expected
+    requirement_loader.assert_awaited_once_with(session, tenant_id, product_id, Decimal("10"))
+
+    session.execute.return_value = SimpleNamespace(one_or_none=lambda: None)
+    with pytest.raises(ValueError, match="ProductionPlan is unavailable"):
+        await repository.spend_requirement(plan_id, Decimal("10"))
+
+    ready: Any = SimpleNamespace(status=GenerationJobStatus.READY)
+    succeeded: Any = SimpleNamespace(status=GenerationJobStatus.SUCCEEDED)
+    repository.list_jobs = AsyncMock(  # type: ignore[method-assign]
+        return_value=(ready, succeeded)
+    )
+    session.execute.return_value = SimpleNamespace()
+    requeued = await repository.requeue_spend_cap_jobs(plan_id)
+    assert len(requeued) == 1 and requeued[0] is ready
+    repository.list_jobs.assert_awaited_once_with(plan_id)
+
+
+@pytest.mark.asyncio
+async def test_sql_production_recovery_rejects_missing_canonical_provenance() -> None:
+    class Result:
+        def first(self):
+            return None
+
+    session = SimpleNamespace(execute=AsyncMock(side_effect=[Result()] * 4))
+    repository = SqlAlchemyProductionRepository(session)
+    plan = service_fixture()[1].record.plan
+
+    with pytest.raises(ProductionCreativeRefreshRequired, match="provenance is outdated"):
+        await repository.validate_spend_cap_retry(plan)
+    assert session.execute.await_count == 4
 
 
 @pytest.mark.asyncio
