@@ -3470,9 +3470,11 @@ export interface components {
       | "READY"
       | "BLOCKED_SPEND_CAP"
       | "RUNNING"
+      | "STRANDED_START"
       | "SUCCEEDED"
       | "FAILED"
       | "OUTCOME_UNKNOWN"
+      | "RETRYABLE_OUTCOME_UNKNOWN"
       | "INVARIANT_VIOLATION";
     /** MediaSpendRequirementResponse */
     MediaSpendRequirementResponse: {
@@ -3604,9 +3606,11 @@ export interface components {
       | "REVIEW_PRODUCTION_PLAN"
       | "READY_FOR_GENERATION"
       | "WAIT_FOR_MEDIA"
+      | "RECOVER_STRANDED_MEDIA_START"
       | "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
       | "RECOVER_MEDIA_FAILURE"
       | "RECONCILE_MEDIA_OUTCOME"
+      | "ABANDON_UNKNOWN_MEDIA_AND_RETRY"
       | "RECOVER_MEDIA_INVARIANT"
       | "BIND_MANUAL_ASSEMBLY_INPUT"
       | "RECOVER_ASSEMBLY_INPUT"
