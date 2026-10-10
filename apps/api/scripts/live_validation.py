@@ -99,14 +99,14 @@ async def preflight(settings: Settings, client: ModelLookup | None = None) -> in
             )
         else:
             print(f"OpenAI {model:<38} ACCESSIBLE")
-    if settings.byteplus_las_api_key is None:
-        print("BytePlus key              NOT CONFIGURED")
+    if settings.byteplus_ark_api_key is None:
+        print("BytePlus ModelArk key     NOT CONFIGURED")
         return 2
-    parsed = urlsplit(str(settings.byteplus_las_base_url))
+    parsed = urlsplit(str(settings.byteplus_modelark_base_url))
     try:
         socket.getaddrinfo(parsed.hostname, parsed.port or 443)
     except OSError:
-        print("BytePlus LAS              FAIL: PROVIDER_UNREACHABLE")
+        print("BytePlus ModelArk         FAIL: PROVIDER_UNREACHABLE")
         return 2
     print(f"BytePlus {SEEDANCE_MODEL:<36} ROUTE OK")
     print("BytePlus authentication   DEFERRED TO MINIMAL SMOKE (no documented free check)")

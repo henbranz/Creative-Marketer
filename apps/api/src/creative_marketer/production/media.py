@@ -17,6 +17,22 @@ class MediaProviderOutcomeUnknown(MediaProviderError):
     outcome_unknown = True
 
 
+class MediaProviderActivationRequired(MediaProviderError):
+    code = "MEDIA_PROVIDER_ACTIVATION_REQUIRED"
+
+
+class MediaProviderInsufficientCredits(MediaProviderError):
+    code = "MEDIA_PROVIDER_INSUFFICIENT_CREDITS"
+
+
+class MediaProviderBadRequest(MediaProviderError):
+    code = "MEDIA_PROVIDER_BAD_REQUEST"
+
+
+class MediaProviderTransientFailure(MediaProviderError):
+    code = "MEDIA_PROVIDER_TRANSIENT_FAILURE"
+
+
 class InvalidMediaResult(MediaProviderError):
     code = "MEDIA_PROVIDER_INVALID_RESULT"
 
@@ -35,6 +51,7 @@ class MaterializedReference:
     data: bytes
     role: str
     contains_real_face: bool = False
+    source_url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

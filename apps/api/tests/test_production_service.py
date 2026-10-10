@@ -59,6 +59,7 @@ from creative_marketer.production.media import (
     InvalidMediaResult,
     MediaProviderError,
     MediaProviderOutcomeUnknown,
+    MediaProviderTransientFailure,
     ProviderGenerationState,
     VideoGenerationRequest,
 )
@@ -707,6 +708,19 @@ async def test_media_tool_executor_terminal_and_failure_paths() -> None:
     assert imported_result.output["status"] == GenerationJobStatus.SUCCEEDED.value
     assert imported.states[-1][0] == "succeeded"
 
+    class TransientPollProvider(FakeSeedanceMediaProvider):
+        async def status(self, provider_operation_ref):
+            del provider_operation_ref
+            raise MediaProviderTransientFailure("offline")
+
+    resumable = Authority(ExecutableGeneration(bound_job, {}, (), 12))
+    with pytest.raises(PreEffectFailure):
+        await VideoStatusToolExecutor(resumable, TransientPollProvider()).execute(
+            tool_context(video_job.tenant_id), video_input
+        )
+    assert resumable.execution.job.provider_operation_ref == "fake-seedance-task"
+    assert resumable.states == []
+
 
 class Gateway:
     def __init__(self, authority):
@@ -777,6 +791,44 @@ async def test_governed_job_dispatch_and_resource_resolution_are_id_only() -> No
         await GovernedProductionJobExecutor(authority, gateway).execute(
             video_job.tenant_id, video_job.production_plan_id, video_job.id
         )
+
+
+@pytest.mark.asyncio
+async def test_stranded_start_without_task_identity_converges_unknown_without_duplicate() -> None:
+    service, repository, _uow = service_fixture()
+    actor = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        actor,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    video_job = repository.jobs[1]
+    stranded = replace(
+        video_job,
+        status=GenerationJobStatus.STARTING,
+        provider_operation_ref=None,
+    )
+    authority = Authority(
+        ExecutableGeneration(
+            stranded,
+            {},
+            (),
+            initiating_context=actor,
+            requested_agent_definition_id=uuid4(),
+        )
+    )
+    gateway = Gateway(authority)
+
+    result = await GovernedProductionJobExecutor(authority, gateway).execute(
+        stranded.tenant_id,
+        stranded.production_plan_id,
+        stranded.id,
+    )
+
+    assert result.status == GenerationJobStatus.OUTCOME_UNKNOWN.value
+    assert result.failure_code == "MEDIA_PROVIDER_OUTCOME_UNKNOWN"
+    assert authority.states == [("unknown", None)]
+    assert gateway.calls == []
 
 
 @pytest.mark.asyncio

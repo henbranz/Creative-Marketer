@@ -42,8 +42,10 @@ PRODUCTION_CONTRACT_VERSION = 3
 PRODUCTION_HISTORICAL_CONTRACT_VERSIONS = frozenset({1, 2, 3})
 PRODUCTION_PLAN_SCHEMA_VERSION = 2
 SEEDANCE_MODEL = "dreamina-seedance-2-5-260628"
-SEEDANCE_ROUTE_VERSION = "byteplus-seedance-2.5-2026-08-17"
-SEEDANCE_PRICING_VERSION = "byteplus-enhanced-2026-08-17"
+SEEDANCE_ROUTE_VERSION = "byteplus-modelark-seedance-2.5-2026-10-10"
+LEGACY_SEEDANCE_LAS_ROUTE_VERSION = "byteplus-seedance-2.5-2026-08-17"
+SEEDANCE_PRICING_VERSION = "byteplus-modelark-seedance-2.5-list-2026-09-28"
+LEGACY_SEEDANCE_LAS_PRICING_VERSION = "byteplus-enhanced-2026-08-17"
 OPENAI_IMAGE_MODEL = "gpt-image-2.5-sunburst-2026-09-08"
 OPENAI_IMAGE_ROUTE_VERSION = "openai-gpt-image-2.5-sunburst-2026-09-13"
 OPENAI_IMAGE_PRICING_VERSION = "openai-gpt-image-2.5-sunburst-2026-09-13"
@@ -73,16 +75,49 @@ class MediaRoute:
 
 
 class MediaRouter:
-    def __init__(self, routes: Sequence[MediaRoute]) -> None:
+    def __init__(
+        self,
+        routes: Sequence[MediaRoute],
+        *,
+        compatible_execution_routes: Sequence[MediaRoute] = (),
+    ) -> None:
         self._routes = {route.profile_key: route for route in routes}
         if len(self._routes) != len(routes):
             raise ValueError("media profile keys must be unique")
+        all_routes = (*routes, *compatible_execution_routes)
+        self._execution_routes = {
+            (
+                route.profile_key,
+                route.route_version,
+                route.provider,
+                route.model,
+                route.pricing_version,
+            ): route
+            for route in all_routes
+        }
+        if len(self._execution_routes) != len(all_routes):
+            raise ValueError("media execution route identities must be unique")
 
     def resolve(self, profile_key: str) -> MediaRoute:
         try:
             return self._routes[profile_key]
         except KeyError as error:
             raise InvalidProductionPlan("logical media profile is unavailable") from error
+
+    def resolve_execution(
+        self,
+        profile_key: str,
+        route_version: str,
+        provider: str,
+        model: str,
+        pricing_version: str,
+    ) -> MediaRoute:
+        try:
+            return self._execution_routes[
+                (profile_key, route_version, provider, model, pricing_version)
+            ]
+        except KeyError as error:
+            raise InvalidProductionPlan("approved media execution route is unavailable") from error
 
 
 def initial_producer_route() -> ModelRoute:
@@ -100,25 +135,26 @@ def initial_producer_route() -> ModelRoute:
 
 
 def initial_media_router() -> MediaRouter:
+    video_capabilities = MediaCapabilities(
+        MediaKind.VIDEO,
+        frozenset({"16:9", "4:3", "1:1", "3:4", "9:16", "21:9"}),
+        frozenset({"480p", "720p"}),
+        4,
+        30,
+        30,
+        10,
+        10,
+        True,
+    )
     return MediaRouter(
         (
             MediaRoute(
                 "production_video",
                 SEEDANCE_ROUTE_VERSION,
-                "byteplus",
+                "byteplus_modelark",
                 SEEDANCE_MODEL,
                 SEEDANCE_PRICING_VERSION,
-                MediaCapabilities(
-                    MediaKind.VIDEO,
-                    frozenset({"16:9", "4:3", "1:1", "3:4", "9:16", "21:9"}),
-                    frozenset({"480p", "720p"}),
-                    4,
-                    30,
-                    30,
-                    10,
-                    10,
-                    True,
-                ),
+                video_capabilities,
             ),
             MediaRoute(
                 "production_image",
@@ -138,7 +174,17 @@ def initial_media_router() -> MediaRouter:
                     False,
                 ),
             ),
-        )
+        ),
+        compatible_execution_routes=(
+            MediaRoute(
+                "production_video",
+                LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+                "byteplus",
+                SEEDANCE_MODEL,
+                LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+                video_capabilities,
+            ),
+        ),
     )
 
 

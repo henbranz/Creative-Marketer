@@ -34,6 +34,7 @@ from creative_marketer.production.application import (
 from creative_marketer.production.domain import (
     GenerationJob,
     GenerationJobStatus,
+    InvalidProductionPlan,
     MediaKind,
     ProductionCapabilityChanged,
     ProductionCreativeRefreshRequired,
@@ -142,7 +143,6 @@ class SqlAlchemyGenerationAuthority:
                 or decision.estimated_max_cost != plan.cost.estimated_total_cost
             ):
                 raise ProductionPermissionDenied("ProductionPlan approval binding is stale")
-            route = initial_media_router().resolve(job.media_profile)
             expected_route = (
                 decision.image_route_version
                 if kind is MediaKind.IMAGE
@@ -153,15 +153,23 @@ class SqlAlchemyGenerationAuthority:
                 if kind is MediaKind.IMAGE
                 else decision.video_pricing_version
             )
-            if (
-                route.capabilities.media_kind is not kind
-                or route.route_version != expected_route
-                or route.pricing_version != expected_pricing
-                or job.route_version != route.route_version
-                or job.pricing_version != route.pricing_version
-                or job.provider != route.provider
-                or job.model != route.model
-            ):
+            if job.route_version != expected_route or job.pricing_version != expected_pricing:
+                raise ProductionPricingChanged(
+                    "GenerationJob no longer matches its exact approval binding"
+                )
+            try:
+                route = initial_media_router().resolve_execution(
+                    job.media_profile,
+                    job.route_version,
+                    job.provider,
+                    job.model,
+                    job.pricing_version,
+                )
+            except InvalidProductionPlan as error:
+                raise ProductionPricingChanged(
+                    "exact approved media route or pricing is unavailable"
+                ) from error
+            if route.capabilities.media_kind is not kind:
                 raise ProductionPricingChanged(
                     "exact approved media route or pricing is unavailable"
                 )
@@ -539,7 +547,21 @@ class SqlAlchemyGenerationAuthority:
             detected_mime = str(value["detected_mime_type"])
             if detect_mime(content[:64]) != detected_mime:
                 raise ProductionRightsChanged("generation reference bytes failed MIME verification")
-            result.append(MaterializedReference(detected_mime, content, reference.role))
+            source_url = None
+            if detected_mime.startswith("video/"):
+                # ModelArk does not accept inline video bytes. The URL is a short-lived,
+                # provider-only capability derived after the same rights/digest checks and
+                # is never persisted, logged, or returned by the application API.
+                grant = await self._store.create_download_grant(key=str(value["object_key"]))
+                source_url = grant.url
+            result.append(
+                MaterializedReference(
+                    detected_mime,
+                    content,
+                    reference.role,
+                    source_url=source_url,
+                )
+            )
         return tuple(result)
 
     def _state(self, job_id: UUID) -> _Prepared:

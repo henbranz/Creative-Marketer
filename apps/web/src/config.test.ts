@@ -50,7 +50,7 @@ describe("getPublicConfig", () => {
         NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000",
         NEXT_PUBLIC_OBSIDIAN_VAULT_NAME: "Creative Marketer",
         OPENAI_API_KEY: "must-not-escape",
-        BYTEPLUS_LAS_API_KEY: "must-not-escape",
+        BYTEPLUS_ARK_API_KEY: "must-not-escape",
         CM_API_TOKEN: "must-not-escape",
         DATABASE_URL: "must-not-escape",
         OBJECT_STORAGE_SECRET_ACCESS_KEY: "must-not-escape",

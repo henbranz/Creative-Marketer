@@ -1599,15 +1599,14 @@ def bound_jobs(
     api: LocalApi, plan: dict[str, Any], state: LiveState, store: StateStore, kind: str
 ) -> list[dict[str, Any]]:
     jobs = items(api, f"/v1/production/plans/{plan['id']}/jobs")
-    model, provider = (
-        (OPENAI_IMAGE_MODEL, "openai") if kind == "IMAGE" else (SEEDANCE_MODEL, "byteplus")
-    )
+    model = OPENAI_IMAGE_MODEL if kind == "IMAGE" else SEEDANCE_MODEL
+    providers = {"openai"} if kind == "IMAGE" else {"byteplus_modelark", "byteplus"}
     candidates = [
         j
         for j in jobs
         if j.get("kind") == kind
         and j.get("model") == model
-        and j.get("provider") == provider
+        and j.get("provider") in providers
         and j.get("local_demo_provider") is False
     ]
     field_name = "image_job_ids" if kind == "IMAGE" else "video_job_ids"
@@ -1624,7 +1623,7 @@ def media_smoke(settings: Settings, kind: str, store: StateStore | None = None) 
     enabled = (
         settings.media_image_provider == "openai"
         if kind == "IMAGE"
-        else settings.media_video_provider == "byteplus"
+        else settings.media_video_provider == "byteplus_modelark"
     )
     if not enabled:
         raise RuntimeError(f"LIVE_{kind}_PROVIDER_NOT_ENABLED")

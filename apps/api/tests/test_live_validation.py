@@ -36,7 +36,7 @@ async def test_provider_preflight_checks_models_without_generation(monkeypatch, 
     settings = Settings(
         database_url=DATABASE,
         openai_api_key=secret,
-        byteplus_las_api_key=secret,
+        byteplus_ark_api_key=secret,
     )
     assert await live.preflight(settings, client) == 0
     assert retrieve == ["gpt-5.6-sol", "gpt-image-2.5-sunburst-2026-09-08"]
@@ -570,7 +570,7 @@ def test_historical_producer_plan_is_ignored(tmp_path) -> None:
     ("kind", "model", "provider", "field_name"),
     [
         ("IMAGE", acceptance.OPENAI_IMAGE_MODEL, "openai", "image_job_ids"),
-        ("VIDEO", acceptance.SEEDANCE_MODEL, "byteplus", "video_job_ids"),
+        ("VIDEO", acceptance.SEEDANCE_MODEL, "byteplus_modelark", "video_job_ids"),
     ],
 )
 def test_historical_fake_media_job_is_ignored(tmp_path, kind, model, provider, field_name) -> None:

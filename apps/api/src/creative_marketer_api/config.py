@@ -1,10 +1,19 @@
+import re
 from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, SecretStr, model_validator
+from pydantic import (
+    AliasChoices,
+    AnyHttpUrl,
+    Field,
+    PostgresDsn,
+    SecretStr,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -19,6 +28,7 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
         extra="ignore",
         frozen=True,
+        populate_by_name=True,
     )
 
     app_env: Literal["development", "test", "staging", "production"] = "development"
@@ -54,10 +64,13 @@ class Settings(BaseSettings):
     model_provider_backend: Literal["disabled", "fake", "openai"] = "disabled"
     openai_api_key: SecretStr | None = None
     media_image_provider: Literal["disabled", "fake", "openai"] = "disabled"
-    media_video_provider: Literal["disabled", "fake", "byteplus"] = "disabled"
-    byteplus_las_api_key: SecretStr | None = None
-    byteplus_las_base_url: AnyHttpUrl = AnyHttpUrl(
-        "https://operator.las.ap-southeast-1.bytepluses.com"
+    media_video_provider: Literal["disabled", "fake", "byteplus_modelark"] = "disabled"
+    byteplus_ark_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BYTEPLUS_ARK_API_KEY", "ARK_API_KEY"),
+    )
+    byteplus_modelark_base_url: AnyHttpUrl = AnyHttpUrl(
+        "https://ark.ap-southeast.bytepluses.com/api/v3"
     )
     allow_billable_media: bool = False
     run_live_e2e: str = ""
@@ -75,6 +88,12 @@ class Settings(BaseSettings):
     agent_workload_id: str = Field(default="local-live-agent-worker", min_length=1, max_length=128)
     agent_recovery_operator_id: str | None = Field(default=None, min_length=1, max_length=128)
     agent_recovery_tenant_id: UUID | None = None
+
+    @field_validator("media_video_provider", mode="before")
+    @classmethod
+    def normalize_legacy_video_provider_selector(cls, value: object) -> object:
+        # Upgrade existing operator configuration without retaining any LAS endpoint/key path.
+        return "byteplus_modelark" if value == "byteplus" else value
 
     def __init__(self, **values: Any) -> None:
         # Explicit programmatic construction (tests/composition) is hermetic. Ordinary
@@ -100,21 +119,33 @@ class Settings(BaseSettings):
             raise ValueError("fake model provider is development/test only")
         if self.media_image_provider == "openai" and self.openai_api_key is None:
             raise ValueError("OpenAI image provider requires OPENAI_API_KEY")
-        if self.media_video_provider == "byteplus":
+        if self.media_video_provider == "byteplus_modelark":
             key = (
-                self.byteplus_las_api_key.get_secret_value() if self.byteplus_las_api_key else None
+                self.byteplus_ark_api_key.get_secret_value() if self.byteplus_ark_api_key else None
             )
             if not key or key.startswith(("disabled-", "test-", "fake-", "replace-")):
-                raise ValueError("BytePlus video provider requires a non-placeholder API key")
-            host = self.byteplus_las_base_url.host or ""
-            if self.byteplus_las_base_url.scheme != "https" or not host.endswith(".bytepluses.com"):
-                raise ValueError("BytePlus LAS BaseURL must be an HTTPS BytePlus regional origin")
+                raise ValueError("ModelArk video provider requires a non-placeholder API key")
+            host = self.byteplus_modelark_base_url.host or ""
+            path = (self.byteplus_modelark_base_url.path or "").rstrip("/")
+            if (
+                self.byteplus_modelark_base_url.scheme != "https"
+                or re.fullmatch(r"ark\.[a-z0-9-]+\.bytepluses\.com", host) is None
+                or path != "/api/v3"
+                or self.byteplus_modelark_base_url.username is not None
+                or self.byteplus_modelark_base_url.password is not None
+                or self.byteplus_modelark_base_url.query is not None
+                or self.byteplus_modelark_base_url.fragment is not None
+            ):
+                raise ValueError(
+                    "ModelArk BaseURL must be an HTTPS BytePlus regional /api/v3 endpoint"
+                )
         media_enabled = (
             self.media_image_provider != "disabled" or self.media_video_provider != "disabled"
         )
         fake_enabled = self.media_image_provider == "fake" or self.media_video_provider == "fake"
         real_enabled = (
-            self.media_image_provider == "openai" or self.media_video_provider == "byteplus"
+            self.media_image_provider == "openai"
+            or self.media_video_provider == "byteplus_modelark"
         )
         if fake_enabled and self.app_env not in {"development", "test"}:
             raise ValueError("fake media providers are forbidden outside development/test")

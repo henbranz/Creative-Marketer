@@ -17,9 +17,9 @@ make env-check
 contract fields, prints no values, and attempts mode `0600` on Unix. The file is Git-ignored. Edit
 it locally rather than placing credentials on a command line, where shell history may retain them.
 
-Fill `OPENAI_API_KEY`, `BYTEPLUS_LAS_API_KEY`, `CM_TENANT_ID`, `CM_API_TOKEN`, and
+Fill `OPENAI_API_KEY`, `BYTEPLUS_ARK_API_KEY` (or `ARK_API_KEY`), `CM_TENANT_ID`, `CM_API_TOKEN`, and
 `LIVE_E2E_PRODUCT_ID`. `CM_API_TOKEN` is the local development credential (the demo identity uses
-`local-demo|owner`). Keep the account-specific `BYTEPLUS_LAS_BASE_URL`; the example is the
+`local-demo|owner`). Keep the account-specific `BYTEPLUS_MODELARK_BASE_URL`; the example is the
 documented AP Southeast endpoint and is not assumed for every account. Never share `.env`, terminal
 recordings, screenshots, or support bundles containing its contents.
 
@@ -63,7 +63,7 @@ make live-provider-preflight
 
 Preflight retrieves OpenAI model metadata once for the shared reasoning model `gpt-5.6-sol` and for
 `gpt-image-2.5-sunburst-2026-09-08`, checks application route identity, and resolves the configured
-BytePlus LAS host. BytePlus documents no credential-only endpoint for this API, so authentication
+BytePlus ModelArk host. BytePlus documents no credential-only endpoint for this API, so authentication
 is explicitly deferred to the minimal Seedance smoke; no video task is created. An inaccessible
 official OpenAI model fails as `PROVIDER_MODEL_NOT_AVAILABLE_TO_ACCOUNT`; there is no fallback.
 
@@ -114,7 +114,7 @@ Edit `.env`:
 ```dotenv
 MODEL_PROVIDER_BACKEND=openai
 MEDIA_IMAGE_PROVIDER=openai
-MEDIA_VIDEO_PROVIDER=byteplus
+MEDIA_VIDEO_PROVIDER=byteplus_modelark
 ALLOW_BILLABLE_MEDIA=true
 RUN_LIVE_E2E=I_UNDERSTAND_THIS_SPENDS_MONEY
 LIVE_E2E_MAX_USD=10

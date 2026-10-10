@@ -163,6 +163,16 @@ class GovernedProductionJobExecutor:
         except ProductionSpendCapReached:
             await self.authority.spend_cap_blocked(tenant_id, job_id)
             raise
+        if job.status is GenerationJobStatus.STARTING and job.provider_operation_ref is None:
+            # STARTING is persisted before the create request crosses the provider boundary.
+            # After a crash, a missing task ID therefore means unknown external outcome—not
+            # proof that no task exists. Converge conservatively and never issue a second create.
+            await self.authority.outcome_unknown(job_id)
+            return MediaProductionJobResult(
+                str(job.id),
+                GenerationJobStatus.OUTCOME_UNKNOWN.value,
+                "MEDIA_PROVIDER_OUTCOME_UNKNOWN",
+            )
         if execution.initiating_context is None or execution.requested_agent_definition_id is None:
             raise ValueError("GenerationJob lacks authoritative invocation identity")
         tool_key = self._tool(job)
@@ -308,7 +318,12 @@ class VideoStatusToolExecutor:
         operation = execution.job.provider_operation_ref
         if operation is None:
             raise PreEffectFailure("known provider operation is required for polling")
-        result = await self.provider.status(operation)
+        try:
+            result = await self.provider.status(operation)
+        except MediaProviderError as error:
+            # Polling is read-only. A provider/transport failure cannot make the already
+            # accepted task ambiguous and must leave the durable task reference resumable.
+            raise PreEffectFailure("video polling failed safely") from error
         if result.state in {ProviderGenerationState.FAILED, ProviderGenerationState.EXPIRED}:
             await self.authority.failed(job_id, result.failure_code or "MEDIA_FAILED", Decimal(0))
             status = GenerationJobStatus.FAILED
@@ -342,13 +357,19 @@ class VideoImportToolExecutor:
         operation = execution.job.provider_operation_ref
         if operation is None:
             raise PreEffectFailure("known provider operation is required for import")
-        status = await self.provider.status(operation)
+        try:
+            status = await self.provider.status(operation)
+        except MediaProviderError as error:
+            raise PreEffectFailure("video import polling failed safely") from error
         if (
             status.state is not ProviderGenerationState.SUCCEEDED
             or status.temporary_result_locator is None
         ):
             raise PreEffectFailure("provider output is not ready for import")
-        content = await self.provider.download(status.temporary_result_locator)
+        try:
+            content = await self.provider.download(status.temporary_result_locator)
+        except MediaProviderError as error:
+            raise PreEffectFailure("video output download failed safely") from error
         media_type = validate_video_result(content)
         asset_id = await self.importer.import_result(execution, content, media_type)
         await self.authority.succeeded(job_id, asset_id, execution.job.reserved_cost)

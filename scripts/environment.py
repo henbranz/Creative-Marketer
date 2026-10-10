@@ -90,7 +90,13 @@ def check() -> int:
         ("Object storage", _object_storage(values.get("OBJECT_STORAGE_ENDPOINT_URL", ""))),
         ("Temporal", _tcp(values.get("TEMPORAL_ADDRESS", ""), 7233)),
         ("OpenAI key", _configured(values, "OPENAI_API_KEY")),
-        ("BytePlus key", _configured(values, "BYTEPLUS_LAS_API_KEY")),
+        (
+            "BytePlus ModelArk key",
+            "CONFIGURED"
+            if values.get("BYTEPLUS_ARK_API_KEY", "").strip()
+            or values.get("ARK_API_KEY", "").strip()
+            else "NOT CONFIGURED",
+        ),
         ("Image provider", values.get("MEDIA_IMAGE_PROVIDER") or "NOT CONFIGURED"),
         ("Video provider", values.get("MEDIA_VIDEO_PROVIDER") or "NOT CONFIGURED"),
         (

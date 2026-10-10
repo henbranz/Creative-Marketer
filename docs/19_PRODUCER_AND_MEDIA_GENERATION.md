@@ -9,8 +9,11 @@ Sol at high reasoning. The
 current `production_image` route uses the exact documented
 `gpt-image-2.5-sunburst-2026-09-08` snapshot. Historical AgentRuns and GenerationJobs retain their
 older Terra/Astra and GPT Image 2 model and route fields.
-The verified video route is BytePlus LAS Enhanced `dreamina-seedance-2-5-260628`, documented
-2026-08-17 in `ap-southeast-1`.
+The current verified video route is BytePlus ModelArk
+`dreamina-seedance-2-5-260628` through the regional `/api/v3/contents/generations/tasks`
+contract. Historical LAS route identities remain immutable execution-compatible records only.
+Their compatibility mapping uses the ModelArk transport and does not retain LAS credentials or
+network calls.
 
 ## Boundary and flow
 
@@ -101,11 +104,11 @@ output. Reservations conservatively price all input as uncached. The 32,000-toke
 most 20,000 input plus 12,000 output tokens, or USD 0.32 per run and USD 6.40 across the configured
 20-run daily ceiling.
 
-`production_video` resolves to Seedance 2.5 at fixed LAS create/status endpoints. It supports
+`production_video` resolves to Seedance 2.5 at fixed ModelArk create/status endpoints. It supports
 480p/720p, 24 fps, 4–30 seconds, documented aspect ratios, audio-video generation, and bounded
 multimodal references. V1 enforces provider maxima of 30 images, 10 videos, and 10 audio clips and
 blocks direct real-face references unless material-library allowlisting is enabled. The provider is
-disabled by default and its key exists only in infrastructure.
+disabled by default and its ModelArk key exists only in infrastructure.
 
 Versioned Seedance pricing is:
 

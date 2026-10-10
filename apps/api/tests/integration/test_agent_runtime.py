@@ -90,7 +90,12 @@ from creative_marketer.orchestration.pipeline import (
     ProducerPipelineState,
     ResearchPipelineState,
 )
-from creative_marketer.production.application import initial_media_router, initial_producer_route
+from creative_marketer.production.application import (
+    LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+    LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+    initial_media_router,
+    initial_producer_route,
+)
 from creative_marketer.production.domain import (
     MediaKind,
     ProductionNotFound,
@@ -981,6 +986,58 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
     assert prepared_image.references[0].data == reference_content
     assert prepared_image.generation_spec["size"] == "1024x1536"
     assert prepared_video.duration_seconds == 12
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(context.tenant_id)},
+        )
+        reservations_before = await session.scalar(
+            text(
+                "SELECT count(*) FROM production.media_budget_usage "
+                "WHERE generation_job_id = :job_id AND entry_kind = 'RESERVED'"
+            ),
+            {"job_id": video_job.id},
+        )
+        await session.execute(
+            text(
+                "UPDATE production.plan_decisions SET video_route_version = :route, "
+                "video_pricing_version = :pricing "
+                "WHERE production_plan_id = :plan_id"
+            ),
+            {
+                "route": LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+                "pricing": LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+                "plan_id": plan.id,
+            },
+        )
+        await session.execute(
+            text(
+                "UPDATE production.generation_jobs SET route_version = :route, "
+                "pricing_version = :pricing, "
+                "provider = 'byteplus' WHERE id = :job_id"
+            ),
+            {
+                "route": LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+                "pricing": LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+                "job_id": video_job.id,
+            },
+        )
+    resumed_legacy_video = await authority.prepare(context.tenant_id, video_job.id, MediaKind.VIDEO)
+    assert resumed_legacy_video.job.route_version == LEGACY_SEEDANCE_LAS_ROUTE_VERSION
+    assert resumed_legacy_video.job.provider == "byteplus"
+    async with sessions() as session, session.begin():
+        await session.execute(
+            text("SELECT set_config('app.current_tenant_id', :tenant_id, true)"),
+            {"tenant_id": str(context.tenant_id)},
+        )
+        reservations_after = await session.scalar(
+            text(
+                "SELECT count(*) FROM production.media_budget_usage "
+                "WHERE generation_job_id = :job_id AND entry_kind = 'RESERVED'"
+            ),
+            {"job_id": video_job.id},
+        )
+    assert reservations_after == reservations_before == 1
     generated_asset_id = uuid4()
     generated_prefix = f"tenants/{context.tenant_id}/assets/{generated_asset_id}"
     generated_output = replace(

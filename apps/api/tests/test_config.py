@@ -180,21 +180,49 @@ def test_live_spend_authorization_requires_both_independent_gates() -> None:
     ).require_live_spend_authorization()
 
 
-def test_byteplus_base_url_is_explicit_and_region_safe() -> None:
+def test_modelark_base_url_and_key_aliases_are_explicit_and_region_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     database_url = "postgresql+psycopg://test:test@localhost:5432/test"
     configured = Settings(
         database_url=database_url,
-        media_video_provider="byteplus",
-        byteplus_las_api_key="unit-live-shaped-credential",
-        byteplus_las_base_url="https://operator.las.eu-west-1.bytepluses.com",
+        media_video_provider="byteplus_modelark",
+        byteplus_ark_api_key="unit-live-shaped-credential",
+        byteplus_modelark_base_url="https://ark.ap-southeast.bytepluses.com/api/v3",
         allow_billable_media=True,
     )
-    assert configured.byteplus_las_base_url.host == "operator.las.eu-west-1.bytepluses.com"
-    with pytest.raises(ValidationError, match="BytePlus LAS BaseURL"):
+    assert configured.byteplus_modelark_base_url.host == "ark.ap-southeast.bytepluses.com"
+    migrated_selector = Settings(
+        database_url=database_url,
+        media_video_provider="byteplus",
+        byteplus_ark_api_key="unit-live-shaped-credential",
+        allow_billable_media=True,
+    )
+    assert migrated_selector.media_video_provider == "byteplus_modelark"
+    with pytest.raises(ValidationError, match="ModelArk BaseURL"):
         Settings(
             database_url=database_url,
-            media_video_provider="byteplus",
-            byteplus_las_api_key="unit-live-shaped-credential",
-            byteplus_las_base_url="https://example.invalid",
+            media_video_provider="byteplus_modelark",
+            byteplus_ark_api_key="unit-live-shaped-credential",
+            byteplus_modelark_base_url="https://example.invalid/api/v3",
             allow_billable_media=True,
         )
+    with pytest.raises(ValidationError, match="ModelArk BaseURL"):
+        Settings(
+            database_url=database_url,
+            media_video_provider="byteplus_modelark",
+            byteplus_ark_api_key="unit-live-shaped-credential",
+            byteplus_modelark_base_url=(
+                "https://ark.ap-southeast.bytepluses.com/api/v3?unsafe=configuration"
+            ),
+            allow_billable_media=True,
+        )
+    monkeypatch.setenv("ARK_API_KEY", "unit-alias-shaped-credential")
+    aliased = Settings(
+        _env_file=None,
+        database_url=database_url,
+        media_video_provider="byteplus_modelark",
+        allow_billable_media=True,
+    )
+    assert aliased.byteplus_ark_api_key is not None
+    assert aliased.byteplus_ark_api_key.get_secret_value() == "unit-alias-shaped-credential"

@@ -61,10 +61,10 @@ from creative_marketer.production.execution import (
 from creative_marketer.production.gateway_composition import compose_production_gateway
 from creative_marketer.production.infrastructure import (
     ApplicationGeneratedAssetImporter,
+    BytePlusModelArkVideoProvider,
     FakeImageProvider,
     FakeSeedanceMediaProvider,
     OpenAIImageProvider,
-    SeedanceMediaProvider,
 )
 from creative_marketer.production.media import ImageProvider, VideoProvider
 from creative_marketer.tool_execution.application import (
@@ -151,7 +151,10 @@ async def run() -> None:
         raise RuntimeError("Production worker requires private S3-compatible object storage")
     if settings.media_image_provider == "disabled" or settings.media_video_provider == "disabled":
         raise RuntimeError("Production worker requires explicit image and video provider selection")
-    if settings.media_image_provider == "openai" or settings.media_video_provider == "byteplus":
+    if (
+        settings.media_image_provider == "openai"
+        or settings.media_video_provider == "byteplus_modelark"
+    ):
         settings.require_live_spend_authorization()
     workload = _workload(settings)
     sessions = create_session_factory(str(settings.database_url))
@@ -166,7 +169,8 @@ async def run() -> None:
         download_ttl_seconds=settings.asset_download_ttl_seconds,
     )
     real_provider_enabled = (
-        settings.media_image_provider == "openai" or settings.media_video_provider == "byteplus"
+        settings.media_image_provider == "openai"
+        or settings.media_video_provider == "byteplus_modelark"
     )
     authority = (
         SqlAlchemyGenerationAuthority(
@@ -189,10 +193,10 @@ async def run() -> None:
     if settings.media_video_provider == "fake":
         video_provider = FakeSeedanceMediaProvider()
     else:
-        assert settings.byteplus_las_api_key is not None
-        video_provider = SeedanceMediaProvider(
-            settings.byteplus_las_api_key.get_secret_value(),
-            base_url=str(settings.byteplus_las_base_url).rstrip("/"),
+        assert settings.byteplus_ark_api_key is not None
+        video_provider = BytePlusModelArkVideoProvider(
+            settings.byteplus_ark_api_key.get_secret_value(),
+            base_url=str(settings.byteplus_modelark_base_url).rstrip("/"),
         )
     image_importer = ApplicationGeneratedAssetImporter(
         AssetService(SqlAlchemyCatalogUnitOfWorkFactory(sessions), object_store),

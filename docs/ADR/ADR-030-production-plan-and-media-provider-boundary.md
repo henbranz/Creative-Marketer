@@ -34,3 +34,5 @@ Provider changes do not rewrite plans but intentionally invalidate execution app
 Provider availability changed after this ADR was first accepted. ADR-033 records the historical
 Astra/Sunburst activation, and ADR-034 records the current Sol reasoning-model policy, without
 rewriting immutable historical records.
+ADR-054 supersedes the current Seedance transport only: new jobs bind ModelArk, while exact
+historical LAS route records remain immutable and explicitly execution-compatible.

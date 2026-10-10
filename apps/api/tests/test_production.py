@@ -32,6 +32,8 @@ from creative_marketer.creative.domain import (
     CreativeDecisionState,
 )
 from creative_marketer.production.application import (
+    LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+    LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
     ImageReservationPricing,
     MediaRouter,
     ProductionBudgetGuard,
@@ -63,15 +65,20 @@ from creative_marketer.production.domain import (
 )
 from creative_marketer.production.infrastructure.openai_images import OpenAIImageProvider
 from creative_marketer.production.infrastructure.seedance import (
-    SeedanceMediaProvider,
+    BytePlusModelArkVideoProvider,
+    JsonHttpTransportError,
     UrllibJsonHttpTransport,
 )
 from creative_marketer.production.media import (
     ImageGenerationRequest,
     InvalidMediaResult,
     MaterializedReference,
+    MediaProviderActivationRequired,
+    MediaProviderBadRequest,
     MediaProviderError,
+    MediaProviderInsufficientCredits,
     MediaProviderOutcomeUnknown,
+    MediaProviderTransientFailure,
     ProviderGenerationState,
     VideoGenerationRequest,
     assert_reference_limits,
@@ -294,7 +301,18 @@ def test_routes_pricing_contracts_and_selection() -> None:
     assert producer.pricing.output_price_per_million == Decimal("20")
     assert producer.max_output_tokens == 12_000
     router = initial_media_router()
-    assert router.resolve("production_video").model == "dreamina-seedance-2-5-260628"
+    video_route = router.resolve("production_video")
+    assert video_route.model == "dreamina-seedance-2-5-260628"
+    assert video_route.provider == "byteplus_modelark"
+    assert video_route.route_version == "byteplus-modelark-seedance-2.5-2026-10-10"
+    legacy = router.resolve_execution(
+        "production_video",
+        LEGACY_SEEDANCE_LAS_ROUTE_VERSION,
+        "byteplus",
+        video_route.model,
+        LEGACY_SEEDANCE_LAS_PRICING_VERSION,
+    )
+    assert legacy.provider == "byteplus"
     assert router.resolve("production_image").model == "gpt-image-2.5-sunburst-2026-09-08"
     with pytest.raises(InvalidProductionPlan):
         MediaRouter(()).resolve("missing")
@@ -861,31 +879,75 @@ class FakeTransport:
     def __init__(self, replies: list[tuple[int, bytes]]) -> None:
         self.replies = replies
         self.calls: list[tuple[str, str, bytes | None]] = []
+        self.headers: list[dict[str, str]] = []
 
     async def request(self, method, url, headers, body):
         self.calls.append((method, url, body))
+        self.headers.append(dict(headers))
         return self.replies.pop(0)
 
 
 @pytest.mark.asyncio
-async def test_seedance_exact_mapping_status_and_download() -> None:
+async def test_modelark_seedance_exact_request_polling_and_download_contract() -> None:
     transport = FakeTransport(
         [
-            (200, b'{"id":"task-1"}'),
-            (200, b'{"status":"running","usage":{"total_tokens":2}}'),
+            (200, b'{"id":"cgt-task-1"}'),
             (
                 200,
-                b'{"status":"succeeded","content":{"video_url":"https://result.example/v.mp4"},"duration":12,"resolution":"720p"}',
+                b'{"id":"cgt-task-1","status":"running","usage":{"total_tokens":2}}',
+            ),
+            (
+                200,
+                b'{"id":"cgt-task-1","status":"succeeded","content":{"video_url":"https://result.example/v.mp4"},"duration":12,"resolution":"720p"}',
             ),
             (200, b"\0\0\0\x18ftypmp42video"),
         ]
     )
-    provider = SeedanceMediaProvider("real-key-value", transport=transport)
-    request = VideoGenerationRequest("animate", 12, "720p", "9:16", True)
+    provider = BytePlusModelArkVideoProvider("real-key-value", transport=transport)
+    request = VideoGenerationRequest(
+        "animate",
+        12,
+        "720p",
+        "9:16",
+        True,
+        (
+            MaterializedReference("image/png", b"image", "product_hero"),
+            MaterializedReference(
+                "video/mp4",
+                b"",
+                "source_video",
+                source_url="https://assets.example/reference.mp4",
+            ),
+            MaterializedReference("audio/wav", b"audio", "music"),
+        ),
+    )
     started = await provider.start(request)
     body = json.loads(transport.calls[0][2])
+    assert transport.calls[0][0:2] == (
+        "POST",
+        "https://ark.ap-southeast.bytepluses.com/api/v3/contents/generations/tasks",
+    )
+    assert transport.headers[0] == {
+        "Authorization": "Bearer real-key-value",
+        "Content-Type": "application/json",
+    }
     assert body["model"] == "dreamina-seedance-2-5-260628"
     assert (body["ratio"], body["duration"], body["generate_audio"]) == ("9:16", 12, True)
+    assert body["watermark"] is False
+    assert [item["type"] for item in body["content"]] == [
+        "text",
+        "image_url",
+        "video_url",
+        "audio_url",
+    ]
+    assert body["content"][1]["role"] == "reference_image"
+    assert body["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert body["content"][2] == {
+        "type": "video_url",
+        "video_url": {"url": "https://assets.example/reference.mp4"},
+        "role": "reference_video",
+    }
+    assert body["content"][3]["role"] == "reference_audio"
     assert (
         await provider.status(started.provider_operation_ref)
     ).state is ProviderGenerationState.RUNNING
@@ -896,8 +958,10 @@ async def test_seedance_exact_mapping_status_and_download() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seedance_unknown_and_policy_rejections() -> None:
-    provider = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(500, b"")]))
+async def test_modelark_seedance_unknown_and_policy_rejections() -> None:
+    provider = BytePlusModelArkVideoProvider(
+        "real-key-value", transport=FakeTransport([(500, b"")])
+    )
     with pytest.raises(MediaProviderOutcomeUnknown):
         await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False))
     with pytest.raises(ValueError):
@@ -908,19 +972,21 @@ async def test_seedance_unknown_and_policy_rejections() -> None:
 
 
 @pytest.mark.asyncio
-async def test_seedance_rejects_malformed_requests_and_provider_responses() -> None:
+async def test_modelark_seedance_rejects_malformed_requests_and_provider_responses() -> None:
     with pytest.raises(ValueError):
-        SeedanceMediaProvider("test-placeholder")
+        BytePlusModelArkVideoProvider("test-placeholder")
     with pytest.raises(ValueError):
-        SeedanceMediaProvider("real-key-value", base_url="https://unverified.invalid")
-    regional = SeedanceMediaProvider(
+        BytePlusModelArkVideoProvider("real-key-value", base_url="https://unverified.invalid")
+    regional = BytePlusModelArkVideoProvider(
         "real-key-value",
         transport=FakeTransport([]),
-        base_url="https://operator.las.eu-west-1.bytepluses.com/",
+        base_url="https://ark.eu-west.bytepluses.com/api/v3/",
     )
-    assert regional.base_url == "https://operator.las.eu-west-1.bytepluses.com"
-    assert isinstance(SeedanceMediaProvider("real-key-value").transport, UrllibJsonHttpTransport)
-    provider = SeedanceMediaProvider("real-key-value", transport=FakeTransport([]))
+    assert regional.base_url == "https://ark.eu-west.bytepluses.com/api/v3"
+    assert isinstance(
+        BytePlusModelArkVideoProvider("real-key-value").transport, UrllibJsonHttpTransport
+    )
+    provider = BytePlusModelArkVideoProvider("real-key-value", transport=FakeTransport([]))
     with pytest.raises(ValueError):
         await provider.start(VideoGenerationRequest("x", 4, "1080p", "9:16", False))
     with pytest.raises(ValueError):
@@ -928,42 +994,95 @@ async def test_seedance_rejects_malformed_requests_and_provider_responses() -> N
             VideoGenerationRequest("x", 4, "480p", "9:16", False, execution_expires_after=1)
         )
     video = MaterializedReference("video/mp4", b"video", "source_video")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="HTTPS source URL"):
         await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False, (video,)))
     image = MaterializedReference("image/png", b"image", "reference_image")
-    inline = SeedanceMediaProvider(
-        "real-key-value", transport=FakeTransport([(200, b'{"id":"task-image"}')])
+    inline = BytePlusModelArkVideoProvider(
+        "real-key-value", transport=FakeTransport([(200, b'{"id":"cgt-task-image"}')])
     )
     assert (
         await inline.start(VideoGenerationRequest("x", 4, "480p", "9:16", False, (image,)))
-    ).provider_operation_ref == "task-image"
+    ).provider_operation_ref == "cgt-task-image"
 
     for status, body, error in (
         (400, b"rejected", MediaProviderError),
         (200, b"not-json", MediaProviderOutcomeUnknown),
         (200, b'{"id":""}', MediaProviderOutcomeUnknown),
     ):
-        failing = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(status, body)]))
+        failing = BytePlusModelArkVideoProvider(
+            "real-key-value", transport=FakeTransport([(status, body)])
+        )
         with pytest.raises(error):
             await failing.start(VideoGenerationRequest("x", 4, "480p", "9:16", False))
 
     with pytest.raises(ValueError):
         await provider.status("bad/reference")
     for status, body in ((400, b""), (200, b"not-json"), (200, b'{"status":"unknown"}')):
-        failing = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(status, body)]))
+        failing = BytePlusModelArkVideoProvider(
+            "real-key-value", transport=FakeTransport([(status, body)])
+        )
         with pytest.raises(MediaProviderError):
             await failing.status("task-1")
-    missing_output = SeedanceMediaProvider(
+    missing_output = BytePlusModelArkVideoProvider(
         "real-key-value",
-        transport=FakeTransport([(200, b'{"status":"succeeded","content":{}}')]),
+        transport=FakeTransport([(200, b'{"id":"task-1","status":"succeeded","content":{}}')]),
     )
     with pytest.raises(MediaProviderError):
         await missing_output.status("task-1")
     with pytest.raises(ValueError):
         await provider.download("http://insecure.invalid/video")
-    failed_download = SeedanceMediaProvider("real-key-value", transport=FakeTransport([(404, b"")]))
+    failed_download = BytePlusModelArkVideoProvider(
+        "real-key-value", transport=FakeTransport([(404, b"")])
+    )
     with pytest.raises(MediaProviderError):
         await failed_download.download("https://result.example/video")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "code", "error"),
+    [
+        (404, "ModelNotOpen", MediaProviderActivationRequired),
+        (403, "OperationDenied.ServiceNotOpen", MediaProviderActivationRequired),
+        (403, "AccountOverdueError", MediaProviderInsufficientCredits),
+        (400, "InvalidParameter", MediaProviderBadRequest),
+        (429, "ServerOverloaded", MediaProviderTransientFailure),
+    ],
+)
+async def test_modelark_seedance_classifies_bounded_provider_errors(status, code, error) -> None:
+    body = json.dumps({"error": {"code": code, "message": "must not escape"}}).encode()
+    provider = BytePlusModelArkVideoProvider(
+        "real-key-value", transport=FakeTransport([(status, body)])
+    )
+    with pytest.raises(error) as captured:
+        await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False))
+    assert "must not escape" not in str(captured.value)
+
+
+@pytest.mark.asyncio
+async def test_modelark_polling_requires_matching_authoritative_task_identity() -> None:
+    provider = BytePlusModelArkVideoProvider(
+        "real-key-value",
+        transport=FakeTransport([(200, b'{"id":"different","status":"running"}')]),
+    )
+    with pytest.raises(InvalidMediaResult, match="identity"):
+        await provider.status("cgt-authoritative")
+
+
+@pytest.mark.asyncio
+async def test_modelark_transport_failures_preserve_start_ambiguity_and_poll_resumption() -> None:
+    class UnavailableTransport:
+        async def request(self, method, url, headers, body):
+            del method, url, headers, body
+            raise JsonHttpTransportError("offline")
+
+    provider = BytePlusModelArkVideoProvider("real-key-value", transport=UnavailableTransport())
+    with pytest.raises(MediaProviderOutcomeUnknown):
+        await provider.start(VideoGenerationRequest("x", 4, "480p", "9:16", False))
+    with pytest.raises(MediaProviderTransientFailure):
+        await provider.status("cgt-authoritative")
+    with pytest.raises(MediaProviderTransientFailure):
+        await provider.download("https://result.example/video.mp4")
 
 
 @pytest.mark.asyncio
@@ -990,7 +1109,7 @@ async def test_default_seedance_transport_success_and_network_uncertainty(monkey
         raise URLError("offline")
 
     monkeypatch.setattr(seedance_module, "urlopen", unavailable)
-    with pytest.raises(MediaProviderOutcomeUnknown):
+    with pytest.raises(JsonHttpTransportError):
         await UrllibJsonHttpTransport().request("GET", "https://example.test", {}, None)
 
     def rejected(*_args, **_kwargs):

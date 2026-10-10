@@ -145,9 +145,9 @@ affirm spending:
 ```bash
 ALLOW_BILLABLE_MEDIA=true \
 MEDIA_IMAGE_PROVIDER=openai \
-MEDIA_VIDEO_PROVIDER=byteplus \
+MEDIA_VIDEO_PROVIDER=byteplus_modelark \
 OPENAI_API_KEY="<injected secret>" \
-BYTEPLUS_LAS_API_KEY="<injected secret>" \
+BYTEPLUS_ARK_API_KEY="<injected secret>" \
 make production-worker
 ```
 
