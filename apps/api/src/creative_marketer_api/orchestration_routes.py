@@ -33,7 +33,10 @@ from creative_marketer.orchestration.execution import (
 )
 from creative_marketer.orchestration.pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
+    AssemblyPipelineState,
     CreativePipelineState,
+    FinalCreativePipelineState,
+    MediaPipelineState,
     PipelineAction,
     PipelineExecutionBehavior,
     PipelineLocator,
@@ -59,6 +62,8 @@ class PipelineLocatorRequest(Contract):
     creative_revalidation_id: UUID | None = None
     producer_run_id: UUID | None = None
     production_plan_id: UUID | None = None
+    assembly_plan_id: UUID | None = None
+    final_creative_id: UUID | None = None
     use_latest_when_unbound: bool = True
 
 
@@ -75,6 +80,8 @@ class PipelineLocatorResponse(Contract):
     creative_revalidation_id: UUID | None
     producer_run_id: UUID | None
     production_plan_id: UUID | None
+    assembly_plan_id: UUID | None
+    final_creative_id: UUID | None
     use_latest_when_unbound: bool
 
 
@@ -91,6 +98,9 @@ class NextPipelineActionResponse(Contract):
     research_state: ResearchPipelineState
     creative_state: CreativePipelineState
     producer_state: ProducerPipelineState
+    media_state: MediaPipelineState
+    assembly_state: AssemblyPipelineState
+    final_creative_state: FinalCreativePipelineState
     research_run_id: UUID | None
     research_snapshot_id: UUID | None
     creative_run_id: UUID | None
@@ -98,6 +108,8 @@ class NextPipelineActionResponse(Contract):
     creative_revalidation_id: UUID | None
     producer_run_id: UUID | None
     production_plan_id: UUID | None
+    assembly_plan_id: UUID | None
+    final_creative_id: UUID | None
 
 
 class PipelineExecutionResponse(Contract):
@@ -191,14 +203,16 @@ class CycleResponse(Contract):
 
 def _pipeline_locator(product_id: UUID, value: PipelineLocatorRequest) -> PipelineLocator:
     return PipelineLocator(
-        product_id,
-        value.research_run_id,
-        value.creative_run_id,
-        value.concept_id,
-        value.creative_revalidation_id,
-        value.producer_run_id,
-        value.production_plan_id,
-        value.use_latest_when_unbound,
+        product_id=product_id,
+        research_run_id=value.research_run_id,
+        creative_run_id=value.creative_run_id,
+        concept_id=value.concept_id,
+        creative_revalidation_id=value.creative_revalidation_id,
+        producer_run_id=value.producer_run_id,
+        production_plan_id=value.production_plan_id,
+        use_latest_when_unbound=value.use_latest_when_unbound,
+        assembly_plan_id=value.assembly_plan_id,
+        final_creative_id=value.final_creative_id,
     )
 
 
@@ -211,6 +225,8 @@ def _pipeline_locator_response(value: PipelineLocator) -> PipelineLocatorRespons
         creative_revalidation_id=value.creative_revalidation_id,
         producer_run_id=value.producer_run_id,
         production_plan_id=value.production_plan_id,
+        assembly_plan_id=value.assembly_plan_id,
+        final_creative_id=value.final_creative_id,
         use_latest_when_unbound=value.use_latest_when_unbound,
     )
 
@@ -230,6 +246,9 @@ def _next_pipeline_action_response(value: Any) -> NextPipelineActionResponse:
         research_state=value.research_state,
         creative_state=value.creative_state,
         producer_state=value.producer_state,
+        media_state=value.media_state,
+        assembly_state=value.assembly_state,
+        final_creative_state=value.final_creative_state,
         research_run_id=value.research_run_id,
         research_snapshot_id=value.research_snapshot_id,
         creative_run_id=value.creative_run_id,
@@ -237,6 +256,8 @@ def _next_pipeline_action_response(value: Any) -> NextPipelineActionResponse:
         creative_revalidation_id=value.creative_revalidation_id,
         producer_run_id=value.producer_run_id,
         production_plan_id=value.production_plan_id,
+        assembly_plan_id=value.assembly_plan_id,
+        final_creative_id=value.final_creative_id,
     )
 
 

@@ -10,6 +10,8 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from creative_marketer.agent_runtime.domain import AgentRun
+from creative_marketer.assembly.application import evaluate_readiness
+from creative_marketer.assembly.domain import AssemblyReadiness
 from creative_marketer.catalog.domain import evaluate_semantic_completeness
 from creative_marketer.infrastructure.database.agent_governance_schema import agent_definitions
 from creative_marketer.infrastructure.database.agent_runtime_repositories import (
@@ -19,6 +21,9 @@ from creative_marketer.infrastructure.database.agent_runtime_schema import (
     agent_runs,
     model_attempts,
     research_snapshots,
+)
+from creative_marketer.infrastructure.database.assembly_repositories import (
+    SqlAlchemyAssemblyRepository,
 )
 from creative_marketer.infrastructure.database.assembly_schema import (
     assembly_jobs,
@@ -80,7 +85,10 @@ from creative_marketer.orchestration.domain import (
     SupervisorReport,
 )
 from creative_marketer.orchestration.pipeline import (
+    AssemblyPipelineState,
     CreativePipelineState,
+    FinalCreativePipelineState,
+    MediaPipelineState,
     PipelineFailureCategory,
     PipelineLocator,
     PipelineObservation,
@@ -1104,20 +1112,118 @@ class SqlAlchemyOrchestrationRepository:
                 producer_state = ProducerPipelineState.FAILED_RESPONSE
                 blocking_reason = f"PRODUCER_RUN_{producer_run.status.value}"
 
+        media_state = MediaPipelineState.NOT_OBSERVED
+        assembly_state = AssemblyPipelineState.NOT_STARTED
+        final_state = FinalCreativePipelineState.NOT_STARTED
+        assembly_plan_id: UUID | None = None
+        final_creative_id: UUID | None = None
+        if producer_state is ProducerPipelineState.APPROVED_FOR_GENERATION and plan_id is not None:
+            job_statuses = tuple(
+                (
+                    await self.session.execute(
+                        select(generation_jobs.c.status).where(
+                            generation_jobs.c.production_plan_id == plan_id
+                        )
+                    )
+                ).scalars()
+            )
+            if not job_statuses:
+                media_state = MediaPipelineState.INVARIANT_VIOLATION
+                blocking_reason = "APPROVED_PLAN_MISSING_GENERATION_JOBS"
+            elif "OUTCOME_UNKNOWN" in job_statuses:
+                media_state = MediaPipelineState.OUTCOME_UNKNOWN
+                blocking_reason = "GENERATION_PROVIDER_OUTCOME_UNKNOWN"
+            elif "FAILED" in job_statuses:
+                media_state = MediaPipelineState.FAILED
+                blocking_reason = "GENERATION_JOB_FAILED"
+            elif all(status == "SUCCEEDED" for status in job_statuses):
+                media_state = MediaPipelineState.SUCCEEDED
+            elif any(status in {"STARTING", "PROCESSING", "IMPORTING"} for status in job_statuses):
+                media_state = MediaPipelineState.RUNNING
+            else:
+                media_state = MediaPipelineState.READY
+
+            if media_state is MediaPipelineState.SUCCEEDED:
+                assembly_repository = SqlAlchemyAssemblyRepository(self.session)
+                source = await assembly_repository.production_input(plan_id)
+                if source is None:
+                    assembly_state = AssemblyPipelineState.INVARIANT_VIOLATION
+                    blocking_reason = "ASSEMBLY_INPUT_MISSING_FOR_PRODUCTION_PLAN"
+                else:
+                    readiness = evaluate_readiness(source)
+                    records = await assembly_repository.list_plans(plan_id)
+                    if locator.assembly_plan_id is not None:
+                        records = tuple(
+                            record
+                            for record in records
+                            if record.plan.id == locator.assembly_plan_id
+                        )
+                        if not records:
+                            return None
+                    if not records:
+                        if readiness.status is AssemblyReadiness.READY:
+                            assembly_state = AssemblyPipelineState.READY_TO_PLAN
+                        elif readiness.status is AssemblyReadiness.MISSING_MANUAL_MEDIA:
+                            assembly_state = AssemblyPipelineState.INPUT_REQUIRED
+                            blocking_reason = "MANUAL_ASSEMBLY_SOURCE_REQUIRED"
+                        else:
+                            assembly_state = AssemblyPipelineState.BLOCKED
+                            blocking_reason = f"ASSEMBLY_{readiness.status.value}"
+                    else:
+                        record = records[0]
+                        assembly_plan_id = record.plan.id
+                        job = record.job
+                        if job.status.value == "FAILED":
+                            assembly_state = AssemblyPipelineState.FAILED
+                            blocking_reason = job.failure_code or "ASSEMBLY_JOB_FAILED"
+                        elif job.status.value == "SUCCEEDED":
+                            if job.final_creative_id is None:
+                                assembly_state = AssemblyPipelineState.INVARIANT_VIOLATION
+                                blocking_reason = "ASSEMBLY_SUCCESS_MISSING_FINAL_CREATIVE"
+                            else:
+                                assembly_state = AssemblyPipelineState.SUCCEEDED
+                                final_creative_id = job.final_creative_id
+                        else:
+                            assembly_state = AssemblyPipelineState.RUNNING
+
+                if final_creative_id is not None:
+                    if (
+                        locator.final_creative_id is not None
+                        and locator.final_creative_id != final_creative_id
+                    ):
+                        return None
+                    final_record = await assembly_repository.get_final(final_creative_id)
+                    if final_record is None:
+                        assembly_state = AssemblyPipelineState.INVARIANT_VIOLATION
+                        final_state = FinalCreativePipelineState.NOT_STARTED
+                        blocking_reason = "ASSEMBLY_SUCCESS_MISSING_FINAL_CREATIVE"
+                    elif final_record.decision is None:
+                        final_state = FinalCreativePipelineState.REVIEW_REQUIRED
+                    elif final_record.decision.state.value == "APPROVED_FOR_PUBLISHING":
+                        final_state = FinalCreativePipelineState.APPROVED
+                    else:
+                        final_state = FinalCreativePipelineState.REJECTED
+                        blocking_reason = "FINAL_CREATIVE_REJECTED"
+
         return PipelineObservation(
-            locator.product_id,
-            research_state,
-            creative_state,
-            producer_state,
-            research_run.id if research_run else None,
-            research_snapshot["id"] if research_snapshot else None,
-            creative_run.id if creative_run else None,
-            concept_id,
-            revalidation_id,
-            producer_run.id if producer_run else None,
-            plan_id,
-            blocking_reason,
-            current_contract_invalid_attempts,
+            product_id=locator.product_id,
+            research=research_state,
+            creative=creative_state,
+            producer=producer_state,
+            research_run_id=research_run.id if research_run else None,
+            research_snapshot_id=research_snapshot["id"] if research_snapshot else None,
+            creative_run_id=creative_run.id if creative_run else None,
+            concept_id=concept_id,
+            creative_revalidation_id=revalidation_id,
+            producer_run_id=producer_run.id if producer_run else None,
+            production_plan_id=plan_id,
+            blocking_reason=blocking_reason,
+            producer_current_contract_invalid_attempts=current_contract_invalid_attempts,
+            assembly_plan_id=assembly_plan_id,
+            final_creative_id=final_creative_id,
+            media=media_state,
+            assembly=assembly_state,
+            final_creative=final_state,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

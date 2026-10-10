@@ -17,6 +17,7 @@ from creative_marketer.orchestration.execution import (
 )
 from creative_marketer.orchestration.pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
+    AssemblyPipelineState,
     CreativePipelineState,
     NextPipelineAction,
     PipelineAction,
@@ -41,25 +42,31 @@ def action_state(
     creative_revalidation_id=None,
     producer_run_id=None,
     production_plan_id=None,
+    assembly_plan_id=None,
+    final_creative_id=None,
+    assembly=AssemblyPipelineState.NOT_STARTED,
 ) -> NextPipelineAction:
     definition = EXECUTION_BEHAVIOR_REGISTRY[action]
     return NextPipelineAction(
-        PipelineStage.RESEARCH,
-        action,
-        None,
-        definition.provider_cost,
-        definition.explicit_approval_required,
-        definition.provider_execution_permitted,
-        research,
-        creative,
-        producer,
-        research_run_id,
-        research_snapshot_id,
-        creative_run_id,
-        concept_id,
-        creative_revalidation_id,
-        producer_run_id,
-        production_plan_id,
+        stage=PipelineStage.RESEARCH,
+        action=action,
+        blocking_reason=None,
+        costs_money=definition.provider_cost,
+        human_approval_required=definition.explicit_approval_required,
+        provider_execution_permitted=definition.provider_execution_permitted,
+        research_state=research,
+        creative_state=creative,
+        producer_state=producer,
+        research_run_id=research_run_id,
+        research_snapshot_id=research_snapshot_id,
+        creative_run_id=creative_run_id,
+        concept_id=concept_id,
+        creative_revalidation_id=creative_revalidation_id,
+        producer_run_id=producer_run_id,
+        production_plan_id=production_plan_id,
+        assembly_plan_id=assembly_plan_id,
+        final_creative_id=final_creative_id,
+        assembly_state=assembly,
     )
 
 
@@ -117,6 +124,15 @@ class Production:
 
     async def get_plan(self, _context, _plan_id):
         return SimpleNamespace(decision=SimpleNamespace(rejection_feedback=self.feedback))
+
+
+class Assembly:
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    async def create_plan(self, _context, production_plan_id):
+        self.calls.append(production_plan_id)
+        return SimpleNamespace(plan=SimpleNamespace(id=uuid4()))
 
 
 @pytest.mark.asyncio
@@ -412,3 +428,38 @@ async def test_rejected_plan_feedback_is_bound_to_a_new_producer_run() -> None:
             explicit_approval=pipeline_approval_phrase(PipelineAction.RERUN_PRODUCER),
         )
     assert [name for name, _values in without_feedback.calls] == ["get_run"]
+
+
+@pytest.mark.asyncio
+async def test_free_assembly_plan_creation_uses_exact_plan_and_never_calls_provider() -> None:
+    ctx = context(uuid4())
+    plan_id = uuid4()
+    before = action_state(
+        PipelineAction.CREATE_ASSEMBLY_PLAN,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        assembly=AssemblyPipelineState.READY_TO_PLAN,
+    )
+    after = action_state(
+        PipelineAction.WAIT_FOR_ASSEMBLY,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        assembly_plan_id=uuid4(),
+        assembly=AssemblyPipelineState.RUNNING,
+    )
+    agents = Agents()
+    assembly = Assembly()
+
+    result = await PipelineActionExecutor(
+        State(before, after), agents, Creative(), Production(), assembly
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.CREATE_ASSEMBLY_PLAN,
+    )
+
+    assert assembly.calls == [plan_id]
+    assert result.resource_type == "assembly_plan"
+    assert result.locator.assembly_plan_id == result.resource_id
+    assert result.provider_execution_occurred is False
+    assert not agents.calls

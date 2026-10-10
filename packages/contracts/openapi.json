@@ -639,6 +639,20 @@
         "title": "AssemblyJobResponse",
         "type": "object"
       },
+      "AssemblyPipelineState": {
+        "enum": [
+          "NOT_STARTED",
+          "INPUT_REQUIRED",
+          "BLOCKED",
+          "READY_TO_PLAN",
+          "RUNNING",
+          "SUCCEEDED",
+          "FAILED",
+          "INVARIANT_VIOLATION"
+        ],
+        "title": "AssemblyPipelineState",
+        "type": "string"
+      },
       "AssemblyPlanResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3020,6 +3034,18 @@
       "ExecuteNextPipelineActionRequest": {
         "additionalProperties": false,
         "properties": {
+          "assembly_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Plan Id"
+          },
           "concept_id": {
             "anyOf": [
               {
@@ -3069,6 +3095,18 @@
               }
             ],
             "title": "Explicit Approval"
+          },
+          "final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Creative Id"
           },
           "producer_run_id": {
             "anyOf": [
@@ -3411,6 +3449,11 @@
         ],
         "title": "FetchResponse",
         "type": "object"
+      },
+      "FinalCreativePipelineState": {
+        "enum": ["NOT_STARTED", "REVIEW_REQUIRED", "APPROVED", "REJECTED"],
+        "title": "FinalCreativePipelineState",
+        "type": "string"
       },
       "FinalCreativeResponse": {
         "additionalProperties": false,
@@ -3971,12 +4014,40 @@
         "title": "MediaKind",
         "type": "string"
       },
+      "MediaPipelineState": {
+        "enum": [
+          "NOT_OBSERVED",
+          "READY",
+          "RUNNING",
+          "SUCCEEDED",
+          "FAILED",
+          "OUTCOME_UNKNOWN",
+          "INVARIANT_VIOLATION"
+        ],
+        "title": "MediaPipelineState",
+        "type": "string"
+      },
       "NextPipelineActionResponse": {
         "additionalProperties": false,
         "properties": {
           "api_boundary": {
             "title": "Api Boundary",
             "type": "string"
+          },
+          "assembly_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Plan Id"
+          },
+          "assembly_state": {
+            "$ref": "#/components/schemas/AssemblyPipelineState"
           },
           "blocking_reason": {
             "anyOf": [
@@ -4038,9 +4109,27 @@
           "execution_behavior": {
             "$ref": "#/components/schemas/PipelineExecutionBehavior"
           },
+          "final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Creative Id"
+          },
+          "final_creative_state": {
+            "$ref": "#/components/schemas/FinalCreativePipelineState"
+          },
           "human_approval_required": {
             "title": "Human Approval Required",
             "type": "boolean"
+          },
+          "media_state": {
+            "$ref": "#/components/schemas/MediaPipelineState"
           },
           "next_action": {
             "$ref": "#/components/schemas/PipelineAction"
@@ -4121,13 +4210,18 @@
           "research_state",
           "creative_state",
           "producer_state",
+          "media_state",
+          "assembly_state",
+          "final_creative_state",
           "research_run_id",
           "research_snapshot_id",
           "creative_run_id",
           "concept_id",
           "creative_revalidation_id",
           "producer_run_id",
-          "production_plan_id"
+          "production_plan_id",
+          "assembly_plan_id",
+          "final_creative_id"
         ],
         "title": "NextPipelineActionResponse",
         "type": "object"
@@ -4243,7 +4337,20 @@
           "RECOVER_PRODUCER_INVARIANT",
           "UPGRADE_PRODUCER_CONTRACT",
           "REVIEW_PRODUCTION_PLAN",
-          "READY_FOR_GENERATION"
+          "READY_FOR_GENERATION",
+          "WAIT_FOR_MEDIA",
+          "RECOVER_MEDIA_FAILURE",
+          "RECONCILE_MEDIA_OUTCOME",
+          "RECOVER_MEDIA_INVARIANT",
+          "BIND_MANUAL_ASSEMBLY_INPUT",
+          "RECOVER_ASSEMBLY_INPUT",
+          "CREATE_ASSEMBLY_PLAN",
+          "WAIT_FOR_ASSEMBLY",
+          "RECOVER_ASSEMBLY_FAILURE",
+          "RECOVER_ASSEMBLY_INVARIANT",
+          "REVIEW_FINAL_CREATIVE",
+          "RECOVER_REJECTED_FINAL_CREATIVE",
+          "FINAL_CREATIVE_READY"
         ],
         "title": "PipelineAction",
         "type": "string"
@@ -4344,6 +4451,18 @@
       "PipelineLocatorRequest": {
         "additionalProperties": false,
         "properties": {
+          "assembly_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Plan Id"
+          },
           "concept_id": {
             "anyOf": [
               {
@@ -4379,6 +4498,18 @@
               }
             ],
             "title": "Creative Run Id"
+          },
+          "final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Creative Id"
           },
           "producer_run_id": {
             "anyOf": [
@@ -4428,6 +4559,18 @@
       "PipelineLocatorResponse": {
         "additionalProperties": false,
         "properties": {
+          "assembly_plan_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assembly Plan Id"
+          },
           "concept_id": {
             "anyOf": [
               {
@@ -4463,6 +4606,18 @@
               }
             ],
             "title": "Creative Run Id"
+          },
+          "final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Final Creative Id"
           },
           "producer_run_id": {
             "anyOf": [
@@ -4518,6 +4673,8 @@
           "creative_revalidation_id",
           "producer_run_id",
           "production_plan_id",
+          "assembly_plan_id",
+          "final_creative_id",
           "use_latest_when_unbound"
         ],
         "title": "PipelineLocatorResponse",
@@ -4536,7 +4693,14 @@
           "PRODUCER",
           "PRODUCER_RECOVERY",
           "PRODUCTION_PLAN_REVIEW",
-          "READY_FOR_GENERATION"
+          "READY_FOR_GENERATION",
+          "MEDIA_GENERATION",
+          "MEDIA_RECOVERY",
+          "ASSEMBLY_INPUT",
+          "ASSEMBLY",
+          "ASSEMBLY_RECOVERY",
+          "FINAL_CREATIVE_REVIEW",
+          "FINAL_CREATIVE_READY"
         ],
         "title": "PipelineStage",
         "type": "string"

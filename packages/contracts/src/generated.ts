@@ -2048,6 +2048,19 @@ export interface components {
        */
       updated_at: string;
     };
+    /**
+     * AssemblyPipelineState
+     * @enum {string}
+     */
+    AssemblyPipelineState:
+      | "NOT_STARTED"
+      | "INPUT_REQUIRED"
+      | "BLOCKED"
+      | "READY_TO_PLAN"
+      | "RUNNING"
+      | "SUCCEEDED"
+      | "FAILED"
+      | "INVARIANT_VIOLATION";
     /** AssemblyPlanResponse */
     AssemblyPlanResponse: {
       /** Captions */
@@ -3103,6 +3116,8 @@ export interface components {
     };
     /** ExecuteNextPipelineActionRequest */
     ExecuteNextPipelineActionRequest: {
+      /** Assembly Plan Id */
+      assembly_plan_id?: string | null;
       /** Concept Id */
       concept_id?: string | null;
       /** Creative Revalidation Id */
@@ -3112,6 +3127,8 @@ export interface components {
       expected_action: components["schemas"]["PipelineAction"];
       /** Explicit Approval */
       explicit_approval?: string | null;
+      /** Final Creative Id */
+      final_creative_id?: string | null;
       /** Producer Run Id */
       producer_run_id?: string | null;
       /** Production Plan Id */
@@ -3222,6 +3239,12 @@ export interface components {
       /** Status */
       status: string;
     };
+    /**
+     * FinalCreativePipelineState
+     * @enum {string}
+     */
+    FinalCreativePipelineState:
+      "NOT_STARTED" | "REVIEW_REQUIRED" | "APPROVED" | "REJECTED";
     /** FinalCreativeResponse */
     FinalCreativeResponse: {
       /**
@@ -3438,10 +3461,25 @@ export interface components {
      * @enum {string}
      */
     MediaKind: "IMAGE" | "VIDEO";
+    /**
+     * MediaPipelineState
+     * @enum {string}
+     */
+    MediaPipelineState:
+      | "NOT_OBSERVED"
+      | "READY"
+      | "RUNNING"
+      | "SUCCEEDED"
+      | "FAILED"
+      | "OUTCOME_UNKNOWN"
+      | "INVARIANT_VIOLATION";
     /** NextPipelineActionResponse */
     NextPipelineActionResponse: {
       /** Api Boundary */
       api_boundary: string;
+      /** Assembly Plan Id */
+      assembly_plan_id: string | null;
+      assembly_state: components["schemas"]["AssemblyPipelineState"];
       /** Blocking Reason */
       blocking_reason: string | null;
       /** Canonical Operation */
@@ -3455,8 +3493,12 @@ export interface components {
       creative_state: components["schemas"]["CreativePipelineState"];
       current_stage: components["schemas"]["PipelineStage"];
       execution_behavior: components["schemas"]["PipelineExecutionBehavior"];
+      /** Final Creative Id */
+      final_creative_id: string | null;
+      final_creative_state: components["schemas"]["FinalCreativePipelineState"];
       /** Human Approval Required */
       human_approval_required: boolean;
+      media_state: components["schemas"]["MediaPipelineState"];
       next_action: components["schemas"]["PipelineAction"];
       /** Producer Run Id */
       producer_run_id: string | null;
@@ -3544,7 +3586,20 @@ export interface components {
       | "RECOVER_PRODUCER_INVARIANT"
       | "UPGRADE_PRODUCER_CONTRACT"
       | "REVIEW_PRODUCTION_PLAN"
-      | "READY_FOR_GENERATION";
+      | "READY_FOR_GENERATION"
+      | "WAIT_FOR_MEDIA"
+      | "RECOVER_MEDIA_FAILURE"
+      | "RECONCILE_MEDIA_OUTCOME"
+      | "RECOVER_MEDIA_INVARIANT"
+      | "BIND_MANUAL_ASSEMBLY_INPUT"
+      | "RECOVER_ASSEMBLY_INPUT"
+      | "CREATE_ASSEMBLY_PLAN"
+      | "WAIT_FOR_ASSEMBLY"
+      | "RECOVER_ASSEMBLY_FAILURE"
+      | "RECOVER_ASSEMBLY_INVARIANT"
+      | "REVIEW_FINAL_CREATIVE"
+      | "RECOVER_REJECTED_FINAL_CREATIVE"
+      | "FINAL_CREATIVE_READY";
     /**
      * PipelineExecutionBehavior
      * @description The only allowed execution disposition for a resolver-emitted action.
@@ -3582,12 +3637,16 @@ export interface components {
     };
     /** PipelineLocatorRequest */
     PipelineLocatorRequest: {
+      /** Assembly Plan Id */
+      assembly_plan_id?: string | null;
       /** Concept Id */
       concept_id?: string | null;
       /** Creative Revalidation Id */
       creative_revalidation_id?: string | null;
       /** Creative Run Id */
       creative_run_id?: string | null;
+      /** Final Creative Id */
+      final_creative_id?: string | null;
       /** Producer Run Id */
       producer_run_id?: string | null;
       /** Production Plan Id */
@@ -3602,12 +3661,16 @@ export interface components {
     };
     /** PipelineLocatorResponse */
     PipelineLocatorResponse: {
+      /** Assembly Plan Id */
+      assembly_plan_id: string | null;
       /** Concept Id */
       concept_id: string | null;
       /** Creative Revalidation Id */
       creative_revalidation_id: string | null;
       /** Creative Run Id */
       creative_run_id: string | null;
+      /** Final Creative Id */
+      final_creative_id: string | null;
       /** Producer Run Id */
       producer_run_id: string | null;
       /**
@@ -3638,7 +3701,14 @@ export interface components {
       | "PRODUCER"
       | "PRODUCER_RECOVERY"
       | "PRODUCTION_PLAN_REVIEW"
-      | "READY_FOR_GENERATION";
+      | "READY_FOR_GENERATION"
+      | "MEDIA_GENERATION"
+      | "MEDIA_RECOVERY"
+      | "ASSEMBLY_INPUT"
+      | "ASSEMBLY"
+      | "ASSEMBLY_RECOVERY"
+      | "FINAL_CREATIVE_REVIEW"
+      | "FINAL_CREATIVE_READY";
     /**
      * ProducerPipelineState
      * @enum {string}

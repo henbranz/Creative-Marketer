@@ -52,6 +52,34 @@ class ProducerPipelineState(StrEnum):
     APPROVED_FOR_GENERATION = "APPROVED_FOR_GENERATION"
 
 
+class MediaPipelineState(StrEnum):
+    NOT_OBSERVED = "NOT_OBSERVED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
+    INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
+
+
+class AssemblyPipelineState(StrEnum):
+    NOT_STARTED = "NOT_STARTED"
+    INPUT_REQUIRED = "INPUT_REQUIRED"
+    BLOCKED = "BLOCKED"
+    READY_TO_PLAN = "READY_TO_PLAN"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
+
+
+class FinalCreativePipelineState(StrEnum):
+    NOT_STARTED = "NOT_STARTED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
 class PipelineStage(StrEnum):
     RESEARCH = "RESEARCH"
     RESEARCH_RECOVERY = "RESEARCH_RECOVERY"
@@ -65,6 +93,13 @@ class PipelineStage(StrEnum):
     PRODUCER_RECOVERY = "PRODUCER_RECOVERY"
     PRODUCTION_PLAN_REVIEW = "PRODUCTION_PLAN_REVIEW"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
+    MEDIA_GENERATION = "MEDIA_GENERATION"
+    MEDIA_RECOVERY = "MEDIA_RECOVERY"
+    ASSEMBLY_INPUT = "ASSEMBLY_INPUT"
+    ASSEMBLY = "ASSEMBLY"
+    ASSEMBLY_RECOVERY = "ASSEMBLY_RECOVERY"
+    FINAL_CREATIVE_REVIEW = "FINAL_CREATIVE_REVIEW"
+    FINAL_CREATIVE_READY = "FINAL_CREATIVE_READY"
 
 
 class PipelineAction(StrEnum):
@@ -92,6 +127,19 @@ class PipelineAction(StrEnum):
     UPGRADE_PRODUCER_CONTRACT = "UPGRADE_PRODUCER_CONTRACT"
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
+    WAIT_FOR_MEDIA = "WAIT_FOR_MEDIA"
+    RECOVER_MEDIA_FAILURE = "RECOVER_MEDIA_FAILURE"
+    RECONCILE_MEDIA_OUTCOME = "RECONCILE_MEDIA_OUTCOME"
+    RECOVER_MEDIA_INVARIANT = "RECOVER_MEDIA_INVARIANT"
+    BIND_MANUAL_ASSEMBLY_INPUT = "BIND_MANUAL_ASSEMBLY_INPUT"
+    RECOVER_ASSEMBLY_INPUT = "RECOVER_ASSEMBLY_INPUT"
+    CREATE_ASSEMBLY_PLAN = "CREATE_ASSEMBLY_PLAN"
+    WAIT_FOR_ASSEMBLY = "WAIT_FOR_ASSEMBLY"
+    RECOVER_ASSEMBLY_FAILURE = "RECOVER_ASSEMBLY_FAILURE"
+    RECOVER_ASSEMBLY_INVARIANT = "RECOVER_ASSEMBLY_INVARIANT"
+    REVIEW_FINAL_CREATIVE = "REVIEW_FINAL_CREATIVE"
+    RECOVER_REJECTED_FINAL_CREATIVE = "RECOVER_REJECTED_FINAL_CREATIVE"
+    FINAL_CREATIVE_READY = "FINAL_CREATIVE_READY"
 
 
 class PipelineExecutionBehavior(StrEnum):
@@ -326,6 +374,88 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "production.plan.approved_for_generation.v1",
         resulting_states=("Media:READY",),
     ),
+    PipelineAction.WAIT_FOR_MEDIA: _execution(
+        PipelineExecutionBehavior.WAIT,
+        "await_generation_workers",
+        "GET /v1/production/plans/{production_plan_id}/generation-jobs",
+        resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
+    ),
+    PipelineAction.RECOVER_MEDIA_FAILURE: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_failed_generation_job",
+        "operator GenerationJob recovery boundary",
+        explicit_approval_required=True,
+        resulting_states=("Media:READY", "Media:FAILED"),
+    ),
+    PipelineAction.RECONCILE_MEDIA_OUTCOME: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "reconcile_generation_provider_outcome",
+        "operator GenerationJob reconciliation boundary",
+        explicit_approval_required=True,
+        resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
+    ),
+    PipelineAction.RECOVER_MEDIA_INVARIANT: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_approved_plan_missing_generation_jobs",
+        "operator ProductionPlan materialization diagnostic boundary",
+        resulting_states=("Media:INVARIANT_VIOLATION",),
+    ),
+    PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT: _execution(
+        PipelineExecutionBehavior.HUMAN_GATE,
+        "select_and_bind_manual_source_asset",
+        "POST /v1/assembly/shots/{shot_id}/manual-source",
+        explicit_approval_required=True,
+        resulting_states=("Assembly:INPUT_REQUIRED", "Assembly:READY_TO_PLAN"),
+    ),
+    PipelineAction.RECOVER_ASSEMBLY_INPUT: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_invalid_assembly_source",
+        "operator Asset rights/current-authority boundary",
+        resulting_states=("Assembly:BLOCKED", "Assembly:READY_TO_PLAN"),
+    ),
+    PipelineAction.CREATE_ASSEMBLY_PLAN: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "create_assembly_plan",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        resulting_states=("Assembly:RUNNING",),
+    ),
+    PipelineAction.WAIT_FOR_ASSEMBLY: _execution(
+        PipelineExecutionBehavior.WAIT,
+        "await_assembly_worker",
+        "GET /v1/assembly/jobs/{assembly_job_id}",
+        resulting_states=("Assembly:RUNNING", "Assembly:SUCCEEDED", "Assembly:FAILED"),
+    ),
+    PipelineAction.RECOVER_ASSEMBLY_FAILURE: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_failed_assembly_job",
+        "operator AssemblyJob recovery boundary",
+        resulting_states=("Assembly:RUNNING", "Assembly:FAILED"),
+    ),
+    PipelineAction.RECOVER_ASSEMBLY_INVARIANT: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "recover_assembly_persistence_invariant",
+        "operator Assembly persistence diagnostic boundary",
+        resulting_states=("Assembly:INVARIANT_VIOLATION",),
+    ),
+    PipelineAction.REVIEW_FINAL_CREATIVE: _execution(
+        PipelineExecutionBehavior.HUMAN_GATE,
+        "review_and_decide_final_creative",
+        "POST /v1/assembly/final-creatives/{final_creative_id}/approve|reject",
+        explicit_approval_required=True,
+        resulting_states=("FinalCreative:APPROVED", "FinalCreative:REJECTED"),
+    ),
+    PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "plan_revision_after_final_creative_rejection",
+        "operator ProductionPlan/Assembly revision boundary",
+        resulting_states=("FinalCreative:REJECTED",),
+    ),
+    PipelineAction.FINAL_CREATIVE_READY: _execution(
+        PipelineExecutionBehavior.TERMINAL,
+        "final_creative_approved_for_publishing",
+        "GET /v1/assembly/final-creatives/{final_creative_id}",
+        resulting_states=("FinalCreative:APPROVED",),
+    ),
 }
 
 EXECUTION_BEHAVIOR_REGISTRY: Mapping[PipelineAction, PipelineActionExecution] = MappingProxyType(
@@ -398,6 +528,8 @@ class PipelineLocator:
     producer_run_id: UUID | None = None
     production_plan_id: UUID | None = None
     use_latest_when_unbound: bool = True
+    assembly_plan_id: UUID | None = None
+    final_creative_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +547,11 @@ class PipelineObservation:
     production_plan_id: UUID | None = None
     blocking_reason: str | None = None
     producer_current_contract_invalid_attempts: int = 0
+    assembly_plan_id: UUID | None = None
+    final_creative_id: UUID | None = None
+    media: MediaPipelineState = MediaPipelineState.NOT_OBSERVED
+    assembly: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
+    final_creative: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
 
     def __post_init__(self) -> None:
         if self.producer_current_contract_invalid_attempts < 0:
@@ -439,6 +576,11 @@ class NextPipelineAction:
     creative_revalidation_id: UUID | None = None
     producer_run_id: UUID | None = None
     production_plan_id: UUID | None = None
+    assembly_plan_id: UUID | None = None
+    final_creative_id: UUID | None = None
+    media_state: MediaPipelineState = MediaPipelineState.NOT_OBSERVED
+    assembly_state: AssemblyPipelineState = AssemblyPipelineState.NOT_STARTED
+    final_creative_state: FinalCreativePipelineState = FinalCreativePipelineState.NOT_STARTED
 
 
 class PipelineStateResolver:
@@ -625,7 +767,104 @@ class PipelineStateResolver:
                 None,
             ),
         }
-        return self._result(state, producer[state.producer])
+        if state.producer is not ProducerPipelineState.APPROVED_FOR_GENERATION:
+            return self._result(state, producer[state.producer])
+
+        if state.media is MediaPipelineState.NOT_OBSERVED:
+            return self._result(state, producer[state.producer])
+        media = {
+            MediaPipelineState.READY: (
+                PipelineStage.MEDIA_GENERATION,
+                PipelineAction.WAIT_FOR_MEDIA,
+                "GENERATION_JOBS_READY_FOR_WORKER",
+            ),
+            MediaPipelineState.RUNNING: (
+                PipelineStage.MEDIA_GENERATION,
+                PipelineAction.WAIT_FOR_MEDIA,
+                "GENERATION_JOBS_IN_PROGRESS",
+            ),
+            MediaPipelineState.FAILED: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RECOVER_MEDIA_FAILURE,
+                "GENERATION_JOB_FAILED",
+            ),
+            MediaPipelineState.OUTCOME_UNKNOWN: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RECONCILE_MEDIA_OUTCOME,
+                "GENERATION_PROVIDER_OUTCOME_UNKNOWN",
+            ),
+            MediaPipelineState.INVARIANT_VIOLATION: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RECOVER_MEDIA_INVARIANT,
+                "APPROVED_PLAN_MISSING_GENERATION_JOBS",
+            ),
+        }
+        if state.media is not MediaPipelineState.SUCCEEDED:
+            return self._result(state, media[state.media])
+
+        assembly = {
+            AssemblyPipelineState.NOT_STARTED: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_ASSEMBLY_INVARIANT,
+                "ASSEMBLY_STATE_NOT_PROJECTED",
+            ),
+            AssemblyPipelineState.INPUT_REQUIRED: (
+                PipelineStage.ASSEMBLY_INPUT,
+                PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT,
+                "MANUAL_ASSEMBLY_SOURCE_REQUIRED",
+            ),
+            AssemblyPipelineState.BLOCKED: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_ASSEMBLY_INPUT,
+                "ASSEMBLY_SOURCE_INVALID",
+            ),
+            AssemblyPipelineState.READY_TO_PLAN: (
+                PipelineStage.ASSEMBLY,
+                PipelineAction.CREATE_ASSEMBLY_PLAN,
+                None,
+            ),
+            AssemblyPipelineState.RUNNING: (
+                PipelineStage.ASSEMBLY,
+                PipelineAction.WAIT_FOR_ASSEMBLY,
+                "ASSEMBLY_JOB_IN_PROGRESS",
+            ),
+            AssemblyPipelineState.FAILED: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_ASSEMBLY_FAILURE,
+                "ASSEMBLY_JOB_FAILED",
+            ),
+            AssemblyPipelineState.INVARIANT_VIOLATION: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_ASSEMBLY_INVARIANT,
+                "ASSEMBLY_SUCCESS_MISSING_FINAL_CREATIVE",
+            ),
+        }
+        if state.assembly is not AssemblyPipelineState.SUCCEEDED:
+            return self._result(state, assembly[state.assembly])
+
+        final = {
+            FinalCreativePipelineState.NOT_STARTED: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_ASSEMBLY_INVARIANT,
+                "ASSEMBLY_SUCCESS_MISSING_FINAL_CREATIVE",
+            ),
+            FinalCreativePipelineState.REVIEW_REQUIRED: (
+                PipelineStage.FINAL_CREATIVE_REVIEW,
+                PipelineAction.REVIEW_FINAL_CREATIVE,
+                "FINAL_CREATIVE_REVIEW_REQUIRED",
+            ),
+            FinalCreativePipelineState.REJECTED: (
+                PipelineStage.ASSEMBLY_RECOVERY,
+                PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE,
+                "FINAL_CREATIVE_REJECTED",
+            ),
+            FinalCreativePipelineState.APPROVED: (
+                PipelineStage.FINAL_CREATIVE_READY,
+                PipelineAction.FINAL_CREATIVE_READY,
+                None,
+            ),
+        }
+        return self._result(state, final[state.final_creative])
 
     @staticmethod
     def _result(
@@ -635,20 +874,25 @@ class PipelineStateResolver:
         stage, action, default_reason = rule
         execution = EXECUTION_BEHAVIOR_REGISTRY[action]
         return NextPipelineAction(
-            stage,
-            action,
-            state.blocking_reason or default_reason,
-            execution.provider_cost,
-            execution.explicit_approval_required,
-            execution.provider_execution_permitted,
-            state.research,
-            state.creative,
-            state.producer,
-            state.research_run_id,
-            state.research_snapshot_id,
-            state.creative_run_id,
-            state.concept_id,
-            state.creative_revalidation_id,
-            state.producer_run_id,
-            state.production_plan_id,
+            stage=stage,
+            action=action,
+            blocking_reason=state.blocking_reason or default_reason,
+            costs_money=execution.provider_cost,
+            human_approval_required=execution.explicit_approval_required,
+            provider_execution_permitted=execution.provider_execution_permitted,
+            research_state=state.research,
+            creative_state=state.creative,
+            producer_state=state.producer,
+            research_run_id=state.research_run_id,
+            research_snapshot_id=state.research_snapshot_id,
+            creative_run_id=state.creative_run_id,
+            concept_id=state.concept_id,
+            creative_revalidation_id=state.creative_revalidation_id,
+            producer_run_id=state.producer_run_id,
+            production_plan_id=state.production_plan_id,
+            assembly_plan_id=state.assembly_plan_id,
+            final_creative_id=state.final_creative_id,
+            media_state=state.media,
+            assembly_state=state.assembly,
+            final_creative_state=state.final_creative,
         )

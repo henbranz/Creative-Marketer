@@ -1222,6 +1222,8 @@ def _pipeline_locator_body(state: LiveState | None) -> dict[str, Any]:
         "creative_revalidation_id": state.creative_revalidation_id if state else None,
         "producer_run_id": state.producer_run_id if state else None,
         "production_plan_id": state.production_plan_id if state else None,
+        "assembly_plan_id": state.assembly_plan_id if state else None,
+        "final_creative_id": state.final_creative_id if state else None,
         # A checkpoint binds exact immutable lineage. Without one, inspect the
         # product's latest canonical state instead of reporting a false start.
         "use_latest_when_unbound": state is None,
@@ -1262,6 +1264,8 @@ def _bind_execution_locator(
         "creative_revalidation_id": locator.get("creative_revalidation_id"),
         "producer_run_id": locator.get("producer_run_id"),
         "production_plan_id": locator.get("production_plan_id"),
+        "assembly_plan_id": locator.get("assembly_plan_id"),
+        "final_creative_id": locator.get("final_creative_id"),
     }
     normalized = {
         field: valid_id(value, field) if value is not None else None
@@ -1325,6 +1329,21 @@ def live_next(
         "Provider execution permitted: "
         f"{'yes' if resolution['provider_execution_permitted'] else 'no'}"
     )
+
+    checkpoint_changed = False
+    for field_name, response_name in (
+        ("assembly_plan_id", "assembly_plan_id"),
+        ("final_creative_id", "final_creative_id"),
+    ):
+        identifier = resolution.get(response_name)
+        current = getattr(state, field_name)
+        if current is None and identifier is not None:
+            setattr(state, field_name, valid_id(identifier, response_name))
+            checkpoint_changed = True
+        elif current is not None and identifier is not None and current != str(identifier):
+            raise RuntimeError("LIVE_PIPELINE_RESOLUTION_PROVENANCE_MISMATCH")
+    if checkpoint_changed:
+        saved.save(state)
 
     if behavior != "EXECUTE":
         if explicit_approval is not None:
@@ -1408,6 +1427,8 @@ def openai_smoke(settings: Settings, store: StateStore | None = None) -> int:
         ("creative_revalidation_id", "creative_revalidation_id"),
         ("producer_run_id", "producer_run_id"),
         ("production_plan_id", "production_plan_id"),
+        ("assembly_plan_id", "assembly_plan_id"),
+        ("final_creative_id", "final_creative_id"),
     ):
         identifier = resolution.get(response_name)
         current = getattr(state, field_name)

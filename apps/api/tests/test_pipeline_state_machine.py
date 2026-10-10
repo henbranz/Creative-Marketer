@@ -4,7 +4,10 @@ import pytest
 
 from creative_marketer.orchestration.pipeline import (
     EXECUTION_BEHAVIOR_REGISTRY,
+    AssemblyPipelineState,
     CreativePipelineState,
+    FinalCreativePipelineState,
+    MediaPipelineState,
     PipelineAction,
     PipelineExecutionBehavior,
     PipelineFailureCategory,
@@ -259,6 +262,141 @@ def test_only_provider_actions_are_marked_as_permitted_and_billable() -> None:
     assert (revalidate.costs_money, revalidate.provider_execution_permitted) == (False, False)
     assert ready.action is PipelineAction.READY_FOR_GENERATION
     assert ready.provider_execution_permitted is False
+
+
+@pytest.mark.parametrize(
+    ("state", "action"),
+    [
+        (MediaPipelineState.NOT_OBSERVED, PipelineAction.READY_FOR_GENERATION),
+        (MediaPipelineState.READY, PipelineAction.WAIT_FOR_MEDIA),
+        (MediaPipelineState.RUNNING, PipelineAction.WAIT_FOR_MEDIA),
+        (MediaPipelineState.FAILED, PipelineAction.RECOVER_MEDIA_FAILURE),
+        (MediaPipelineState.OUTCOME_UNKNOWN, PipelineAction.RECONCILE_MEDIA_OUTCOME),
+        (
+            MediaPipelineState.INVARIANT_VIOLATION,
+            PipelineAction.RECOVER_MEDIA_INVARIANT,
+        ),
+    ],
+)
+def test_every_incomplete_media_state_has_one_governed_action(
+    state: MediaPipelineState, action: PipelineAction
+) -> None:
+    result = PipelineStateResolver().resolve(
+        PipelineObservation(
+            uuid4(),
+            ResearchPipelineState.SUCCEEDED_CURRENT,
+            CreativePipelineState.APPROVED_FOR_PRODUCTION,
+            ProducerPipelineState.APPROVED_FOR_GENERATION,
+            media=state,
+        )
+    )
+
+    assert result.action is action
+
+
+def test_media_transition_matrix_covers_every_declared_state() -> None:
+    exercised = {
+        MediaPipelineState.NOT_OBSERVED,
+        MediaPipelineState.READY,
+        MediaPipelineState.RUNNING,
+        MediaPipelineState.FAILED,
+        MediaPipelineState.OUTCOME_UNKNOWN,
+        MediaPipelineState.INVARIANT_VIOLATION,
+    }
+    assert exercised | {MediaPipelineState.SUCCEEDED} == set(MediaPipelineState)
+
+
+@pytest.mark.parametrize(
+    ("state", "action"),
+    [
+        (AssemblyPipelineState.NOT_STARTED, PipelineAction.RECOVER_ASSEMBLY_INVARIANT),
+        (
+            AssemblyPipelineState.INPUT_REQUIRED,
+            PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT,
+        ),
+        (AssemblyPipelineState.BLOCKED, PipelineAction.RECOVER_ASSEMBLY_INPUT),
+        (AssemblyPipelineState.READY_TO_PLAN, PipelineAction.CREATE_ASSEMBLY_PLAN),
+        (AssemblyPipelineState.RUNNING, PipelineAction.WAIT_FOR_ASSEMBLY),
+        (AssemblyPipelineState.FAILED, PipelineAction.RECOVER_ASSEMBLY_FAILURE),
+        (
+            AssemblyPipelineState.INVARIANT_VIOLATION,
+            PipelineAction.RECOVER_ASSEMBLY_INVARIANT,
+        ),
+    ],
+)
+def test_every_incomplete_assembly_state_has_one_governed_action(
+    state: AssemblyPipelineState, action: PipelineAction
+) -> None:
+    result = PipelineStateResolver().resolve(
+        PipelineObservation(
+            uuid4(),
+            ResearchPipelineState.SUCCEEDED_CURRENT,
+            CreativePipelineState.APPROVED_FOR_PRODUCTION,
+            ProducerPipelineState.APPROVED_FOR_GENERATION,
+            media=MediaPipelineState.SUCCEEDED,
+            assembly=state,
+        )
+    )
+
+    assert result.action is action
+
+
+def test_assembly_transition_matrix_covers_every_declared_state() -> None:
+    exercised = {
+        AssemblyPipelineState.NOT_STARTED,
+        AssemblyPipelineState.INPUT_REQUIRED,
+        AssemblyPipelineState.BLOCKED,
+        AssemblyPipelineState.READY_TO_PLAN,
+        AssemblyPipelineState.RUNNING,
+        AssemblyPipelineState.FAILED,
+        AssemblyPipelineState.INVARIANT_VIOLATION,
+    }
+    assert exercised | {AssemblyPipelineState.SUCCEEDED} == set(AssemblyPipelineState)
+
+
+@pytest.mark.parametrize(
+    ("state", "action"),
+    [
+        (
+            FinalCreativePipelineState.NOT_STARTED,
+            PipelineAction.RECOVER_ASSEMBLY_INVARIANT,
+        ),
+        (
+            FinalCreativePipelineState.REVIEW_REQUIRED,
+            PipelineAction.REVIEW_FINAL_CREATIVE,
+        ),
+        (
+            FinalCreativePipelineState.REJECTED,
+            PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE,
+        ),
+        (FinalCreativePipelineState.APPROVED, PipelineAction.FINAL_CREATIVE_READY),
+    ],
+)
+def test_every_final_creative_state_has_one_governed_action(
+    state: FinalCreativePipelineState, action: PipelineAction
+) -> None:
+    result = PipelineStateResolver().resolve(
+        PipelineObservation(
+            uuid4(),
+            ResearchPipelineState.SUCCEEDED_CURRENT,
+            CreativePipelineState.APPROVED_FOR_PRODUCTION,
+            ProducerPipelineState.APPROVED_FOR_GENERATION,
+            media=MediaPipelineState.SUCCEEDED,
+            assembly=AssemblyPipelineState.SUCCEEDED,
+            final_creative=state,
+        )
+    )
+
+    assert result.action is action
+
+
+def test_final_creative_transition_matrix_covers_every_declared_state() -> None:
+    assert set(FinalCreativePipelineState) == {
+        FinalCreativePipelineState.NOT_STARTED,
+        FinalCreativePipelineState.REVIEW_REQUIRED,
+        FinalCreativePipelineState.APPROVED,
+        FinalCreativePipelineState.REJECTED,
+    }
 
 
 @pytest.mark.parametrize(

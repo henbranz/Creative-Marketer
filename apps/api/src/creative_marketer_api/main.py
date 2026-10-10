@@ -409,6 +409,7 @@ def create_app(
                 agent_service,
                 creative_service,
                 production_service,
+                assembly_service,
             ),
             resolved_settings.app_env,
             resolved_identity_audit,

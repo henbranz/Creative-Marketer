@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 from creative_marketer.agent_runtime.application import AgentRunService
 from creative_marketer.agent_runtime.domain import AgentRun
+from creative_marketer.assembly.application import AssemblyService
 from creative_marketer.creative.application import CreativeService
 from creative_marketer.creative.domain import ChannelIntent, CreativeStrategyRequest
 from creative_marketer.identity.application.authentication import ExecutionContext
@@ -66,6 +67,8 @@ def _transition_id(
         str(locator.creative_revalidation_id or ""),
         str(locator.producer_run_id or ""),
         str(locator.production_plan_id or ""),
+        str(locator.assembly_plan_id or ""),
+        str(locator.final_creative_id or ""),
     )
     return uuid5(NAMESPACE_URL, "creative-marketer:pipeline:" + ":".join(components))
 
@@ -76,7 +79,7 @@ def _idempotency_key(action: PipelineAction, transition_id: UUID) -> str:
 
 @dataclass(slots=True)
 class PipelineActionExecutor:
-    """Execute exactly the currently resolved pre-generation action.
+    """Execute exactly the currently resolved governed pipeline action.
 
     Resolution remains authoritative. This boundary performs no model/provider
     execution: paid actions only admit a governed PENDING AgentRun after an
@@ -87,6 +90,7 @@ class PipelineActionExecutor:
     agents: AgentRunService
     creative: CreativeService
     production: ProductionService
+    assembly: AssemblyService | None = None
 
     async def execute(
         self,
@@ -126,14 +130,16 @@ class PipelineActionExecutor:
             )
 
         bound_locator = PipelineLocator(
-            locator.product_id,
-            before.research_run_id,
-            before.creative_run_id,
-            before.concept_id,
-            before.creative_revalidation_id,
-            before.producer_run_id,
-            before.production_plan_id,
-            False,
+            product_id=locator.product_id,
+            research_run_id=before.research_run_id,
+            creative_run_id=before.creative_run_id,
+            concept_id=before.concept_id,
+            creative_revalidation_id=before.creative_revalidation_id,
+            producer_run_id=before.producer_run_id,
+            production_plan_id=before.production_plan_id,
+            use_latest_when_unbound=False,
+            assembly_plan_id=before.assembly_plan_id,
+            final_creative_id=before.final_creative_id,
         )
         transition_id = _transition_id(context, bound_locator, before.action)
         resource_type, resource_id, updated = await self._execute(
@@ -292,6 +298,20 @@ class PipelineActionExecutor:
                 "agent_run",
                 run.id,
                 replace(locator, producer_run_id=run.id, production_plan_id=None),
+            )
+
+        if action is PipelineAction.CREATE_ASSEMBLY_PLAN:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant(
+                    "Assembly planning requires exact ProductionPlan authority"
+                )
+            if self.assembly is None:
+                raise PipelineExecutionInvariant("Assembly executor is not configured")
+            record = await self.assembly.create_plan(context, before.production_plan_id)
+            return (
+                "assembly_plan",
+                record.plan.id,
+                replace(locator, assembly_plan_id=record.plan.id),
             )
 
         raise PipelineExecutionInvariant(f"no executable operation for {action.value}")
