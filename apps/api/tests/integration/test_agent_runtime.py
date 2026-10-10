@@ -998,7 +998,10 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
             ),
             {"job_id": video_job.id},
         )
-        await session.execute(
+    # Simulate the immutable route tuple on a historical, pre-ModelArk record. The runtime
+    # role intentionally cannot rewrite approved plan decisions or generation jobs.
+    async with admin_engine.begin() as connection:
+        await connection.execute(
             text(
                 "UPDATE production.plan_decisions SET video_route_version = :route, "
                 "video_pricing_version = :pricing "
@@ -1010,7 +1013,7 @@ async def test_creative_runtime_persistence_decisions_rls_and_privacy(
                 "plan_id": plan.id,
             },
         )
-        await session.execute(
+        await connection.execute(
             text(
                 "UPDATE production.generation_jobs SET route_version = :route, "
                 "pricing_version = :pricing, "
