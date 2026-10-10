@@ -3,8 +3,10 @@ from uuid import uuid4
 import pytest
 
 from creative_marketer.orchestration.pipeline import (
+    EXECUTION_BEHAVIOR_REGISTRY,
     CreativePipelineState,
     PipelineAction,
+    PipelineExecutionBehavior,
     PipelineFailureCategory,
     PipelineObservation,
     PipelineStateResolver,
@@ -14,6 +16,39 @@ from creative_marketer.orchestration.pipeline import (
     classify_pipeline_failure,
     classify_producer_failure,
 )
+
+
+def test_every_pipeline_action_has_exactly_one_execution_behavior() -> None:
+    assert set(EXECUTION_BEHAVIOR_REGISTRY) == set(PipelineAction)
+    assert all(
+        definition.behavior in set(PipelineExecutionBehavior)
+        and definition.operation
+        and definition.api_boundary
+        and definition.resulting_states
+        for definition in EXECUTION_BEHAVIOR_REGISTRY.values()
+    )
+
+
+def test_wait_human_recovery_and_terminal_actions_cannot_execute_provider() -> None:
+    assert all(
+        not definition.provider_execution_permitted
+        for definition in EXECUTION_BEHAVIOR_REGISTRY.values()
+        if definition.behavior
+        in {
+            PipelineExecutionBehavior.WAIT,
+            PipelineExecutionBehavior.HUMAN_GATE,
+            PipelineExecutionBehavior.RECOVERY_GATE,
+            PipelineExecutionBehavior.TERMINAL,
+        }
+    )
+
+
+def test_every_billable_execute_action_requires_explicit_approval() -> None:
+    assert all(
+        definition.explicit_approval_required
+        for definition in EXECUTION_BEHAVIOR_REGISTRY.values()
+        if definition.behavior is PipelineExecutionBehavior.EXECUTE and definition.provider_cost
+    )
 
 
 @pytest.mark.parametrize(

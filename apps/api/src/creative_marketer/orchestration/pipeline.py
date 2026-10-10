@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from uuid import UUID
 
 
@@ -86,6 +88,233 @@ class PipelineAction(StrEnum):
     UPGRADE_PRODUCER_CONTRACT = "UPGRADE_PRODUCER_CONTRACT"
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
+
+
+class PipelineExecutionBehavior(StrEnum):
+    """The only allowed execution disposition for a resolver-emitted action."""
+
+    EXECUTE = "EXECUTE"
+    WAIT = "WAIT"
+    HUMAN_GATE = "HUMAN_GATE"
+    RECOVERY_GATE = "RECOVERY_GATE"
+    TERMINAL = "TERMINAL"
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineActionExecution:
+    behavior: PipelineExecutionBehavior
+    operation: str
+    api_boundary: str
+    provider_cost: bool
+    explicit_approval_required: bool
+    provider_execution_permitted: bool
+    resulting_states: tuple[str, ...]
+
+
+def _execution(
+    behavior: PipelineExecutionBehavior,
+    operation: str,
+    api_boundary: str,
+    *,
+    provider_cost: bool = False,
+    explicit_approval_required: bool = False,
+    provider_execution_permitted: bool = False,
+    resulting_states: tuple[str, ...],
+) -> PipelineActionExecution:
+    return PipelineActionExecution(
+        behavior,
+        operation,
+        api_boundary,
+        provider_cost,
+        explicit_approval_required,
+        provider_execution_permitted,
+        resulting_states,
+    )
+
+
+_EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
+    PipelineAction.RUN_RESEARCH: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_researcher",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Research:PENDING",),
+    ),
+    PipelineAction.WAIT_FOR_RESEARCH: _execution(
+        PipelineExecutionBehavior.WAIT,
+        "await_research_worker",
+        "GET /v1/agent-runs/{research_run_id}",
+        resulting_states=("Research:RUNNING", "Research:SUCCEEDED_CURRENT", "Research:FAILED"),
+    ),
+    PipelineAction.REFRESH_RESEARCH: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_researcher_refresh",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Research:PENDING",),
+    ),
+    PipelineAction.RETRY_RESEARCH: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "rerun_research_after_safe_failure",
+        "operator AgentRun recovery boundary",
+        provider_cost=True,
+        explicit_approval_required=True,
+        resulting_states=("Research:PENDING",),
+    ),
+    PipelineAction.RERUN_RESEARCH: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_fresh_researcher_run",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Research:PENDING",),
+    ),
+    PipelineAction.RECONCILE_RESEARCH_OUTCOME: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "reconcile_research_provider_outcome",
+        "operator AgentRun reconciliation boundary",
+        explicit_approval_required=True,
+        resulting_states=("Research:OUTCOME_UNKNOWN", "Research:FAILED"),
+    ),
+    PipelineAction.RUN_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_creative_strategist",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Creative:PENDING",),
+    ),
+    PipelineAction.WAIT_FOR_CREATIVE: _execution(
+        PipelineExecutionBehavior.WAIT,
+        "await_creative_worker",
+        "GET /v1/agent-runs/{creative_run_id}",
+        resulting_states=("Creative:RUNNING", "Creative:SUCCEEDED", "Creative:FAILED"),
+    ),
+    PipelineAction.RERUN_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_fresh_creative_run",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Creative:PENDING",),
+    ),
+    PipelineAction.RECONCILE_CREATIVE_OUTCOME: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "reconcile_creative_provider_outcome",
+        "operator AgentRun reconciliation boundary",
+        explicit_approval_required=True,
+        resulting_states=("Creative:OUTCOME_UNKNOWN", "Creative:FAILED"),
+    ),
+    PipelineAction.REPLACE_OUTPUT_LIMITED_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "replace_output_limited_creative",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Creative:PENDING",),
+    ),
+    PipelineAction.APPROVE_CREATIVE: _execution(
+        PipelineExecutionBehavior.HUMAN_GATE,
+        "select_and_decide_creative_concept",
+        "POST /v1/creative/concepts/{concept_id}/decision",
+        explicit_approval_required=True,
+        resulting_states=("Creative:APPROVED_FOR_PRODUCTION", "Creative:REJECTED"),
+    ),
+    PipelineAction.REVALIDATE_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "revalidate_creative_concept",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        resulting_states=(
+            "Creative:REVALIDATED_FOR_PRODUCTION",
+            "Creative:REQUIRES_RESTRATEGY",
+        ),
+    ),
+    PipelineAction.RESTRATEGIZE_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_creative_restrategy",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Creative:PENDING",),
+    ),
+    PipelineAction.RUN_PRODUCER: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_producer",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Producer:PENDING",),
+    ),
+    PipelineAction.WAIT_FOR_PRODUCER: _execution(
+        PipelineExecutionBehavior.WAIT,
+        "await_producer_worker",
+        "GET /v1/agent-runs/{producer_run_id}",
+        resulting_states=("Producer:RUNNING", "Producer:SUCCEEDED", "Producer:FAILED"),
+    ),
+    PipelineAction.RETRY_PRODUCER: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "rerun_producer_after_safe_failure",
+        "operator AgentRun recovery boundary",
+        provider_cost=True,
+        explicit_approval_required=True,
+        resulting_states=("Producer:PENDING",),
+    ),
+    PipelineAction.RERUN_PRODUCER: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "request_bounded_fresh_producer_run",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Producer:PENDING",),
+    ),
+    PipelineAction.RECONCILE_PRODUCER_OUTCOME: _execution(
+        PipelineExecutionBehavior.RECOVERY_GATE,
+        "reconcile_producer_provider_outcome",
+        "operator AgentRun reconciliation boundary",
+        explicit_approval_required=True,
+        resulting_states=("Producer:OUTCOME_UNKNOWN", "Producer:FAILED"),
+    ),
+    PipelineAction.UPGRADE_PRODUCER_CONTRACT: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "upgrade_producer_contract",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Producer:PENDING",),
+    ),
+    PipelineAction.REVIEW_PRODUCTION_PLAN: _execution(
+        PipelineExecutionBehavior.HUMAN_GATE,
+        "review_and_decide_production_plan",
+        "POST /v1/production/plans/{production_plan_id}/approve-generation|reject",
+        explicit_approval_required=True,
+        resulting_states=(
+            "Producer:APPROVED_FOR_GENERATION",
+            "Producer:PRODUCTION_PLAN_REJECTED",
+        ),
+    ),
+    PipelineAction.READY_FOR_GENERATION: _execution(
+        PipelineExecutionBehavior.TERMINAL,
+        "handoff_to_media_production",
+        "production.plan.approved_for_generation.v1",
+        resulting_states=("Media:READY",),
+    ),
+}
+
+EXECUTION_BEHAVIOR_REGISTRY: Mapping[PipelineAction, PipelineActionExecution] = MappingProxyType(
+    _EXECUTION_BEHAVIOR_REGISTRY
+)
 
 
 class PipelineFailureCategory(StrEnum):
@@ -200,65 +429,41 @@ class PipelineStateResolver:
                 PipelineStage.RESEARCH,
                 PipelineAction.RUN_RESEARCH,
                 None,
-                True,
-                True,
-                True,
             ),
             ResearchPipelineState.PENDING: (
                 PipelineStage.RESEARCH,
                 PipelineAction.WAIT_FOR_RESEARCH,
                 "RESEARCH_RUN_PENDING",
-                False,
-                False,
-                False,
             ),
             ResearchPipelineState.RUNNING: (
                 PipelineStage.RESEARCH,
                 PipelineAction.WAIT_FOR_RESEARCH,
                 "RESEARCH_RUN_IN_PROGRESS",
-                False,
-                False,
-                False,
             ),
             ResearchPipelineState.SUCCEEDED_EXPIRED: (
                 PipelineStage.CREATIVE_AUTHORITY_REFRESH,
                 PipelineAction.REFRESH_RESEARCH,
                 "RESEARCH_AUTHORITY_EXPIRED",
-                True,
-                True,
-                True,
             ),
             ResearchPipelineState.FAILED_BEFORE_PROVIDER: (
                 PipelineStage.RESEARCH_RECOVERY,
                 PipelineAction.RETRY_RESEARCH,
                 "RESEARCH_FAILED_BEFORE_PROVIDER",
-                True,
-                True,
-                True,
             ),
             ResearchPipelineState.FAILED_NO_RESPONSE: (
                 PipelineStage.RESEARCH_RECOVERY,
                 PipelineAction.RETRY_RESEARCH,
                 "RESEARCH_PROVIDER_RETURNED_NO_RESPONSE",
-                True,
-                True,
-                True,
             ),
             ResearchPipelineState.FAILED_RESPONSE: (
                 PipelineStage.RESEARCH_RECOVERY,
                 PipelineAction.RERUN_RESEARCH,
                 "RESEARCH_RESPONSE_FAILED_VALIDATION",
-                True,
-                True,
-                True,
             ),
             ResearchPipelineState.OUTCOME_UNKNOWN: (
                 PipelineStage.RESEARCH_RECOVERY,
                 PipelineAction.RECONCILE_RESEARCH_OUTCOME,
                 "RESEARCH_PROVIDER_OUTCOME_UNKNOWN",
-                False,
-                True,
-                False,
             ),
         }
         if state.research is not ResearchPipelineState.SUCCEEDED_CURRENT:
@@ -269,89 +474,56 @@ class PipelineStateResolver:
                 PipelineStage.CREATIVE,
                 PipelineAction.RUN_CREATIVE,
                 None,
-                True,
-                True,
-                True,
             ),
             CreativePipelineState.PENDING: (
                 PipelineStage.CREATIVE,
                 PipelineAction.WAIT_FOR_CREATIVE,
                 "CREATIVE_RUN_PENDING",
-                False,
-                False,
-                False,
             ),
             CreativePipelineState.RUNNING: (
                 PipelineStage.CREATIVE,
                 PipelineAction.WAIT_FOR_CREATIVE,
                 "CREATIVE_RUN_IN_PROGRESS",
-                False,
-                False,
-                False,
             ),
             CreativePipelineState.FAILED: (
                 PipelineStage.CREATIVE_RECOVERY,
                 PipelineAction.RERUN_CREATIVE,
                 "CREATIVE_RUN_FAILED",
-                True,
-                True,
-                True,
             ),
             CreativePipelineState.OUTCOME_UNKNOWN: (
                 PipelineStage.CREATIVE_RECOVERY,
                 PipelineAction.RECONCILE_CREATIVE_OUTCOME,
                 "CREATIVE_PROVIDER_OUTCOME_UNKNOWN",
-                False,
-                True,
-                False,
             ),
             CreativePipelineState.OUTPUT_LIMITED: (
                 PipelineStage.CREATIVE_RECOVERY,
                 PipelineAction.REPLACE_OUTPUT_LIMITED_CREATIVE,
                 "CREATIVE_OUTPUT_TOKEN_LIMIT_REACHED",
-                True,
-                True,
-                True,
             ),
             CreativePipelineState.SUCCEEDED: (
                 PipelineStage.CREATIVE_APPROVAL,
                 PipelineAction.APPROVE_CREATIVE,
                 "CREATIVE_CONCEPT_SELECTION_REQUIRED",
-                False,
-                True,
-                False,
             ),
             CreativePipelineState.APPROVAL_REQUIRED: (
                 PipelineStage.CREATIVE_APPROVAL,
                 PipelineAction.APPROVE_CREATIVE,
                 "CREATIVE_APPROVAL_REQUIRED",
-                False,
-                True,
-                False,
             ),
             CreativePipelineState.REJECTED: (
                 PipelineStage.CREATIVE_RESTRATEGY,
                 PipelineAction.RESTRATEGIZE_CREATIVE,
                 "CREATIVE_CONCEPT_REJECTED",
-                True,
-                True,
-                True,
             ),
             CreativePipelineState.STALE_RESEARCH: (
                 PipelineStage.CREATIVE_REVALIDATION,
                 PipelineAction.REVALIDATE_CREATIVE,
                 "APPROVED_CREATIVE_USES_HISTORICAL_RESEARCH",
-                False,
-                True,
-                False,
             ),
             CreativePipelineState.REQUIRES_RESTRATEGY: (
                 PipelineStage.CREATIVE_RESTRATEGY,
                 PipelineAction.RESTRATEGIZE_CREATIVE,
                 "CURRENT_AUTHORITY_MATERIALLY_DIFFERS",
-                True,
-                True,
-                True,
             ),
         }
         if state.creative not in {
@@ -365,97 +537,61 @@ class PipelineStateResolver:
                 PipelineStage.PRODUCER,
                 PipelineAction.RUN_PRODUCER,
                 None,
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.PENDING: (
                 PipelineStage.PRODUCER,
                 PipelineAction.WAIT_FOR_PRODUCER,
                 "PRODUCER_RUN_PENDING",
-                False,
-                False,
-                False,
             ),
             ProducerPipelineState.RUNNING: (
                 PipelineStage.PRODUCER,
                 PipelineAction.WAIT_FOR_PRODUCER,
                 "PRODUCER_RUN_IN_PROGRESS",
-                False,
-                False,
-                False,
             ),
             ProducerPipelineState.FAILED_NO_RESPONSE: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.RETRY_PRODUCER,
                 "PRODUCER_PROVIDER_RETURNED_NO_RESPONSE",
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.FAILED_RESPONSE: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.RERUN_PRODUCER,
                 "PRODUCER_RESPONSE_FAILED",
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.OUTCOME_UNKNOWN: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.RECONCILE_PRODUCER_OUTCOME,
                 "PRODUCER_PROVIDER_OUTCOME_UNKNOWN",
-                False,
-                True,
-                False,
             ),
             ProducerPipelineState.PRODUCTION_PLAN_INVALID: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.RERUN_PRODUCER,
                 "PRODUCTION_PLAN_FAILED_CURRENT_CONTRACT_VALIDATION",
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.CONTRACT_UPGRADE_REQUIRED: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.UPGRADE_PRODUCER_CONTRACT,
                 "PRODUCTION_PLAN_USED_HISTORICAL_CONTRACT",
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.SUCCEEDED: (
                 PipelineStage.PRODUCTION_PLAN_REVIEW,
                 PipelineAction.REVIEW_PRODUCTION_PLAN,
                 "PRODUCTION_PLAN_REVIEW_REQUIRED",
-                False,
-                True,
-                False,
             ),
             ProducerPipelineState.PRODUCTION_PLAN_REVIEW_REQUIRED: (
                 PipelineStage.PRODUCTION_PLAN_REVIEW,
                 PipelineAction.REVIEW_PRODUCTION_PLAN,
                 "PRODUCTION_PLAN_REVIEW_REQUIRED",
-                False,
-                True,
-                False,
             ),
             ProducerPipelineState.PRODUCTION_PLAN_REJECTED: (
                 PipelineStage.PRODUCER_RECOVERY,
                 PipelineAction.RERUN_PRODUCER,
                 "PRODUCTION_PLAN_REJECTED",
-                True,
-                True,
-                True,
             ),
             ProducerPipelineState.APPROVED_FOR_GENERATION: (
                 PipelineStage.READY_FOR_GENERATION,
                 PipelineAction.READY_FOR_GENERATION,
                 None,
-                False,
-                False,
-                False,
             ),
         }
         return self._result(state, producer[state.producer])
@@ -463,16 +599,17 @@ class PipelineStateResolver:
     @staticmethod
     def _result(
         state: PipelineObservation,
-        rule: tuple[PipelineStage, PipelineAction, str | None, bool, bool, bool],
+        rule: tuple[PipelineStage, PipelineAction, str | None],
     ) -> NextPipelineAction:
-        stage, action, default_reason, costs, approval, provider = rule
+        stage, action, default_reason = rule
+        execution = EXECUTION_BEHAVIOR_REGISTRY[action]
         return NextPipelineAction(
             stage,
             action,
             state.blocking_reason or default_reason,
-            costs,
-            approval,
-            provider,
+            execution.provider_cost,
+            execution.explicit_approval_required,
+            execution.provider_execution_permitted,
             state.research,
             state.creative,
             state.producer,

@@ -33,6 +33,18 @@ class CycleNotReady(OrchestrationError):
     code = "CYCLE_NOT_READY"
 
 
+class PipelineActionMismatch(OrchestrationError):
+    code = "PIPELINE_ACTION_MISMATCH"
+
+
+class PipelineApprovalRequired(OrchestrationError):
+    code = "PIPELINE_APPROVAL_REQUIRED"
+
+
+class PipelineExecutionInvariant(OrchestrationError):
+    code = "PIPELINE_EXECUTION_INVARIANT"
+
+
 class IllegalCycleTransition(OrchestrationError):
     code = "ILLEGAL_CYCLE_TRANSITION"
 
