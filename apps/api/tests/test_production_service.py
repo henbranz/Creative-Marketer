@@ -374,6 +374,52 @@ async def test_concurrent_stranded_start_recovery_collapses_to_one_transition() 
 
 
 @pytest.mark.asyncio
+async def test_media_ambiguity_recovery_guards_fail_closed() -> None:
+    service, repository, _uow = service_fixture()
+    plan_id = repository.record.plan.id
+    owner = execution_context(repository.record.plan.tenant_id)
+    member = execution_context(repository.record.plan.tenant_id, MembershipRole.MEMBER)
+
+    with pytest.raises(ProductionPermissionDenied, match="owner or admin"):
+        await service.recover_stranded_media_start(member, plan_id, job_ids=(uuid4(),))
+    with pytest.raises(ProductionPermissionDenied, match="requires exact jobs"):
+        await service.recover_stranded_media_start(owner, plan_id, job_ids=())
+    with pytest.raises(ProductionNotFound):
+        await service.recover_stranded_media_start(owner, uuid4(), job_ids=(uuid4(),))
+
+    with pytest.raises(ProductionPermissionDenied, match="owner or admin"):
+        await service.abandon_unknown_media_and_retry(
+            member, plan_id, job_ids=(uuid4(),), transition_id=uuid4()
+        )
+    with pytest.raises(ProductionPermissionDenied, match="spend cap is not configured"):
+        await service.abandon_unknown_media_and_retry(
+            owner, plan_id, job_ids=(uuid4(),), transition_id=uuid4()
+        )
+    service.live_spend_cap = Decimal("100")
+    with pytest.raises(ProductionPermissionDenied, match="requires exact unknown jobs"):
+        await service.abandon_unknown_media_and_retry(
+            owner, plan_id, job_ids=(), transition_id=uuid4()
+        )
+    with pytest.raises(ProductionNotFound):
+        await service.abandon_unknown_media_and_retry(
+            owner, uuid4(), job_ids=(uuid4(),), transition_id=uuid4()
+        )
+
+    await service.decide(
+        owner,
+        plan_id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    ready_job = repository.jobs[0]
+    with pytest.raises(ProductionPermissionDenied, match="not a stranded media start"):
+        await service.recover_stranded_media_start(owner, plan_id, job_ids=(ready_job.id,))
+    with pytest.raises(ProductionPermissionDenied, match="not safely retryable"):
+        await service.abandon_unknown_media_and_retry(
+            owner, plan_id, job_ids=(ready_job.id,), transition_id=uuid4()
+        )
+
+
+@pytest.mark.asyncio
 async def test_spend_cap_recovery_reuses_jobs_reservations_and_is_idempotent() -> None:
     service, repository, uow = service_fixture()
     context = execution_context(repository.record.plan.tenant_id)
