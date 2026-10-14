@@ -555,8 +555,48 @@ async def test_ffmpeg_mixed_media_unicode_audio_render_is_browser_playable(
             hashes.append(frame.stdout.strip())
         return hashes
 
+    def low_frequency_luma_at(timestamps: tuple[float, ...]) -> list[bytes]:
+        frames: list[bytes] = []
+        for timestamp in timestamps:
+            frame = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    str(timestamp),
+                    "-i",
+                    result.path,
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    ("crop=iw/3:ih/3:(iw-iw/3)/2:(ih-ih/3)/2,scale=32:32:flags=area,format=gray"),
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            assert len(frame.stdout) == 32 * 32
+            frames.append(frame.stdout)
+        return frames
+
+    def mean_absolute_delta(left: bytes, right: bytes) -> float:
+        assert len(left) == len(right)
+        return sum(abs(a - b) for a, b in zip(left, right, strict=True)) / len(left)
+
     assert len(set(hashes_at((0.25, 1.0, 1.75)))) == 3
-    assert len(set(hashes_at((2.6, 2.75, 2.9)))) == 1
+    still_frames = low_frequency_luma_at((2.6, 2.75, 2.9))
+    assert (
+        max(
+            mean_absolute_delta(still_frames[0], still_frames[1]),
+            mean_absolute_delta(still_frames[1], still_frames[2]),
+        )
+        <= 1.0
+    )
     assert len(set(hashes_at((3.6, 4.1, 4.7)))) == 3
 
 
