@@ -16,7 +16,7 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
-from creative_marketer.production.domain import MediaKind
+from creative_marketer.production.domain import GenerationJobStatus, MediaKind
 from creative_marketer.workflow_orchestration.contracts import MediaProductionWorkflowInput
 from creative_marketer.workflow_orchestration.production_bridge import (
     DatabaseProductionJobSetResolver,
@@ -37,15 +37,18 @@ class Starter:
 
 
 class Resolver:
-    def __init__(self, image_job: UUID, video_job: UUID) -> None:
+    def __init__(
+        self, image_job: UUID, video_job: UUID, ready_jobs: tuple[UUID, ...] | None = None
+    ) -> None:
         self.image_job, self.video_job = image_job, video_job
+        self.ready_jobs = ready_jobs or (image_job, video_job)
         self.calls: list[tuple[UUID, UUID]] = []
 
     async def resolve(
         self, tenant_id: UUID, plan_id: UUID
-    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
+    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...], tuple[UUID, ...]]:
         self.calls.append((tenant_id, plan_id))
-        return (self.image_job,), (self.video_job,)
+        return (self.image_job,), (self.video_job,), self.ready_jobs
 
 
 @pytest.mark.asyncio
@@ -165,13 +168,56 @@ async def test_ambiguity_retry_uses_recovery_specific_temporal_restart() -> None
         event_id=transition_id,
     )
     starter = Starter()
-    await StartMediaProductionWorkflow(starter, Resolver(uuid4(), video_job))(
+    await StartMediaProductionWorkflow(starter, Resolver(uuid4(), video_job, (video_job,)))(
         event,
         object(),  # type: ignore[arg-type]
     )
     assert not starter.requests
     assert len(starter.restarts) == 1
     assert starter.restarts[0].video_job_ids == (str(video_job),)
+
+
+@pytest.mark.asyncio
+async def test_workflow_restart_event_uses_recovery_start_and_exact_ready_jobs() -> None:
+    tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()
+    context = ExecutionContext(
+        tenant_id,
+        Actor(ActorKind.USER, user_id),
+        user_id,
+        MembershipRole.OWNER,
+        MembershipStatus.ACTIVE,
+        "test",
+        AuthenticationAssurance(datetime.now(UTC), "test", "mfa"),
+        uuid4(),
+    )
+    event_type = "production.media.workflow_restart_requested.v1"
+    transition_id, succeeded_image, ready_video = uuid4(), uuid4(), uuid4()
+    event = tenant_event(
+        context,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=plan_id,
+        occurred_at=datetime.now(UTC),
+        payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+        payload={
+            "production_plan_id": str(plan_id),
+            "transition_id": str(transition_id),
+            "generation_job_ids": [str(ready_video)],
+            "reason_code": "TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
+        },
+        event_id=transition_id,
+    )
+    starter = Starter()
+
+    await StartMediaProductionWorkflow(
+        starter, Resolver(succeeded_image, ready_video, (ready_video,))
+    )(event, object())  # type: ignore[arg-type]
+
+    assert not starter.requests
+    assert len(starter.restarts) == 1
+    assert starter.restarts[0].image_job_ids == (str(succeeded_image),)
+    assert starter.restarts[0].video_job_ids == (str(ready_video),)
 
 
 @pytest.mark.asyncio
@@ -239,12 +285,16 @@ class ResolverUow:
 @pytest.mark.asyncio
 async def test_database_job_set_resolver_requires_approved_nonempty_jobs() -> None:
     tenant_id, plan_id = uuid4(), uuid4()
-    image = SimpleNamespace(id=uuid4(), kind=MediaKind.IMAGE)
-    video = SimpleNamespace(id=uuid4(), kind=MediaKind.VIDEO)
+    image = SimpleNamespace(id=uuid4(), kind=MediaKind.IMAGE, status=GenerationJobStatus.SUCCEEDED)
+    video = SimpleNamespace(id=uuid4(), kind=MediaKind.VIDEO, status=GenerationJobStatus.READY)
     record = SimpleNamespace(decision=object())
     uow = ResolverUow(record, (image, video))
     resolver = DatabaseProductionJobSetResolver(lambda _tenant: uow)  # type: ignore[arg-type]
-    assert await resolver.resolve(tenant_id, plan_id) == ((image.id,), (video.id,))
+    assert await resolver.resolve(tenant_id, plan_id) == (
+        (image.id,),
+        (video.id,),
+        (video.id,),
+    )
 
     for unavailable in (ResolverUow(None), ResolverUow(SimpleNamespace(decision=None))):
         with pytest.raises(ValueError, match="unavailable"):

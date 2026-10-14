@@ -1415,6 +1415,72 @@ def test_live_next_executes_free_revalidation_without_spend_authorization(
     assert fake.calls[-1][2]["explicit_approval"] is None
 
 
+def test_live_next_executes_free_ready_media_redispatch_without_provider_authorization(
+    monkeypatch, tmp_path
+) -> None:
+    store = acceptance.StateStore(tmp_path / "state.json")
+    saved_state(
+        store,
+        researcher_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        creative_concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+        production_plan_id=PLAN,
+    )
+    resolution = _operator_resolution(
+        "RESTART_READY_MEDIA_WORKFLOW",
+        "EXECUTE",
+        current_stage="MEDIA_RECOVERY",
+        canonical_operation="redispatch_ready_media_workflow",
+        provider_cost=False,
+        human_approval_required=False,
+        provider_execution_permitted=False,
+        research_state="SUCCEEDED_CURRENT",
+        creative_state="APPROVED_FOR_PRODUCTION",
+        producer_state="APPROVED_FOR_GENERATION",
+        research_run_id=RESEARCH,
+        creative_run_id=CREATIVE,
+        concept_id=CONCEPT,
+        producer_run_id=PRODUCER,
+        production_plan_id=PLAN,
+    )
+    response = {
+        "outcome": "EXECUTED",
+        "execution_behavior": "EXECUTE",
+        "provider_execution_occurred": False,
+        "resource_type": "production_plan",
+        "resource_id": PLAN,
+        "before": resolution,
+        "locator": {
+            "product_id": PRODUCT,
+            "research_run_id": RESEARCH,
+            "creative_run_id": CREATIVE,
+            "concept_id": CONCEPT,
+            "creative_revalidation_id": None,
+            "producer_run_id": PRODUCER,
+            "production_plan_id": PLAN,
+            "assembly_plan_id": None,
+            "final_creative_id": None,
+            "use_latest_when_unbound": False,
+        },
+    }
+    fake = FakeApi(
+        {
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/next-action"): resolution,
+            ("POST", f"/v1/products/{PRODUCT}/pipeline/execute-next"): response,
+        }
+    )
+    monkeypatch.setattr(acceptance, "api_for", lambda *_args, **_kwargs: fake)
+    unapproved = Settings(database_url=DATABASE, live_e2e_product_id=PRODUCT)
+
+    assert acceptance.live_next(unapproved, store=store) == 0
+
+    assert len(fake.calls) == 2
+    assert fake.calls[-1][2]["expected_action"] == "RESTART_READY_MEDIA_WORKFLOW"
+    assert fake.calls[-1][2]["explicit_approval"] is None
+    assert store.load().production_plan_id == PLAN
+
+
 def test_live_next_restrategy_preserves_history_and_clears_old_lineage(
     monkeypatch, tmp_path
 ) -> None:

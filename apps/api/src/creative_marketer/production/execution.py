@@ -161,6 +161,18 @@ class GovernedProductionJobExecutor:
         try:
             execution = await self.authority.prepare(tenant_id, job_id, job.kind)
         except ProductionSpendCapReached:
+            current = await self.authority.current_job(tenant_id, job_id)
+            if (
+                current.status is GenerationJobStatus.READY
+                and current.provider_operation_ref is None
+                and current.actual_cost == 0
+                and current.unknown_cost > 0
+            ):
+                return MediaProductionJobResult(
+                    str(current.id),
+                    current.status.value,
+                    ProductionSpendCapReached.preserved_unknown_cost_code,
+                )
             await self.authority.spend_cap_blocked(tenant_id, job_id)
             raise
         if job.status is GenerationJobStatus.STARTING and job.provider_operation_ref is None:

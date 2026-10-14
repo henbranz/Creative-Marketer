@@ -4,7 +4,7 @@ from uuid import UUID
 
 from creative_marketer.events.application import ConsumerUnitOfWork
 from creative_marketer.events.domain import DomainEvent, EventScopeKind
-from creative_marketer.production.domain import MediaKind
+from creative_marketer.production.domain import GenerationJobStatus, MediaKind
 from creative_marketer.production.service import ProductionUnitOfWorkFactory
 from creative_marketer.workflow_orchestration.contracts import MediaProductionWorkflowInput
 
@@ -17,7 +17,7 @@ class MediaProductionWorkflowStarter(Protocol):
 class ProductionJobSetResolver(Protocol):
     async def resolve(
         self, tenant_id: UUID, production_plan_id: UUID
-    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]: ...
+    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...], tuple[UUID, ...]]: ...
 
 
 @dataclass(slots=True)
@@ -28,7 +28,7 @@ class DatabaseProductionJobSetResolver:
 
     async def resolve(
         self, tenant_id: UUID, production_plan_id: UUID
-    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...]]:
+    ) -> tuple[tuple[UUID, ...], tuple[UUID, ...], tuple[UUID, ...]]:
         async with self.factory(tenant_id) as uow:
             record = await uow.production.get_plan(production_plan_id)
             if record is None or record.decision is None:
@@ -36,9 +36,10 @@ class DatabaseProductionJobSetResolver:
             jobs = await uow.production.list_jobs(production_plan_id)
         images = tuple(job.id for job in jobs if job.kind is MediaKind.IMAGE)
         videos = tuple(job.id for job in jobs if job.kind is MediaKind.VIDEO)
+        ready = tuple(job.id for job in jobs if job.status is GenerationJobStatus.READY)
         if not jobs:
             raise ValueError("approved ProductionPlan has no generation jobs")
-        return images, videos
+        return images, videos, ready
 
 
 @dataclass(slots=True)
@@ -55,6 +56,7 @@ class StartMediaProductionWorkflow:
                 "production.plan.approved_for_generation.v1",
                 "production.media.retry_requested.v1",
                 "production.media.ambiguity_retry_requested.v1",
+                "production.media.workflow_restart_requested.v1",
             }
             or event.scope_kind is not EventScopeKind.TENANT
             or event.tenant_id is None
@@ -65,7 +67,17 @@ class StartMediaProductionWorkflow:
         if not isinstance(plan_id, str) or str(event.aggregate_id) != plan_id:
             raise ValueError("ProductionPlan event identity mismatch")
         parsed_plan_id = UUID(plan_id)
-        image_jobs, video_jobs = await self.resolver.resolve(event.tenant_id, parsed_plan_id)
+        image_jobs, video_jobs, ready_jobs = await self.resolver.resolve(
+            event.tenant_id, parsed_plan_id
+        )
+        if event.event_type != "production.plan.approved_for_generation.v1":
+            raw_job_ids = event.payload.get("generation_job_ids")
+            if (
+                not isinstance(raw_job_ids, (list, tuple))
+                or any(not isinstance(value, str) for value in raw_job_ids)
+                or {UUID(value) for value in raw_job_ids} != set(ready_jobs)
+            ):
+                raise ValueError("Production recovery event READY job identity mismatch")
         request = MediaProductionWorkflowInput(
             str(event.tenant_id),
             plan_id,
@@ -73,7 +85,10 @@ class StartMediaProductionWorkflow:
             tuple(str(value) for value in video_jobs),
             str(event.correlation_id),
         )
-        if event.event_type == "production.media.ambiguity_retry_requested.v1":
+        if event.event_type in {
+            "production.media.ambiguity_retry_requested.v1",
+            "production.media.workflow_restart_requested.v1",
+        }:
             await self.client.restart_media_production(request)
         else:
             await self.client.start_media_production(request)

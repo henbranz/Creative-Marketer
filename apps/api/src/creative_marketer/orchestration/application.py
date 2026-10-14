@@ -150,10 +150,14 @@ class MediaWorkflowExecutionState(StrEnum):
     MISSING = "MISSING"
 
 
+@dataclass(frozen=True, slots=True)
+class MediaWorkflowExecution:
+    state: MediaWorkflowExecutionState
+    execution_reference: str
+
+
 class MediaWorkflowStatusReader(Protocol):
-    async def status(
-        self, tenant_id: UUID, production_plan_id: UUID
-    ) -> MediaWorkflowExecutionState: ...
+    async def status(self, tenant_id: UUID, production_plan_id: UUID) -> MediaWorkflowExecution: ...
 
 
 class AssemblyCoordinator(Protocol):
@@ -420,24 +424,35 @@ class PipelineStateService:
         if observation is None:
             raise CycleNotFound("Product pipeline was not found")
         if (
-            observation.media is MediaPipelineState.RUNNING
+            observation.media in {MediaPipelineState.READY, MediaPipelineState.RUNNING}
             and observation.production_plan_id is not None
-            and observation.stranded_media_start_job_ids
+            and (
+                observation.media is MediaPipelineState.READY
+                or observation.stranded_media_start_job_ids
+            )
         ):
             if self.media_workflows is None:
                 raise CycleNotReady("Media workflow status is unavailable")
-            workflow_state = await self.media_workflows.status(
+            workflow = await self.media_workflows.status(
                 context.tenant_id, observation.production_plan_id
             )
-            if workflow_state in {
+            if workflow.state in {
                 MediaWorkflowExecutionState.TERMINAL,
                 MediaWorkflowExecutionState.MISSING,
             }:
-                observation = replace(
-                    observation,
-                    media=MediaPipelineState.STRANDED_START,
-                    blocking_reason="GENERATION_JOB_START_STRANDED_AFTER_TERMINAL_WORKFLOW",
-                )
+                if observation.media is MediaPipelineState.READY:
+                    observation = replace(
+                        observation,
+                        media=MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
+                        blocking_reason="GENERATION_JOBS_READY_AFTER_TERMINAL_WORKFLOW",
+                        media_workflow_execution_ref=workflow.execution_reference,
+                    )
+                else:
+                    observation = replace(
+                        observation,
+                        media=MediaPipelineState.STRANDED_START,
+                        blocking_reason=("GENERATION_JOB_START_STRANDED_AFTER_TERMINAL_WORKFLOW"),
+                    )
         elif (
             observation.media is MediaPipelineState.OUTCOME_UNKNOWN
             and observation.retryable_unknown_media_job_ids

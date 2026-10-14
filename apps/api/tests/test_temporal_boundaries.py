@@ -81,9 +81,13 @@ async def test_media_recovery_restart_allows_terminal_reuse_but_forbids_active_c
     ],
 )
 async def test_media_status_reader_uses_authoritative_temporal_status(status, expected) -> None:
-    handle = SimpleNamespace(describe=AsyncMock(return_value=SimpleNamespace(status=status)))
+    handle = SimpleNamespace(
+        describe=AsyncMock(return_value=SimpleNamespace(status=status, run_id="run-123"))
+    )
     temporal = SimpleNamespace(get_workflow_handle=lambda _workflow_id: handle)
-    assert await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4()) is expected
+    result = await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4())
+    assert result.state is expected
+    assert result.execution_reference == "run-123"
 
 
 @pytest.mark.asyncio
@@ -92,10 +96,9 @@ async def test_media_status_reader_classifies_missing_workflow() -> None:
         describe=AsyncMock(side_effect=RPCError("missing", RPCStatusCode.NOT_FOUND, b""))
     )
     temporal = SimpleNamespace(get_workflow_handle=lambda _workflow_id: handle)
-    assert (
-        await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4())
-        is MediaWorkflowExecutionState.MISSING
-    )
+    result = await TemporalMediaWorkflowStatusReader(temporal).status(uuid4(), uuid4())
+    assert result.state is MediaWorkflowExecutionState.MISSING
+    assert result.execution_reference == "missing"
 
 
 @pytest.mark.asyncio

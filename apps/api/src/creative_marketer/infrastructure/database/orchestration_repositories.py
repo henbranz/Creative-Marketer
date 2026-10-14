@@ -1130,6 +1130,7 @@ class SqlAlchemyOrchestrationRepository:
         media_spend_requirement = None
         stranded_media_start_job_ids: tuple[UUID, ...] = ()
         retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+        ready_media_job_ids: tuple[UUID, ...] = ()
         assembly_plan_id: UUID | None = None
         final_creative_id: UUID | None = None
         if producer_state is ProducerPipelineState.APPROVED_FOR_GENERATION and plan_id is not None:
@@ -1144,7 +1145,9 @@ class SqlAlchemyOrchestrationRepository:
                             generation_jobs.c.unknown_cost,
                             generation_jobs.c.output_asset_id,
                             generation_jobs.c.failure_code,
-                        ).where(generation_jobs.c.production_plan_id == plan_id)
+                        )
+                        .where(generation_jobs.c.production_plan_id == plan_id)
+                        .order_by(generation_jobs.c.created_at, generation_jobs.c.id)
                     )
                 ).mappings()
             )
@@ -1173,6 +1176,7 @@ class SqlAlchemyOrchestrationRepository:
                     None,
                 }
             )
+            ready_media_job_ids = tuple(row["id"] for row in job_rows if row["status"] == "READY")
             if not job_statuses:
                 media_state = MediaPipelineState.INVARIANT_VIOLATION
                 blocking_reason = "APPROVED_PLAN_MISSING_GENERATION_JOBS"
@@ -1307,6 +1311,7 @@ class SqlAlchemyOrchestrationRepository:
             media_spend_requirement=media_spend_requirement,
             stranded_media_start_job_ids=stranded_media_start_job_ids,
             retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
+            ready_media_job_ids=ready_media_job_ids,
         )
 
     async def add_supervisor_manifest(self, value: SupervisorContextManifest) -> None:

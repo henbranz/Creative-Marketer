@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -78,6 +79,21 @@ from creative_marketer.workflow_orchestration.production_bridge import (
 )
 from creative_marketer_api.config import Settings
 
+logger = logging.getLogger(__name__)
+
+
+def _log_effective_configuration(settings: Settings) -> None:
+    logger.info(
+        "Production worker configuration: media_image_provider=%s "
+        "media_video_provider=%s LIVE_E2E_MAX_USD=%s LIVE_E2E_PRODUCT_ID=%s "
+        "modelark_base_url=%s",
+        settings.media_image_provider,
+        settings.media_video_provider,
+        settings.live_e2e_max_usd,
+        settings.live_e2e_product_id,
+        str(settings.byteplus_modelark_base_url).rstrip("/"),
+    )
+
 
 def _workload(settings: Settings) -> MediaWorkloadIdentity:
     actor_id = settings.media_workload_actor_id
@@ -107,6 +123,7 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
                             "production.plan.approved_for_generation.v1",
                             "production.media.retry_requested.v1",
                             "production.media.ambiguity_retry_requested.v1",
+                            "production.media.workflow_restart_requested.v1",
                         }
                     ),
                     "v1",
@@ -125,6 +142,7 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
                 "production.plan.approved_for_generation.v1",
                 "production.media.retry_requested.v1",
                 "production.media.ambiguity_retry_requested.v1",
+                "production.media.workflow_restart_requested.v1",
             ),
             batch_size=25,
             now=now,
@@ -149,6 +167,7 @@ async def _bridge_loop(settings: Settings, handler: StartMediaProductionWorkflow
 
 async def run() -> None:
     settings = Settings()
+    logging.basicConfig(level=getattr(logging, settings.log_level))
     if settings.object_storage_backend != "s3":
         raise RuntimeError("Production worker requires private S3-compatible object storage")
     if settings.media_image_provider == "disabled" or settings.media_video_provider == "disabled":
@@ -158,6 +177,7 @@ async def run() -> None:
         or settings.media_video_provider == "byteplus_modelark"
     ):
         settings.require_live_spend_authorization()
+    _log_effective_configuration(settings)
     workload = _workload(settings)
     sessions = create_session_factory(str(settings.database_url))
     object_store = S3ObjectStore(

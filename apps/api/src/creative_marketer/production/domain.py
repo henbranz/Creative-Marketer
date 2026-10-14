@@ -76,6 +76,7 @@ class MediaSpendRequirement:
 
 class ProductionSpendCapReached(ProductionPermissionDenied):
     code = "LIVE_E2E_SPEND_CAP_REACHED"
+    preserved_unknown_cost_code = "LIVE_E2E_SPEND_CAP_REACHED_WITH_PRESERVED_UNKNOWN_COST"
 
     def __init__(self, requirement: MediaSpendRequirement) -> None:
         super().__init__("LIVE_E2E_MAX_USD spend cap reached")

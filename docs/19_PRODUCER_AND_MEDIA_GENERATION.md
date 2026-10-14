@@ -158,6 +158,13 @@ the separately action-bound `ABANDON_UNKNOWN_MEDIA_AND_RETRY` approval, acceptin
 risk after current authority, rights, route compatibility, pricing, reservation, and budget checks.
 That continuation uses a recovery-only Temporal restart and the existing ModelArk execution path.
 
+`READY` likewise means “waiting for the worker” only while that ProductionPlan workflow is active.
+If the workflow is terminal or missing, the resolver exposes the free
+`RESTART_READY_MEDIA_WORKFLOW` action. It emits a new transactional restart event after revalidating
+the exact existing Jobs and their authority; it creates no Job or reservation, changes no accepted
+unknown exposure, and never calls a provider. The bridge reloads the persisted full job set and uses
+the recovery-only Temporal restart, whose conflict policy prevents a second active workflow.
+
 Successful temporary output locators trigger immediate bounded download, signature/MIME/size
 validation, SHA-256 calculation, private ObjectStore import, and a normal READY generated Asset.
 Generated media has conservative configurable rights. Multi-parent lineage supports Product Asset →
@@ -176,6 +183,10 @@ snapshots and Creative approval, route/pricing/capability binding, reservation, 
 Asset's READY state, bytes, digest, and current generation rights. Any mismatch fails before a
 provider call. The actual provider remains reachable only through the existing Tool Gateway,
 current tenant permission, idempotency ledger, and audit boundary.
+
+At startup the Production worker logs only its effective image/video provider selectors, live spend
+cap, selected Product ID, and ModelArk base URL. Credentials are never included. This makes a stale
+long-lived worker configuration visible before the next activity runs.
 
 Image and video fake adapters use the identical path and create ordinary private generated Assets;
 they are allowed only in development/test and are labeled `LOCAL DEMO`. Real adapters additionally

@@ -21,7 +21,10 @@ from creative_marketer.infrastructure.temporal.workflows import (
     PublicationWorkflow,
     ResearcherWorkflow,
 )
-from creative_marketer.orchestration.application import MediaWorkflowExecutionState
+from creative_marketer.orchestration.application import (
+    MediaWorkflowExecution,
+    MediaWorkflowExecutionState,
+)
 from creative_marketer.workflow_orchestration.contracts import (
     AgentExecutionWorkflowInput,
     CommerceActionWorkflowInput,
@@ -202,7 +205,7 @@ class TemporalMediaWorkflowStatusReader:
     def __init__(self, client: Client) -> None:
         self._client = client
 
-    async def status(self, tenant_id: Any, production_plan_id: Any) -> MediaWorkflowExecutionState:
+    async def status(self, tenant_id: Any, production_plan_id: Any) -> MediaWorkflowExecution:
         request = MediaProductionWorkflowInput(
             str(tenant_id), str(production_plan_id), (), (), "00000000-0000-0000-0000-000000000000"
         )
@@ -212,12 +215,13 @@ class TemporalMediaWorkflowStatusReader:
             ).describe()
         except RPCError as error:
             if error.status is RPCStatusCode.NOT_FOUND:
-                return MediaWorkflowExecutionState.MISSING
+                return MediaWorkflowExecution(MediaWorkflowExecutionState.MISSING, "missing")
             raise
-        return (
+        return MediaWorkflowExecution(
             MediaWorkflowExecutionState.ACTIVE
             if description.status is WorkflowExecutionStatus.RUNNING
-            else MediaWorkflowExecutionState.TERMINAL
+            else MediaWorkflowExecutionState.TERMINAL,
+            str(description.run_id),
         )
 
 

@@ -57,7 +57,10 @@ def pipeline_approval_phrase(action: PipelineAction) -> str:
 
 
 def _transition_id(
-    context: ExecutionContext, locator: PipelineLocator, action: PipelineAction
+    context: ExecutionContext,
+    locator: PipelineLocator,
+    action: PipelineAction,
+    media_workflow_execution_ref: str | None = None,
 ) -> UUID:
     components = (
         str(context.tenant_id),
@@ -71,6 +74,7 @@ def _transition_id(
         str(locator.production_plan_id or ""),
         str(locator.assembly_plan_id or ""),
         str(locator.final_creative_id or ""),
+        media_workflow_execution_ref or "",
     )
     return uuid5(NAMESPACE_URL, "creative-marketer:pipeline:" + ":".join(components))
 
@@ -161,7 +165,12 @@ class PipelineActionExecutor:
             assembly_plan_id=before.assembly_plan_id,
             final_creative_id=before.final_creative_id,
         )
-        transition_id = _transition_id(context, bound_locator, before.action)
+        transition_id = _transition_id(
+            context,
+            bound_locator,
+            before.action,
+            before.media_workflow_execution_ref,
+        )
         resource_type, resource_id, updated = await self._execute(
             context,
             bound_locator,
@@ -359,6 +368,21 @@ class PipelineActionExecutor:
             return (
                 "generation_job",
                 jobs[0].id,
+                locator,
+            )
+
+        if action is PipelineAction.RESTART_READY_MEDIA_WORKFLOW:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant("media redispatch requires a ProductionPlan")
+            await self.production.redispatch_ready_media_workflow(
+                context,
+                before.production_plan_id,
+                job_ids=before.ready_media_job_ids,
+                transition_id=transition_id,
+            )
+            return (
+                "production_plan",
+                before.production_plan_id,
                 locator,
             )
 

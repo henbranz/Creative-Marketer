@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type,var-annotated,index"
 
 import asyncio
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -100,6 +101,7 @@ class Repository:
         self.record = record
         self.jobs: tuple[Any, ...] = ()
         self.committed_spend = Decimal("0")
+        self.outbox = None
 
     async def get_plan(self, plan_id, *, for_update=False):
         return self.record if plan_id == self.record.plan.id else None
@@ -170,12 +172,21 @@ class Repository:
         )
         return tuple(job for job in self.jobs if job.id in selected)
 
+    async def workflow_restart_requested(self, plan_id, transition_id):
+        return any(
+            event.event_id == transition_id
+            and event.aggregate_id == plan_id
+            and event.event_type == "production.media.workflow_restart_requested.v1"
+            for event in (self.outbox.values if self.outbox is not None else ())
+        )
+
 
 class Uow:
     def __init__(self, repository) -> None:
         self.production = repository
         self.audit = Writer()
         self.outbox = ContractValidatingWriter()
+        repository.outbox = self.outbox
         self.committed = False
         self.lock = asyncio.Lock()
 
@@ -371,6 +382,114 @@ async def test_concurrent_stranded_start_recovery_collapses_to_one_transition() 
         )
         == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_ready_media_redispatch_reuses_jobs_and_preserves_accepted_unknown_spend() -> None:
+    service, repository, uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image, video = repository.jobs
+    image = (
+        image.transition(GenerationJobStatus.STARTING)
+        .transition(GenerationJobStatus.IMPORTING)
+        .transition(GenerationJobStatus.SUCCEEDED, output_asset_id=uuid4())
+    )
+    ambiguity_ready = replace(
+        video,
+        status=GenerationJobStatus.READY,
+        unknown_cost=video.reserved_cost,
+        failure_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+    )
+    regular_ready = replace(
+        video,
+        id=uuid4(),
+        failure_code="LIVE_E2E_SPEND_CAP_RETRY_APPROVED",
+    )
+    repository.jobs = (image, ambiguity_ready, regular_ready)
+    before = repository.jobs
+    transition_id = uuid4()
+
+    results = await asyncio.gather(
+        *(
+            service.redispatch_ready_media_workflow(
+                owner,
+                repository.record.plan.id,
+                job_ids=(ambiguity_ready.id, regular_ready.id),
+                transition_id=transition_id,
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert all(
+        tuple(job.id for job in result) == (ambiguity_ready.id, regular_ready.id)
+        for result in results
+    )
+    assert repository.jobs == before
+    assert repository.jobs[0] == image
+    assert repository.jobs[1].unknown_cost == video.reserved_cost
+    events = [
+        event
+        for event in uow.outbox.values
+        if event.event_type == "production.media.workflow_restart_requested.v1"
+    ]
+    assert len(events) == 1
+    assert events[0].event_id == transition_id
+    assert dict(events[0].payload) == {
+        "production_plan_id": str(repository.record.plan.id),
+        "transition_id": str(transition_id),
+        "generation_job_ids": (str(ambiguity_ready.id), str(regular_ready.id)),
+        "reason_code": "TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
+    }
+    audits = [
+        audit
+        for audit in uow.audit.values
+        if audit.action == "production.media.ready_workflow_redispatched"
+    ]
+    assert len(audits) == 1
+    assert (
+        json.loads(audits[0].safe_metadata.canonical_json)["provider_execution_occurred"] is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_ready_media_redispatch_rejects_unaccepted_ambiguity_and_changed_ids() -> None:
+    service, repository, _uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image, video = repository.jobs
+    image = (
+        image.transition(GenerationJobStatus.STARTING)
+        .transition(GenerationJobStatus.IMPORTING)
+        .transition(GenerationJobStatus.SUCCEEDED, output_asset_id=uuid4())
+    )
+    repository.jobs = (
+        image,
+        replace(video, unknown_cost=video.reserved_cost, failure_code="UNRECONCILED"),
+    )
+    with pytest.raises(ProductionPermissionDenied, match="safely redispatchable"):
+        await service.redispatch_ready_media_workflow(
+            owner,
+            repository.record.plan.id,
+            job_ids=(video.id,),
+            transition_id=uuid4(),
+        )
+    with pytest.raises(ProductionPermissionDenied, match="identity changed"):
+        await service.redispatch_ready_media_workflow(
+            owner,
+            repository.record.plan.id,
+            job_ids=(uuid4(),),
+            transition_id=uuid4(),
+        )
 
 
 @pytest.mark.asyncio
@@ -811,6 +930,39 @@ async def test_media_tool_executors_import_and_never_retry_ambiguous_start() -> 
 
 
 @pytest.mark.asyncio
+async def test_fresh_cap_authority_starts_exact_ready_video_once() -> None:
+    service, repository, _uow = service_fixture()
+    await service.decide(
+        execution_context(repository.record.plan.tenant_id),
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    video = replace(
+        repository.jobs[1],
+        unknown_cost=repository.jobs[1].reserved_cost,
+        failure_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+    )
+    authority = Authority(
+        ExecutableGeneration(
+            video,
+            {"resolution": "720p", "aspect_ratio": "9:16", "generate_audio": True},
+            (),
+            5,
+        )
+    )
+    provider = FakeSeedanceMediaProvider()
+
+    result = await VideoStartToolExecutor(authority, provider).execute(
+        tool_context(video.tenant_id),
+        NormalizedToolInput.from_trusted_value({"generation_job_id": str(video.id)}),
+    )
+
+    assert provider.start_count == 1
+    assert result.output["status"] == GenerationJobStatus.PROCESSING.value
+    assert authority.states == [("started", None), ("started", "fake-seedance-task")]
+
+
+@pytest.mark.asyncio
 async def test_media_tool_executor_terminal_and_failure_paths() -> None:
     service, repository, _uow = service_fixture()
     context = execution_context(repository.record.plan.tenant_id)
@@ -1043,6 +1195,48 @@ async def test_spend_cap_denial_blocks_before_gateway_without_unknown_spend() ->
     assert blocked.actual_cost == blocked.unknown_cost == 0
     assert blocked.reserved_cost == image_job.reserved_cost
     assert authority.states == [("blocked_spend_cap", None)]
+    assert not gateway.calls
+
+
+@pytest.mark.asyncio
+async def test_spend_cap_denial_preserves_accepted_unknown_spend_without_masking() -> None:
+    service, repository, _uow = service_fixture()
+    actor = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        actor,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    video = repository.jobs[1]
+    video = replace(
+        video,
+        unknown_cost=video.reserved_cost,
+        failure_code="UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED",
+    )
+
+    class CappedAuthority(Authority):
+        async def prepare(self, tenant_id, job_id, kind):
+            await self.authorize_resource(tenant_id, job_id)
+            raise ProductionSpendCapReached(
+                MediaSpendRequirement(
+                    Decimal("15"),
+                    Decimal("15.871015"),
+                    video.reserved_cost,
+                    Decimal("15.871015"),
+                )
+            )
+
+    authority = CappedAuthority(ExecutableGeneration(video, {}, ()))
+    gateway = Gateway(authority)
+
+    result = await GovernedProductionJobExecutor(authority, gateway).execute(
+        video.tenant_id, video.production_plan_id, video.id
+    )
+
+    assert result.status == GenerationJobStatus.READY.value
+    assert result.failure_code == (ProductionSpendCapReached.preserved_unknown_cost_code)
+    assert authority.execution.job == video
+    assert not authority.states
     assert not gateway.calls
 
 

@@ -288,6 +288,14 @@ route compatibility, pricing, reservation, and Product spend cap are revalidated
 is re-admitted. The resulting recovery-specific Temporal continuation uses ModelArk and refuses to
 start while another workflow with the ProductionPlan workflow ID is active. See ADR-055.
 
+If those exact Jobs are `READY` but the recovery workflow is terminal or missing, the next
+`make live-next` reports `RESTART_READY_MEDIA_WORKFLOW`. Running `make live-next` emits only the new
+idempotent workflow-restart event and reports `provider_execution_occurred=false`; no additional
+approval is required because any ambiguity risk was already accepted immutably. The restart reuses
+the same ProductionPlan, GenerationJobs, reservations, and historical unknown-cost accounting. A
+fresh Production worker must show the expected non-secret provider, cap, Product ID, and ModelArk
+base URL in its startup log before it consumes the event.
+
 `LIVE_E2E_MAX_USD` covers reserved/actual Agent and media cost for the selected Product. The media
 authority locks and recomputes cumulative committed spend immediately before provider I/O. It
 blocks a different Product and execution above the cap. Increase the value explicitly in `.env` to

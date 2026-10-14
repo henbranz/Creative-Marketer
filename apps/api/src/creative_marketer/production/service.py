@@ -66,6 +66,7 @@ class ProductionRepository(Protocol):
     async def retry_unknown_media_jobs(
         self, plan_id: UUID, job_ids: tuple[UUID, ...]
     ) -> tuple[GenerationJob, ...]: ...
+    async def workflow_restart_requested(self, plan_id: UUID, transition_id: UUID) -> bool: ...
 
 
 class ProductionUnitOfWork(Protocol):
@@ -531,6 +532,128 @@ class ProductionService:
             )
             await uow.commit()
             return requeued
+
+    async def redispatch_ready_media_workflow(
+        self,
+        context: ExecutionContext,
+        plan_id: UUID,
+        *,
+        job_ids: tuple[UUID, ...],
+        transition_id: UUID,
+    ) -> tuple[GenerationJob, ...]:
+        """Publish one free restart for the exact already-approved READY jobs."""
+
+        if not self._can_spend(context):
+            raise ProductionPermissionDenied("media redispatch requires owner or admin")
+        if not job_ids or len(job_ids) != len(set(job_ids)):
+            raise ProductionPermissionDenied("media redispatch requires exact READY jobs")
+        async with self.uow_factory(context.tenant_id) as uow:
+            record = await uow.production.get_plan(plan_id, for_update=True)
+            if record is None or record.decision is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            plan, decision = record.plan, record.decision
+            if self.live_product_id is not None and plan.product_id != self.live_product_id:
+                raise ProductionPermissionDenied("ProductionPlan is outside LIVE_E2E_PRODUCT_ID")
+            if decision.state is not ProductionPlanDecisionState.APPROVED_FOR_GENERATION:
+                raise ProductionPermissionDenied("ProductionPlan is not approved")
+            jobs = await uow.production.list_jobs(plan_id)
+            ready = tuple(job for job in jobs if job.status is GenerationJobStatus.READY)
+            if not ready or {job.id for job in ready} != set(job_ids):
+                raise ProductionPermissionDenied("READY GenerationJob identity changed")
+            if any(
+                job.provider_operation_ref is not None
+                or job.actual_cost != 0
+                or job.output_asset_id is not None
+                or job.unknown_cost < 0
+                or (
+                    job.unknown_cost > 0
+                    and job.failure_code != "UNKNOWN_MEDIA_DUPLICATE_RISK_ACCEPTED"
+                )
+                or (
+                    job.unknown_cost == 0
+                    and job.failure_code not in {None, "LIVE_E2E_SPEND_CAP_RETRY_APPROVED"}
+                )
+                for job in ready
+            ):
+                raise ProductionPermissionDenied("READY GenerationJob is not safely redispatchable")
+            if any(
+                job.status not in {GenerationJobStatus.READY, GenerationJobStatus.SUCCEEDED}
+                for job in jobs
+            ):
+                raise ProductionPermissionDenied("media job set is not safely redispatchable")
+            for job in jobs:
+                expected_route = (
+                    decision.image_route_version
+                    if job.kind is MediaKind.IMAGE
+                    else decision.video_route_version
+                )
+                expected_pricing = (
+                    decision.image_pricing_version
+                    if job.kind is MediaKind.IMAGE
+                    else decision.video_pricing_version
+                )
+                if job.route_version != expected_route or job.pricing_version != expected_pricing:
+                    raise ProductionPricingChanged(
+                        "GenerationJob no longer matches its exact approval binding"
+                    )
+                try:
+                    route = self.media_router.resolve_execution(
+                        job.media_profile,
+                        job.route_version,
+                        job.provider,
+                        job.model,
+                        job.pricing_version,
+                    )
+                except InvalidProductionPlan as error:
+                    raise ProductionPricingChanged(
+                        "approved media execution route is unavailable"
+                    ) from error
+                if route.capabilities.media_kind is not job.kind:
+                    raise ProductionPricingChanged("approved media route kind changed")
+            await uow.production.validate_spend_cap_retry(plan)
+            if await uow.production.workflow_restart_requested(plan_id, transition_id):
+                return ready
+            event_type = "production.media.workflow_restart_requested.v1"
+            await uow.outbox.append(
+                tenant_event(
+                    context,
+                    event_type=event_type,
+                    schema_version=1,
+                    aggregate_type="production_plan",
+                    aggregate_id=plan.id,
+                    payload={
+                        "production_plan_id": str(plan.id),
+                        "transition_id": str(transition_id),
+                        "generation_job_ids": [str(job.id) for job in ready],
+                        "reason_code": "TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+                    occurred_at=datetime.now(UTC),
+                    agent_run_id=plan.agent_run_id,
+                    event_id=transition_id,
+                )
+            )
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="production.media.ready_workflow_redispatched",
+                    outcome=AuditOutcome.SUCCESS,
+                    reason_code="TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
+                    resource_type="production_plan",
+                    resource_id=str(plan.id),
+                    agent_run_id=plan.agent_run_id,
+                    metadata=safe_metadata(
+                        {
+                            "generation_job_ids": [str(job.id) for job in ready],
+                            "provider_execution_occurred": False,
+                            "jobs_created": 0,
+                            "reservations_created": 0,
+                        }
+                    ),
+                )
+            )
+            await uow.commit()
+            return ready
 
     @staticmethod
     def _jobs(

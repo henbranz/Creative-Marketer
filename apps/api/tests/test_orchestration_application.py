@@ -20,6 +20,7 @@ from creative_marketer.orchestration.application import (
     CyclePreflight,
     CycleReadinessEngine,
     ExperimentHandoff,
+    MediaWorkflowExecution,
     MediaWorkflowExecutionState,
     PipelineStateService,
     require_cycle_mutation,
@@ -320,7 +321,7 @@ async def test_pipeline_distinguishes_active_and_stranded_media_starts(
     class Workflows:
         async def status(self, tenant_id, production_plan_id):
             assert (tenant_id, production_plan_id) == (ctx.tenant_id, plan_id)
-            return workflow_state
+            return MediaWorkflowExecution(workflow_state, "workflow-run-1")
 
     result = await PipelineStateService(
         lambda _tenant: MemoryUow(repository), Workflows()
@@ -328,6 +329,54 @@ async def test_pipeline_distinguishes_active_and_stranded_media_starts(
 
     assert result.action is expected
     assert result.stranded_media_start_job_ids == (job_id,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workflow_state", "expected"),
+    [
+        (MediaWorkflowExecutionState.ACTIVE, PipelineAction.WAIT_FOR_MEDIA),
+        (
+            MediaWorkflowExecutionState.TERMINAL,
+            PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        ),
+        (
+            MediaWorkflowExecutionState.MISSING,
+            PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        ),
+    ],
+)
+async def test_pipeline_distinguishes_active_and_orphaned_ready_media(
+    workflow_state, expected
+) -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    plan_id, job_id = uuid4(), uuid4()
+    repository.pipeline_observation = PipelineObservation(
+        uuid4(),
+        ResearchPipelineState.SUCCEEDED_CURRENT,
+        CreativePipelineState.APPROVED_FOR_PRODUCTION,
+        ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY,
+        ready_media_job_ids=(job_id,),
+    )
+
+    class Workflows:
+        async def status(self, tenant_id, production_plan_id):
+            assert (tenant_id, production_plan_id) == (ctx.tenant_id, plan_id)
+            return MediaWorkflowExecution(workflow_state, "workflow-run-ready-1")
+
+    result = await PipelineStateService(
+        lambda _tenant: MemoryUow(repository), Workflows()
+    ).resolve_next_action(ctx, PipelineLocator(repository.pipeline_observation.product_id))
+
+    assert result.action is expected
+    assert result.ready_media_job_ids == (job_id,)
+    if workflow_state is not MediaWorkflowExecutionState.ACTIVE:
+        assert result.human_approval_required is False
+        assert result.provider_execution_permitted is False
+        assert result.media_workflow_execution_ref == "workflow-run-ready-1"
 
 
 @pytest.mark.asyncio

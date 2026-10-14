@@ -49,6 +49,8 @@ def action_state(
     media=MediaPipelineState.NOT_OBSERVED,
     stranded_media_start_job_ids=(),
     retryable_unknown_media_job_ids=(),
+    ready_media_job_ids=(),
+    media_workflow_execution_ref=None,
 ) -> NextPipelineAction:
     definition = EXECUTION_BEHAVIOR_REGISTRY[action]
     return NextPipelineAction(
@@ -74,6 +76,8 @@ def action_state(
         media_state=media,
         stranded_media_start_job_ids=stranded_media_start_job_ids,
         retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
+        ready_media_job_ids=ready_media_job_ids,
+        media_workflow_execution_ref=media_workflow_execution_ref,
     )
 
 
@@ -131,6 +135,7 @@ class Production:
         self.retry_calls: list[tuple[object, object]] = []
         self.stranded_calls: list[tuple[object, object]] = []
         self.ambiguity_calls: list[tuple[object, object, object]] = []
+        self.redispatch_calls: list[tuple[object, object, object]] = []
 
     async def get_plan(self, _context, _plan_id):
         return SimpleNamespace(decision=SimpleNamespace(rejection_feedback=self.feedback))
@@ -145,6 +150,10 @@ class Production:
 
     async def abandon_unknown_media_and_retry(self, _context, plan_id, *, job_ids, transition_id):
         self.ambiguity_calls.append((plan_id, job_ids, transition_id))
+        return (SimpleNamespace(id=job_ids[0]),)
+
+    async def redispatch_ready_media_workflow(self, _context, plan_id, *, job_ids, transition_id):
+        self.redispatch_calls.append((plan_id, job_ids, transition_id))
         return (SimpleNamespace(id=job_ids[0]),)
 
 
@@ -558,6 +567,81 @@ async def test_stranded_start_reconciliation_is_free_and_provider_is_forbidden()
     assert result.provider_execution_occurred is False
     definition = EXECUTION_BEHAVIOR_REGISTRY[PipelineAction.RECOVER_STRANDED_MEDIA_START]
     assert (definition.provider_cost, definition.provider_execution_permitted) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_ready_media_redispatch_is_free_and_reuses_exact_jobs() -> None:
+    ctx, plan_id = context(uuid4()), uuid4()
+    job_ids = (uuid4(), uuid4(), uuid4())
+    before = action_state(
+        PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
+        ready_media_job_ids=job_ids,
+        media_workflow_execution_ref="terminal-workflow-run-1",
+    )
+    after = action_state(
+        PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
+        ready_media_job_ids=job_ids,
+        media_workflow_execution_ref="terminal-workflow-run-1",
+    )
+    production = Production()
+
+    result = await PipelineActionExecutor(
+        State(before, after), Agents(), Creative(), production
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+    )
+
+    assert production.redispatch_calls[0][:2] == (plan_id, job_ids)
+    assert result.resource_type == "production_plan"
+    assert result.resource_id == plan_id
+    assert result.provider_execution_occurred is False
+    definition = EXECUTION_BEHAVIOR_REGISTRY[PipelineAction.RESTART_READY_MEDIA_WORKFLOW]
+    assert definition.operation == "redispatch_ready_media_workflow"
+    assert (
+        definition.provider_cost,
+        definition.explicit_approval_required,
+        definition.provider_execution_permitted,
+    ) == (False, False, False)
+
+
+@pytest.mark.asyncio
+async def test_ready_media_redispatch_identity_is_stable_per_terminal_workflow_run() -> None:
+    ctx, product_id, plan_id = context(uuid4()), uuid4(), uuid4()
+    job_ids = (uuid4(),)
+
+    async def execute(workflow_ref: str):
+        before = action_state(
+            PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+            producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+            production_plan_id=plan_id,
+            media=MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
+            ready_media_job_ids=job_ids,
+            media_workflow_execution_ref=workflow_ref,
+        )
+        production = Production()
+        await PipelineActionExecutor(
+            State(before, before), Agents(), Creative(), production
+        ).execute(
+            ctx,
+            PipelineLocator(product_id),
+            expected_action=PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        )
+        return production.redispatch_calls[0][2]
+
+    first = await execute("terminal-workflow-run-1")
+    duplicate = await execute("terminal-workflow-run-1")
+    later_terminal_run = await execute("terminal-workflow-run-2")
+
+    assert first == duplicate
+    assert first != later_terminal_run
 
 
 @pytest.mark.asyncio

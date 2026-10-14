@@ -57,6 +57,7 @@ class ProducerPipelineState(StrEnum):
 class MediaPipelineState(StrEnum):
     NOT_OBSERVED = "NOT_OBSERVED"
     READY = "READY"
+    READY_WORKFLOW_RESTART_REQUIRED = "READY_WORKFLOW_RESTART_REQUIRED"
     BLOCKED_SPEND_CAP = "BLOCKED_SPEND_CAP"
     RUNNING = "RUNNING"
     STRANDED_START = "STRANDED_START"
@@ -133,6 +134,7 @@ class PipelineAction(StrEnum):
     REVIEW_PRODUCTION_PLAN = "REVIEW_PRODUCTION_PLAN"
     READY_FOR_GENERATION = "READY_FOR_GENERATION"
     WAIT_FOR_MEDIA = "WAIT_FOR_MEDIA"
+    RESTART_READY_MEDIA_WORKFLOW = "RESTART_READY_MEDIA_WORKFLOW"
     RECOVER_STRANDED_MEDIA_START = "RECOVER_STRANDED_MEDIA_START"
     RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE = "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
     RECOVER_MEDIA_FAILURE = "RECOVER_MEDIA_FAILURE"
@@ -388,6 +390,12 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "GET /v1/production/plans/{production_plan_id}/jobs",
         resulting_states=("Media:RUNNING", "Media:SUCCEEDED", "Media:FAILED"),
     ),
+    PipelineAction.RESTART_READY_MEDIA_WORKFLOW: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "redispatch_ready_media_workflow",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        resulting_states=("Media:READY", "Media:RUNNING"),
+    ),
     PipelineAction.RECOVER_STRANDED_MEDIA_START: _execution(
         PipelineExecutionBehavior.EXECUTE,
         "reconcile_stranded_media_start",
@@ -587,6 +595,8 @@ class PipelineObservation:
     media_spend_requirement: MediaSpendRequirement | None = None
     stranded_media_start_job_ids: tuple[UUID, ...] = ()
     retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+    ready_media_job_ids: tuple[UUID, ...] = ()
+    media_workflow_execution_ref: str | None = None
 
     def __post_init__(self) -> None:
         if self.producer_current_contract_invalid_attempts < 0:
@@ -619,6 +629,8 @@ class NextPipelineAction:
     media_spend_requirement: MediaSpendRequirement | None = None
     stranded_media_start_job_ids: tuple[UUID, ...] = ()
     retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+    ready_media_job_ids: tuple[UUID, ...] = ()
+    media_workflow_execution_ref: str | None = None
 
 
 class PipelineStateResolver:
@@ -816,6 +828,11 @@ class PipelineStateResolver:
                 PipelineAction.WAIT_FOR_MEDIA,
                 "GENERATION_JOBS_READY_FOR_WORKER",
             ),
+            MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+                "GENERATION_JOBS_READY_AFTER_TERMINAL_WORKFLOW",
+            ),
             MediaPipelineState.RUNNING: (
                 PipelineStage.MEDIA_GENERATION,
                 PipelineAction.WAIT_FOR_MEDIA,
@@ -951,4 +968,6 @@ class PipelineStateResolver:
             media_spend_requirement=state.media_spend_requirement,
             stranded_media_start_job_ids=state.stranded_media_start_job_ids,
             retryable_unknown_media_job_ids=state.retryable_unknown_media_job_ids,
+            ready_media_job_ids=state.ready_media_job_ids,
+            media_workflow_execution_ref=state.media_workflow_execution_ref,
         )

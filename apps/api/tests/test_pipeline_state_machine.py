@@ -269,6 +269,10 @@ def test_only_provider_actions_are_marked_as_permitted_and_billable() -> None:
     [
         (MediaPipelineState.NOT_OBSERVED, PipelineAction.READY_FOR_GENERATION),
         (MediaPipelineState.READY, PipelineAction.WAIT_FOR_MEDIA),
+        (
+            MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
+            PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        ),
         (MediaPipelineState.RUNNING, PipelineAction.WAIT_FOR_MEDIA),
         (
             MediaPipelineState.STRANDED_START,
@@ -310,6 +314,7 @@ def test_media_transition_matrix_covers_every_declared_state() -> None:
     exercised = {
         MediaPipelineState.NOT_OBSERVED,
         MediaPipelineState.READY,
+        MediaPipelineState.READY_WORKFLOW_RESTART_REQUIRED,
         MediaPipelineState.RUNNING,
         MediaPipelineState.STRANDED_START,
         MediaPipelineState.BLOCKED_SPEND_CAP,

@@ -76,6 +76,7 @@ from creative_marketer.infrastructure.database.tool_governance_uow import (
 from creative_marketer.infrastructure.model_providers.fake import FakeModelProvider
 from creative_marketer.infrastructure.object_storage.s3 import S3ObjectStore
 from creative_marketer.orchestration.application import (
+    MediaWorkflowExecution,
     MediaWorkflowExecutionState,
     PipelineStateService,
 )
@@ -300,6 +301,12 @@ async def _complete_approved_concept_to_final(
     monkeypatch=None,
     inspection_sessions=None,
 ):
+    class ActiveMediaWorkflow:
+        async def status(self, _tenant_id, _plan_id):
+            return MediaWorkflowExecution(MediaWorkflowExecutionState.ACTIVE, "active-run")
+
+    if state.media_workflows is None:
+        state.media_workflows = ActiveMediaWorkflow()
     producer_action = await state.resolve_next_action(context, locator)
     assert producer_action.action is PipelineAction.RUN_PRODUCER
     assert producer_action.concept_id == concept_id
@@ -467,7 +474,9 @@ async def _complete_approved_concept_to_final(
 
         class TerminalMediaWorkflow:
             async def status(self, _tenant_id, _plan_id):
-                return MediaWorkflowExecutionState.TERMINAL
+                return MediaWorkflowExecution(
+                    MediaWorkflowExecutionState.TERMINAL, "terminal-recovery-run"
+                )
 
         state.media_workflows = TerminalMediaWorkflow()
         stranded = await state.resolve_next_action(context, locator)
@@ -508,6 +517,16 @@ async def _complete_approved_concept_to_final(
         retry_ready = await production.get_job(context, video_job.id)
         assert retry_ready.status is GenerationJobStatus.READY
         assert retry_ready.unknown_cost == retry_ready.reserved_cost
+        orphaned_ready = await state.resolve_next_action(context, locator)
+        assert orphaned_ready.action is PipelineAction.RESTART_READY_MEDIA_WORKFLOW
+        assert orphaned_ready.ready_media_job_ids == (video_job.id,)
+        restarted = await executor.execute(
+            context,
+            locator,
+            expected_action=PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        )
+        assert restarted.provider_execution_occurred is False
+        assert restarted.resource_id == review.production_plan_id
         async with inspection_sessions.begin() as session:
             assert (
                 await session.scalar(
@@ -528,6 +547,26 @@ async def _complete_approved_concept_to_final(
                 )
                 == 1
             )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(outbox_events)
+                    .where(
+                        outbox_events.c.aggregate_id == review.production_plan_id,
+                        outbox_events.c.event_type
+                        == "production.media.workflow_restart_requested.v1",
+                    )
+                )
+                == 1
+            )
+            assert await session.scalar(
+                select(func.count())
+                .select_from(media_budget_usage)
+                .where(
+                    media_budget_usage.c.generation_job_id.in_(original_ids),
+                    media_budget_usage.c.entry_kind == "RESERVED",
+                )
+            ) == len(original_ids)
 
     jobs = await production.list_jobs(context, review.production_plan_id)
     for job in jobs:

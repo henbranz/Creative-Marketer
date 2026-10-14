@@ -1,6 +1,7 @@
 # mypy: disable-error-code="no-untyped-def,no-untyped-call,arg-type"
 
 import asyncio
+import logging
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -22,7 +23,13 @@ from creative_marketer.production.domain import (
     ProductionPermissionDenied,
 )
 from creative_marketer_api.config import Settings
-from creative_marketer_api.production_worker import _bridge_loop, _workload, main, run
+from creative_marketer_api.production_worker import (
+    _bridge_loop,
+    _log_effective_configuration,
+    _workload,
+    main,
+    run,
+)
 
 DATABASE = "postgresql+psycopg://test:test@localhost:5432/test"
 
@@ -50,6 +57,32 @@ def test_local_media_workload_is_distinct_deterministic_and_overridable() -> Non
     )
     with pytest.raises(RuntimeError, match="deployment-issued"):
         _workload(deployed)
+
+
+def test_worker_effective_configuration_is_observable_without_secrets(caplog) -> None:
+    product_id = uuid4()
+    settings = Settings(
+        database_url=DATABASE,
+        media_image_provider="openai",
+        media_video_provider="byteplus_modelark",
+        openai_api_key="live-openai-secret-value",
+        byteplus_ark_api_key="live-modelark-secret-value",
+        allow_billable_media=True,
+        live_e2e_max_usd=Decimal("20"),
+        live_e2e_product_id=product_id,
+    )
+
+    with caplog.at_level(logging.INFO, logger=worker_module.__name__):
+        _log_effective_configuration(settings)
+
+    message = caplog.messages[-1]
+    assert "media_image_provider=openai" in message
+    assert "media_video_provider=byteplus_modelark" in message
+    assert "LIVE_E2E_MAX_USD=20" in message
+    assert f"LIVE_E2E_PRODUCT_ID={product_id}" in message
+    assert "https://ark.ap-southeast.bytepluses.com/api/v3" in message
+    assert "live-openai-secret-value" not in message
+    assert "live-modelark-secret-value" not in message
 
 
 def test_generation_authority_capability_revalidation_fails_closed() -> None:
@@ -135,6 +168,34 @@ async def test_live_spend_cap_is_product_scoped_and_checked_under_lock() -> None
         object(), object(), MediaWorkloadIdentity(uuid4(), "test-media-worker", "test")
     )
     await disabled._enforce_live_spend_cap(session, tenant_id, product_id)
+
+
+@pytest.mark.asyncio
+async def test_exact_live_spend_accounting_allows_twenty_and_rejects_fifteen() -> None:
+    tenant_id, product_id = uuid4(), uuid4()
+    session = SimpleNamespace(
+        execute=AsyncMock(),
+        scalar=AsyncMock(side_effect=["10", "5.871015", "4.158675"]),
+    )
+    allowed = SqlAlchemyGenerationAuthority(
+        object(),
+        object(),
+        MediaWorkloadIdentity(uuid4(), "test-media-worker", "test"),
+        live_spend_cap=Decimal("20"),
+        live_product_id=product_id,
+    )
+    await allowed._enforce_live_spend_cap(session, tenant_id, product_id)
+
+    session.scalar = AsyncMock(side_effect=["10", "5.871015", "4.158675"])
+    rejected = SqlAlchemyGenerationAuthority(
+        object(),
+        object(),
+        MediaWorkloadIdentity(uuid4(), "test-media-worker", "test"),
+        live_spend_cap=Decimal("15"),
+        live_product_id=product_id,
+    )
+    with pytest.raises(ProductionPermissionDenied, match="spend cap reached"):
+        await rejected._enforce_live_spend_cap(session, tenant_id, product_id)
 
 
 @pytest.mark.asyncio

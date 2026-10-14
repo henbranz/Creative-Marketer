@@ -11,7 +11,7 @@ from creative_marketer.infrastructure.temporal.client import (
 )
 from creative_marketer.infrastructure.temporal.configuration import ORCHESTRATION_TASK_QUEUE
 from creative_marketer.infrastructure.temporal.worker import connect_client
-from creative_marketer.orchestration.application import MediaWorkflowExecutionState
+from creative_marketer.orchestration.application import MediaWorkflowExecution
 from creative_marketer.workflow_orchestration.contracts import (
     CreativeCycleWorkflowInput,
     MeasurementWorkflowInput,
@@ -58,9 +58,7 @@ class LazyOrchestrationWorkflowCoordinator:
         assert self._measurement is not None
         return self._cycle, self._publication, self._measurement
 
-    async def status(
-        self, tenant_id: UUID, production_plan_id: UUID
-    ) -> MediaWorkflowExecutionState:
+    async def status(self, tenant_id: UUID, production_plan_id: UUID) -> MediaWorkflowExecution:
         await self._values()
         assert self._media_status is not None
         return await self._media_status.status(tenant_id, production_plan_id)

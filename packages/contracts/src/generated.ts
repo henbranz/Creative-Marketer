@@ -3468,6 +3468,7 @@ export interface components {
     MediaPipelineState:
       | "NOT_OBSERVED"
       | "READY"
+      | "READY_WORKFLOW_RESTART_REQUIRED"
       | "BLOCKED_SPEND_CAP"
       | "RUNNING"
       | "STRANDED_START"
@@ -3606,6 +3607,7 @@ export interface components {
       | "REVIEW_PRODUCTION_PLAN"
       | "READY_FOR_GENERATION"
       | "WAIT_FOR_MEDIA"
+      | "RESTART_READY_MEDIA_WORKFLOW"
       | "RECOVER_STRANDED_MEDIA_START"
       | "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
       | "RECOVER_MEDIA_FAILURE"
