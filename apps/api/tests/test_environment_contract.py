@@ -60,14 +60,50 @@ def test_active_modelark_configuration_has_no_las_endpoint_or_secret_contract() 
     assert "- path: .env" in production_worker
 
 
-def test_assembly_worker_uses_root_provider_selection_instead_of_forcing_fake() -> None:
+def test_assembly_worker_is_providerless_even_when_root_selects_live_providers() -> None:
     compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     assembly_worker = compose.split("  assembly-worker:", 1)[1].split("\n  web:", 1)[0]
-    assert "- path: .env" in assembly_worker
-    assert "MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}" in assembly_worker
-    assert "MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}" in assembly_worker
-    assert "MEDIA_IMAGE_PROVIDER: fake" not in assembly_worker
-    assert "MEDIA_VIDEO_PROVIDER: fake" not in assembly_worker
+    assert "env_file:" not in assembly_worker
+    assert "MEDIA_IMAGE_PROVIDER: disabled" in assembly_worker
+    assert "MEDIA_VIDEO_PROVIDER: disabled" in assembly_worker
+    assert 'ALLOW_BILLABLE_MEDIA: "false"' in assembly_worker
+    assert (
+        "ASSEMBLY_FAKE_PLACEHOLDER_MODE: ${ASSEMBLY_FAKE_PLACEHOLDER_MODE:-false}"
+        in assembly_worker
+    )
+    assert "${MEDIA_IMAGE_PROVIDER" not in assembly_worker
+    assert "${MEDIA_VIDEO_PROVIDER" not in assembly_worker
+    for forbidden in (
+        "OPENAI_API_KEY",
+        "BYTEPLUS_ARK_API_KEY",
+        "ARK_API_KEY",
+        "RUN_LIVE_E2E",
+        "MODEL_PROVIDER_BACKEND",
+    ):
+        assert forbidden not in assembly_worker
+
+
+def test_assembly_worker_has_no_media_generation_or_provider_execution_path() -> None:
+    roots = (
+        REPOSITORY_ROOT / "apps/api/src/creative_marketer/assembly",
+        REPOSITORY_ROOT / "apps/api/src/creative_marketer_api/assembly_worker.py",
+    )
+    paths = [
+        path
+        for root in roots
+        for path in ((root,) if root.is_file() else tuple(root.rglob("*.py")))
+    ]
+    source = "\n".join(path.read_text(encoding="utf-8").lower() for path in paths)
+    for forbidden in (
+        "openai",
+        "modelark",
+        "generationjob",
+        "allow_billable_media",
+        "media_image_provider",
+        "media_video_provider",
+        "production_worker",
+    ):
+        assert forbidden not in source
 
 
 @pytest.mark.parametrize(

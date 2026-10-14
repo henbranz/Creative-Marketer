@@ -243,9 +243,6 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile.assembly
     profiles: ["temporal"]
-    env_file:
-      - path: .env
-        required: false
     environment:
       APP_ENV: development
       DATABASE_URL: postgresql+psycopg://creative_marketer_runtime:creative_marketer_runtime@postgres:5432/creative_marketer
@@ -259,9 +256,10 @@ services:
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
       TEMPORAL_ADDRESS: temporal:7233
       ASSEMBLY_WORKLOAD_ID: local-assembly-worker
-      MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}
-      MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}
+      MEDIA_IMAGE_PROVIDER: disabled
+      MEDIA_VIDEO_PROVIDER: disabled
       ALLOW_BILLABLE_MEDIA: "false"
+      ASSEMBLY_FAKE_PLACEHOLDER_MODE: ${ASSEMBLY_FAKE_PLACEHOLDER_MODE:-false}
     depends_on:
       migrate:
         condition: service_completed_successfully

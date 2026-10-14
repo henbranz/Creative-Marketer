@@ -16,8 +16,12 @@ the historical output or regenerate paid media.
 
 ## Decision
 
-- Docker Compose passes the root media-provider selection into the assembly worker. Fake placeholder
-  rendering is active only when both selectors are explicitly `fake`.
+- Docker Compose explicitly disables image/video providers and billable-media authorization for the
+  assembly worker and does not inject the broad root `env_file` into that container. Compose uses
+  root-dotenv interpolation only for Assembly's explicitly named infrastructure values. Assembly
+  placeholder rendering is controlled only by the dedicated `ASSEMBLY_FAKE_PLACEHOLDER_MODE`
+  setting, which defaults false and is valid only in development or test. Assembly never needs
+  provider selectors, provider credentials, or live-spend authorization.
 - VIDEO normalization uses `setpts=PTS-STARTPTS`, the pinned scale/crop policy, CFR conversion, and
   `yuv420p`. Audio uses `asetpts=PTS-STARTPTS` and the pinned 48 kHz resampling policy.
 - Normalized VIDEO clips are ffprobed before concatenation. Codec, pixel format, dimensions, frame
@@ -34,5 +38,7 @@ the historical output or regenerate paid media.
 ## Consequences
 
 Assembly can be retried safely after deterministic renderer defects without paying for or replacing
-media. Correctness costs one deterministic concat-stage re-encode. Tests must include moving video
-and compare decoded frames inside each VIDEO interval; constant-color fixtures are insufficient.
+media. The worker remains an asset materialization and local FFmpeg boundary, so production provider
+configuration cannot accidentally grant or block it. Correctness costs one deterministic
+concat-stage re-encode. Tests must include moving video and compare decoded frames inside each VIDEO
+interval; constant-color fixtures are insufficient.

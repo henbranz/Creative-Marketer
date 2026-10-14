@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     media_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
     assembly_workload_actor_id: UUID | None = None
     assembly_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
+    assembly_fake_placeholder_mode: bool = False
     commerce_workload_actor_id: UUID | None = None
     commerce_workload_id: str | None = Field(default=None, min_length=1, max_length=128)
     temporal_address: str = Field(default="localhost:7233", min_length=1, max_length=255)
@@ -172,6 +173,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "deployed assembly workers require deployment-issued workload identity"
             )
+        if self.assembly_fake_placeholder_mode and self.app_env not in {"development", "test"}:
+            raise ValueError("Assembly fake placeholder mode is development/test only")
         if self.object_storage_backend == "s3" and self.app_env in {"staging", "production"}:
             if self.object_storage_endpoint_url.host in {"localhost", "127.0.0.1"}:
                 raise ValueError("deployed S3 storage cannot use a loopback endpoint")

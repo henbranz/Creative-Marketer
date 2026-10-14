@@ -65,10 +65,16 @@ scaling plus a ten-minute per-step timeout floor so the full fake walkthrough ca
 constrained local Docker hosts;
 staging/production retain the versioned `medium`/`lanczos` quality profile. Both paths preserve the
 same 1080×1920, H.264, yuv420p, 24 fps output contract and validation.
-When both media providers are explicitly `fake`, the development/test worker treats their
-documented static placeholder bytes as synthetic stills: it renders each overlay boundary once and
-packet-loops that frame at 24 fps. This optimization is never enabled for a live provider, never
-changes the immutable timeline or visible text, and still passes the same final-output inspection.
+Assembly always starts with image/video provider selectors disabled and billable media forbidden;
+its Compose service does not import the broad root `env_file`, so provider credentials and
+live-spend flags do not enter the container. Compose still reads the single root `.env` for the
+narrow explicitly interpolated infrastructure settings. Assembly needs no provider credential,
+route, live-spend acknowledgement, or generation capability. An independent
+`ASSEMBLY_FAKE_PLACEHOLDER_MODE` switch may be enabled explicitly in development/test only when the
+existing source Assets contain documented synthetic demo bytes. That path renders each overlay
+boundary once and packet-loops the frame at 24 fps. Production/live/default remains false. The
+switch never changes the immutable timeline or visible text, and both render paths pass the same
+final-output inspection.
 Safe browser failure codes include `ASSEMBLY_NOT_READY`, `ASSEMBLY_SOURCE_RIGHTS_CHANGED`,
 `ASSEMBLY_SOURCE_DIGEST_MISMATCH`, `ASSEMBLY_RENDER_FAILED`, `ASSEMBLY_RENDER_TIMEOUT`, and
 `ASSEMBLY_OUTPUT_INVALID`.

@@ -52,13 +52,22 @@ async def test_assembly_worker_requires_private_storage(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_assembly_worker_composes_renderer_executor_temporal_and_bridge(monkeypatch) -> None:
+@pytest.mark.parametrize("placeholder_mode", [False, True])
+async def test_assembly_worker_composes_renderer_executor_temporal_and_bridge(
+    monkeypatch, placeholder_mode: bool
+) -> None:
     settings = Settings(
         database_url=DATABASE,
         event_publisher_database_url=DATABASE,
         object_storage_backend="s3",
         cors_origins=["http://localhost:3000"],
+        media_image_provider="disabled",
+        media_video_provider="disabled",
+        allow_billable_media=False,
+        assembly_fake_placeholder_mode=placeholder_mode,
     )
+    assert settings.openai_api_key is None
+    assert settings.byteplus_ark_api_key is None
     monkeypatch.setattr(worker_module, "Settings", lambda: settings)
     sessions = object()
     monkeypatch.setattr(worker_module, "create_session_factory", lambda _: sessions)
@@ -96,7 +105,7 @@ async def test_assembly_worker_composes_renderer_executor_temporal_and_bridge(mo
         "encoding_preset": "ultrafast",
         "scaling_flags": "fast_bilinear",
         "minimum_timeout_seconds": 600.0,
-        "fake_placeholder_mode": False,
+        "fake_placeholder_mode": placeholder_mode,
     }
     renderer.version.assert_awaited_once()
     bridge.assert_awaited_once()

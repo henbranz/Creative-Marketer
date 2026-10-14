@@ -164,6 +164,36 @@ def test_media_provider_activation_is_environment_and_spend_gated() -> None:
     assert deployed.allow_billable_media
 
 
+def test_assembly_configuration_is_providerless_and_placeholder_mode_is_explicit() -> None:
+    database_url = "postgresql+psycopg://test:test@localhost:5432/test"
+    assembly = Settings(
+        database_url=database_url,
+        media_image_provider="disabled",
+        media_video_provider="disabled",
+        allow_billable_media=False,
+        assembly_fake_placeholder_mode=False,
+    )
+    assert assembly.media_image_provider == "disabled"
+    assert assembly.media_video_provider == "disabled"
+    assert not assembly.allow_billable_media
+    assert not assembly.assembly_fake_placeholder_mode
+    assert assembly.openai_api_key is None
+    assert assembly.byteplus_ark_api_key is None
+
+    demo = Settings(
+        app_env="test",
+        database_url=database_url,
+        assembly_fake_placeholder_mode=True,
+    )
+    assert demo.assembly_fake_placeholder_mode
+    with pytest.raises(ValidationError, match="development/test only"):
+        Settings(
+            app_env="production",
+            database_url=database_url,
+            assembly_fake_placeholder_mode=True,
+        )
+
+
 def test_live_spend_authorization_requires_both_independent_gates() -> None:
     database_url = "postgresql+psycopg://test:test@localhost:5432/test"
     for settings in (
