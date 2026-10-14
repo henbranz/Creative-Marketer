@@ -527,6 +527,107 @@ async def test_confirmed_provider_failure_retry_guards_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_confirmed_provider_failure_retry_admission_guards_fail_closed() -> None:
+    service, repository, _uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    member = execution_context(repository.record.plan.tenant_id, MembershipRole.MEMBER)
+    plan_id = repository.record.plan.id
+    candidate_id = uuid4()
+
+    with pytest.raises(ProductionPermissionDenied, match="owner or admin"):
+        await service.retry_confirmed_failed_media(
+            member, plan_id, job_ids=(candidate_id,), transition_id=uuid4()
+        )
+    with pytest.raises(ProductionPermissionDenied, match="spend cap is not configured"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(candidate_id,), transition_id=uuid4()
+        )
+
+    service.live_spend_cap = Decimal("20")
+    with pytest.raises(ProductionPermissionDenied, match="exact failed jobs"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(), transition_id=uuid4()
+        )
+    with pytest.raises(ProductionNotFound):
+        await service.retry_confirmed_failed_media(
+            owner, uuid4(), job_ids=(candidate_id,), transition_id=uuid4()
+        )
+    await service.decide(
+        owner,
+        plan_id,
+        ProductionPlanDecisionState.REJECTED,
+        rejection_feedback="Retry is not approved.",
+    )
+    with pytest.raises(ProductionPermissionDenied, match="not approved"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(candidate_id,), transition_id=uuid4()
+        )
+
+    service, repository, _uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    plan_id = repository.record.plan.id
+    service.live_spend_cap = Decimal("20")
+    await service.decide(
+        owner,
+        plan_id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    service.live_product_id = uuid4()
+    with pytest.raises(ProductionPermissionDenied, match="outside LIVE_E2E_PRODUCT_ID"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(candidate_id,), transition_id=uuid4()
+        )
+
+    service.live_product_id = repository.record.plan.product_id
+    with pytest.raises(ProductionPermissionDenied, match="job identity changed"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(candidate_id,), transition_id=uuid4()
+        )
+
+    image, video = repository.jobs
+    failed = video.transition(GenerationJobStatus.STARTING).transition(
+        GenerationJobStatus.FAILED,
+        provider_operation_ref="cgt-confirmed-failure",
+        failure_code="BYTEPLUS_MODELARK_TASK_FAILED",
+    )
+    repository.jobs = (image.transition(GenerationJobStatus.STARTING), failed)
+    with pytest.raises(ProductionPermissionDenied, match="job set is not safely retryable"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(failed.id,), transition_id=uuid4()
+        )
+
+    assert repository.record.decision is not None
+    retired_route = "retired-modelark-route"
+    repository.record = ProductionPlanRecord(
+        repository.record.plan,
+        replace(repository.record.decision, video_route_version=retired_route),
+        repository.record.planning_cost,
+    )
+    repository.jobs = (replace(failed, route_version=retired_route),)
+    with pytest.raises(ProductionPricingChanged, match="route is unavailable"):
+        await service.retry_confirmed_failed_media(
+            owner, plan_id, job_ids=(failed.id,), transition_id=uuid4()
+        )
+
+
+def test_generation_provider_attempt_rejects_invalid_history() -> None:
+    with pytest.raises(ValueError, match="provider attempt history is invalid"):
+        GenerationProviderAttempt(
+            tenant_id=uuid4(),
+            generation_job_id=uuid4(),
+            retry_transition_id=uuid4(),
+            provider_operation_ref="",
+            failure_code="BYTEPLUS_MODELARK_TASK_FAILED",
+            provider="byteplus_modelark",
+            model="dreamina-seedance-2-5-260628",
+            terminal_status=GenerationJobStatus.FAILED.value,
+            actual_cost=Decimal("0"),
+            historical_unknown_cost=Decimal("0"),
+            operator_user_id=uuid4(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_concurrent_stranded_start_recovery_collapses_to_one_transition() -> None:
     service, repository, uow = service_fixture()
     owner = execution_context(repository.record.plan.tenant_id)
