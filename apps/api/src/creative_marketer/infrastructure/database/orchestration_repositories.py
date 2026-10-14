@@ -103,6 +103,10 @@ from creative_marketer.orchestration.pipeline import (
     classify_producer_failure,
 )
 from creative_marketer.production.application import PRODUCTION_CONTRACT_VERSION
+from creative_marketer.production.domain import (
+    CONFIRMED_PROVIDER_FAILURE_CODES,
+    MediaSpendRequirement,
+)
 
 from .orchestration_schema import (
     creative_cycles,
@@ -1130,6 +1134,7 @@ class SqlAlchemyOrchestrationRepository:
         media_spend_requirement = None
         stranded_media_start_job_ids: tuple[UUID, ...] = ()
         retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+        retryable_failed_media_job_ids: tuple[UUID, ...] = ()
         ready_media_job_ids: tuple[UUID, ...] = ()
         assembly_plan_id: UUID | None = None
         final_creative_id: UUID | None = None
@@ -1145,6 +1150,7 @@ class SqlAlchemyOrchestrationRepository:
                             generation_jobs.c.unknown_cost,
                             generation_jobs.c.output_asset_id,
                             generation_jobs.c.failure_code,
+                            generation_jobs.c.reserved_cost,
                         )
                         .where(generation_jobs.c.production_plan_id == plan_id)
                         .order_by(generation_jobs.c.created_at, generation_jobs.c.id)
@@ -1176,6 +1182,14 @@ class SqlAlchemyOrchestrationRepository:
                     None,
                 }
             )
+            retryable_failed_media_job_ids = tuple(
+                row["id"]
+                for row in job_rows
+                if row["status"] == "FAILED"
+                and row["provider_operation_ref"] is not None
+                and row["output_asset_id"] is None
+                and row["failure_code"] in CONFIRMED_PROVIDER_FAILURE_CODES
+            )
             ready_media_job_ids = tuple(row["id"] for row in job_rows if row["status"] == "READY")
             if not job_statuses:
                 media_state = MediaPipelineState.INVARIANT_VIOLATION
@@ -1204,6 +1218,7 @@ class SqlAlchemyOrchestrationRepository:
                     MediaPipelineState.READY,
                     MediaPipelineState.BLOCKED_SPEND_CAP,
                     MediaPipelineState.OUTCOME_UNKNOWN,
+                    MediaPipelineState.FAILED,
                 }
             ):
                 tenant_id = await self.session.scalar(
@@ -1217,6 +1232,24 @@ class SqlAlchemyOrchestrationRepository:
                     locator.product_id,
                     self.live_spend_cap,
                 )
+                if media_state is MediaPipelineState.FAILED and retryable_failed_media_job_ids:
+                    retry_reservation = sum(
+                        (
+                            row["reserved_cost"]
+                            for row in job_rows
+                            if row["id"] in set(retryable_failed_media_job_ids)
+                        ),
+                        Decimal(0),
+                    )
+                    media_spend_requirement = MediaSpendRequirement(
+                        configured_cap=media_spend_requirement.configured_cap,
+                        committed_product_spend=(media_spend_requirement.committed_product_spend),
+                        reserved_media_amount=media_spend_requirement.reserved_media_amount,
+                        minimum_required_cap=(
+                            media_spend_requirement.committed_product_spend + retry_reservation
+                        ),
+                        currency=media_spend_requirement.currency,
+                    )
                 # Backward-compatible projection for jobs left READY by the old
                 # generic exception path. No data is changed by this read.
                 if (
@@ -1311,6 +1344,7 @@ class SqlAlchemyOrchestrationRepository:
             media_spend_requirement=media_spend_requirement,
             stranded_media_start_job_ids=stranded_media_start_job_ids,
             retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
+            retryable_failed_media_job_ids=retryable_failed_media_job_ids,
             ready_media_job_ids=ready_media_job_ids,
         )
 

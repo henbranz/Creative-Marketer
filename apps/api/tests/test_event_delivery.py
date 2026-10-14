@@ -215,6 +215,7 @@ def test_contract_registry_validates_strict_payloads_and_rejects_unknown_or_refs
         "production.plan.approved_for_generation.v1",
         "production.media.retry_requested.v1",
         "production.media.ambiguity_retry_requested.v1",
+        "production.media.failed_retry_requested.v1",
         "production.media.workflow_restart_requested.v1",
         "production.generation.completed.v1",
         "assembly.plan.created.v1",

@@ -163,6 +163,18 @@ class GenerationJobStatus(StrEnum):
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
 
 
+CONFIRMED_PROVIDER_FAILURE_CODES = frozenset(
+    {
+        "BYTEPLUS_MODELARK_TASK_FAILED",
+        "BYTEPLUS_MODELARK_TASK_EXPIRED",
+        "BYTEPLUS_MODELARK_SET_LIMIT_EXCEEDED",
+        "BYTEPLUS_MODELARK_INSUFFICIENT_CREDITS",
+        "BYTEPLUS_MODELARK_ACCOUNT_OVERDUE",
+        "BYTEPLUS_MODELARK_MODEL_ACTIVATION_REQUIRED",
+    }
+)
+
+
 class ProductionExecutionStatus(StrEnum):
     NOT_STARTED = "NOT_STARTED"
     RUNNING = "RUNNING"
@@ -643,7 +655,7 @@ class GenerationJob:
         if status not in allowed.get(self.status, set()):
             raise ValueError("invalid generation job transition")
         unknown = (
-            self.reserved_cost
+            self.unknown_cost + self.reserved_cost
             if status is GenerationJobStatus.OUTCOME_UNKNOWN
             else self.unknown_cost
         )
@@ -667,6 +679,57 @@ class GenerationJob:
             ),
             updated_at=datetime.now(UTC),
         )
+
+    def retry_after_confirmed_failure(self) -> GenerationJob:
+        """Re-admit one proven terminal provider attempt without carrying its identity forward."""
+
+        if (
+            self.status is not GenerationJobStatus.FAILED
+            or self.provider_operation_ref is None
+            or self.output_asset_id is not None
+            or self.failure_code not in CONFIRMED_PROVIDER_FAILURE_CODES
+        ):
+            raise ValueError("generation job is not a confirmed provider failure")
+        return replace(
+            self,
+            status=GenerationJobStatus.READY,
+            provider_operation_ref=None,
+            actual_cost=Decimal("0"),
+            output_asset_id=None,
+            failure_code="CONFIRMED_MEDIA_FAILURE_RETRY_APPROVED",
+            initiated_by_user_id=None,
+            executed_by_workload_id=None,
+            updated_at=datetime.now(UTC),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationProviderAttempt:
+    tenant_id: UUID
+    generation_job_id: UUID
+    retry_transition_id: UUID
+    provider_operation_ref: str
+    failure_code: str
+    provider: str
+    model: str
+    terminal_status: str
+    actual_cost: Decimal
+    historical_unknown_cost: Decimal
+    operator_user_id: UUID
+    retry_reason: str = "CONFIRMED_PROVIDER_FAILURE"
+    id: UUID = field(default_factory=uuid4)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if (
+            self.terminal_status != GenerationJobStatus.FAILED.value
+            or self.actual_cost < 0
+            or self.historical_unknown_cost < 0
+            or not self.provider_operation_ref
+            or self.failure_code not in CONFIRMED_PROVIDER_FAILURE_CODES
+            or self.retry_reason != "CONFIRMED_PROVIDER_FAILURE"
+        ):
+            raise ValueError("provider attempt history is invalid")
 
 
 @dataclass(frozen=True, slots=True)

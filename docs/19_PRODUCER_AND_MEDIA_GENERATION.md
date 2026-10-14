@@ -158,6 +158,15 @@ the separately action-bound `ABANDON_UNKNOWN_MEDIA_AND_RETRY` approval, acceptin
 risk after current authority, rights, route compatibility, pricing, reservation, and budget checks.
 That continuation uses a recovery-only Temporal restart and the existing ModelArk execution path.
 
+A ModelArk task that authoritatively reaches a terminal failed state is not ambiguous. The resolver
+exposes `RETRY_FAILED_MEDIA` only for an exact allowlisted provider-failure code, a retained task ID,
+no output Asset, and a terminal or missing ProductionPlan workflow. The action requires
+`I_APPROVE_RETRY_FAILED_MEDIA`, revalidates all current authority and a true next-attempt spend-cap
+minimum, and reuses the same GenerationJob and reservation. Before clearing the active task ID it
+copies the terminal provider attempt into immutable, tenant-isolated history. Unknown exposure is
+never reduced. Authentication failures, transient start failures, and unknown external outcomes do
+not enter this path.
+
 `READY` likewise means “waiting for the worker” only while that ProductionPlan workflow is active.
 If the workflow is terminal or missing, the resolver exposes the free
 `RESTART_READY_MEDIA_WORKFLOW` action. It emits a new transactional restart event after revalidating

@@ -296,6 +296,20 @@ the same ProductionPlan, GenerationJobs, reservations, and historical unknown-co
 fresh Production worker must show the expected non-secret provider, cap, Product ID, and ModelArk
 base URL in its startup log before it consumes the event.
 
+If an existing task ID has an authoritative terminal provider failure, inspection reports
+`RETRY_FAILED_MEDIA` only after the ProductionPlan workflow is terminal or missing. Review the
+reported exact Job IDs and the maximum additional exposure, then explicitly admit the retry:
+
+```bash
+make live-next-approved APPROVAL=I_APPROVE_RETRY_FAILED_MEDIA
+```
+
+Admission itself performs no provider call. It preserves the failed task identity and bounded
+failure facts in immutable provider-attempt history, clears only the active task pointer, reuses the
+same Job and reservation, and emits the recovery-specific workflow event. The Production worker may
+make the next paid request only after consuming that event. Do not use this action for authentication
+errors, transport ambiguity, or `OUTCOME_UNKNOWN`; those remain fail-closed on their distinct paths.
+
 `LIVE_E2E_MAX_USD` covers reserved/actual Agent and media cost for the selected Product. The media
 authority locks and recomputes cumulative committed spend immediately before provider I/O. It
 blocks a different Product and execution above the cap. Increase the value explicitly in `.env` to

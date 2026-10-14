@@ -23,6 +23,7 @@ from creative_marketer.production.domain import (
     FrozenAssetReference,
     GenerationJob,
     GenerationJobStatus,
+    GenerationProviderAttempt,
     GenerationSegment,
     MediaKind,
     MediaSpendRequirement,
@@ -43,6 +44,7 @@ from creative_marketer.production.service import ProductionPlanRecord
 
 from .production_schema import (
     generation_jobs,
+    generation_provider_attempts,
     generation_segments,
     media_budget_usage,
     plan_decisions,
@@ -460,6 +462,93 @@ class SqlAlchemyProductionRepository:
         jobs = await self.list_jobs(plan_id)
         selected = set(job_ids)
         return tuple(job for job in jobs if job.id in selected)
+
+    async def retry_confirmed_failed_media_jobs(
+        self,
+        plan_id: UUID,
+        job_ids: tuple[UUID, ...],
+        *,
+        transition_id: UUID,
+        operator_user_id: UUID,
+    ) -> tuple[tuple[GenerationJob, ...], tuple[GenerationProviderAttempt, ...]]:
+        selected_ids = set(job_ids)
+        jobs = await self.list_jobs(plan_id)
+        selected = tuple(job for job in jobs if job.id in selected_ids)
+        if len(selected) != len(job_ids):
+            raise ProductionPermissionDenied("confirmed media retry job identity changed")
+        attempts: list[GenerationProviderAttempt] = []
+        retried: list[GenerationJob] = []
+        for job in selected:
+            try:
+                changed = job.retry_after_confirmed_failure()
+            except ValueError as error:
+                raise ProductionPermissionDenied(
+                    "GenerationJob is not a confirmed provider failure"
+                ) from error
+            if job.provider_operation_ref is None or job.failure_code is None:
+                raise ProductionPermissionDenied("confirmed media retry evidence is incomplete")
+            attempts.append(
+                GenerationProviderAttempt(
+                    tenant_id=job.tenant_id,
+                    generation_job_id=job.id,
+                    retry_transition_id=transition_id,
+                    provider_operation_ref=job.provider_operation_ref,
+                    failure_code=job.failure_code,
+                    provider=job.provider,
+                    model=job.model,
+                    terminal_status=job.status.value,
+                    actual_cost=job.actual_cost,
+                    historical_unknown_cost=job.unknown_cost,
+                    operator_user_id=operator_user_id,
+                )
+            )
+            result = await self._session.execute(
+                update(generation_jobs)
+                .where(
+                    generation_jobs.c.id == job.id,
+                    generation_jobs.c.production_plan_id == plan_id,
+                    generation_jobs.c.status == GenerationJobStatus.FAILED.value,
+                    generation_jobs.c.provider_operation_ref == job.provider_operation_ref,
+                    generation_jobs.c.output_asset_id.is_(None),
+                    generation_jobs.c.failure_code == job.failure_code,
+                )
+                .values(
+                    status=changed.status.value,
+                    provider_operation_ref=None,
+                    actual_cost=changed.actual_cost,
+                    output_asset_id=None,
+                    failure_code=changed.failure_code,
+                    initiated_by_user_id=None,
+                    executed_by_workload_id=None,
+                    updated_at=changed.updated_at,
+                )
+            )
+            if result.rowcount != 1:  # type: ignore[attr-defined]
+                raise ProductionPermissionDenied("stale confirmed media retry transition rejected")
+            retried.append(changed)
+        await self._session.execute(
+            insert(generation_provider_attempts),
+            [
+                {
+                    "id": attempt.id,
+                    "tenant_id": attempt.tenant_id,
+                    "generation_job_id": attempt.generation_job_id,
+                    "retry_transition_id": attempt.retry_transition_id,
+                    "provider_operation_ref": attempt.provider_operation_ref,
+                    "failure_code": attempt.failure_code,
+                    "provider": attempt.provider,
+                    "model": attempt.model,
+                    "terminal_status": attempt.terminal_status,
+                    "actual_cost": attempt.actual_cost,
+                    "historical_unknown_cost": attempt.historical_unknown_cost,
+                    "operator_user_id": attempt.operator_user_id,
+                    "retry_reason": attempt.retry_reason,
+                    "created_at": attempt.created_at,
+                }
+                for attempt in attempts
+            ],
+        )
+        return tuple(retried), tuple(attempts)
 
     async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None:
         product_snapshot = (

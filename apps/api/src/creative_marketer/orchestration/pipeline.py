@@ -63,6 +63,7 @@ class MediaPipelineState(StrEnum):
     STRANDED_START = "STRANDED_START"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    RETRYABLE_FAILED = "RETRYABLE_FAILED"
     OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN"
     RETRYABLE_OUTCOME_UNKNOWN = "RETRYABLE_OUTCOME_UNKNOWN"
     INVARIANT_VIOLATION = "INVARIANT_VIOLATION"
@@ -138,6 +139,7 @@ class PipelineAction(StrEnum):
     RECOVER_STRANDED_MEDIA_START = "RECOVER_STRANDED_MEDIA_START"
     RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE = "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
     RECOVER_MEDIA_FAILURE = "RECOVER_MEDIA_FAILURE"
+    RETRY_FAILED_MEDIA = "RETRY_FAILED_MEDIA"
     RECONCILE_MEDIA_OUTCOME = "RECONCILE_MEDIA_OUTCOME"
     ABANDON_UNKNOWN_MEDIA_AND_RETRY = "ABANDON_UNKNOWN_MEDIA_AND_RETRY"
     RECOVER_MEDIA_INVARIANT = "RECOVER_MEDIA_INVARIANT"
@@ -418,6 +420,15 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         explicit_approval_required=True,
         resulting_states=("Media:READY", "Media:FAILED"),
     ),
+    PipelineAction.RETRY_FAILED_MEDIA: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "retry_confirmed_failed_media",
+        "POST /v1/products/{product_id}/pipeline/execute-next",
+        provider_cost=True,
+        explicit_approval_required=True,
+        provider_execution_permitted=True,
+        resulting_states=("Media:READY", "Media:RUNNING"),
+    ),
     PipelineAction.RECONCILE_MEDIA_OUTCOME: _execution(
         PipelineExecutionBehavior.RECOVERY_GATE,
         "reconcile_generation_provider_outcome",
@@ -595,6 +606,7 @@ class PipelineObservation:
     media_spend_requirement: MediaSpendRequirement | None = None
     stranded_media_start_job_ids: tuple[UUID, ...] = ()
     retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+    retryable_failed_media_job_ids: tuple[UUID, ...] = ()
     ready_media_job_ids: tuple[UUID, ...] = ()
     media_workflow_execution_ref: str | None = None
 
@@ -629,6 +641,7 @@ class NextPipelineAction:
     media_spend_requirement: MediaSpendRequirement | None = None
     stranded_media_start_job_ids: tuple[UUID, ...] = ()
     retryable_unknown_media_job_ids: tuple[UUID, ...] = ()
+    retryable_failed_media_job_ids: tuple[UUID, ...] = ()
     ready_media_job_ids: tuple[UUID, ...] = ()
     media_workflow_execution_ref: str | None = None
 
@@ -853,6 +866,11 @@ class PipelineStateResolver:
                 PipelineAction.RECOVER_MEDIA_FAILURE,
                 "GENERATION_JOB_FAILED",
             ),
+            MediaPipelineState.RETRYABLE_FAILED: (
+                PipelineStage.MEDIA_RECOVERY,
+                PipelineAction.RETRY_FAILED_MEDIA,
+                "CONFIRMED_PROVIDER_MEDIA_FAILURE_RETRY_AVAILABLE",
+            ),
             MediaPipelineState.OUTCOME_UNKNOWN: (
                 PipelineStage.MEDIA_RECOVERY,
                 PipelineAction.RECONCILE_MEDIA_OUTCOME,
@@ -968,6 +986,7 @@ class PipelineStateResolver:
             media_spend_requirement=state.media_spend_requirement,
             stranded_media_start_job_ids=state.stranded_media_start_job_ids,
             retryable_unknown_media_job_ids=state.retryable_unknown_media_job_ids,
+            retryable_failed_media_job_ids=state.retryable_failed_media_job_ids,
             ready_media_job_ids=state.ready_media_job_ids,
             media_workflow_execution_ref=state.media_workflow_execution_ref,
         )

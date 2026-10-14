@@ -23,6 +23,7 @@ from .domain import (
     FrozenAssetReference,
     GenerationJob,
     GenerationJobStatus,
+    GenerationProviderAttempt,
     InvalidProductionPlan,
     MediaKind,
     MediaSpendRequirement,
@@ -66,6 +67,14 @@ class ProductionRepository(Protocol):
     async def retry_unknown_media_jobs(
         self, plan_id: UUID, job_ids: tuple[UUID, ...]
     ) -> tuple[GenerationJob, ...]: ...
+    async def retry_confirmed_failed_media_jobs(
+        self,
+        plan_id: UUID,
+        job_ids: tuple[UUID, ...],
+        *,
+        transition_id: UUID,
+        operator_user_id: UUID,
+    ) -> tuple[tuple[GenerationJob, ...], tuple[GenerationProviderAttempt, ...]]: ...
 
 
 class ProductionUnitOfWork(Protocol):
@@ -529,6 +538,149 @@ class ProductionService:
                     ),
                 )
             )
+            await uow.commit()
+            return requeued
+
+    async def retry_confirmed_failed_media(
+        self,
+        context: ExecutionContext,
+        plan_id: UUID,
+        *,
+        job_ids: tuple[UUID, ...],
+        transition_id: UUID,
+    ) -> tuple[GenerationJob, ...]:
+        """Re-admit exact terminal provider failures and preserve their attempt history."""
+
+        if not self._can_spend(context):
+            raise ProductionPermissionDenied("confirmed media retry requires owner or admin")
+        if self.live_spend_cap is None:
+            raise ProductionPermissionDenied("live media spend cap is not configured")
+        if not job_ids or len(job_ids) != len(set(job_ids)):
+            raise ProductionPermissionDenied("confirmed media retry requires exact failed jobs")
+        async with self.uow_factory(context.tenant_id) as uow:
+            record = await uow.production.get_plan(plan_id, for_update=True)
+            if record is None or record.decision is None:
+                raise ProductionNotFound("ProductionPlan not found")
+            plan, decision = record.plan, record.decision
+            if self.live_product_id is not None and plan.product_id != self.live_product_id:
+                raise ProductionPermissionDenied("ProductionPlan is outside LIVE_E2E_PRODUCT_ID")
+            if decision.state is not ProductionPlanDecisionState.APPROVED_FOR_GENERATION:
+                raise ProductionPermissionDenied("ProductionPlan is not approved")
+            jobs = await uow.production.list_jobs(plan_id)
+            selected_ids = set(job_ids)
+            selected = tuple(job for job in jobs if job.id in selected_ids)
+            already = tuple(
+                job
+                for job in selected
+                if job.status is GenerationJobStatus.READY
+                and job.failure_code == "CONFIRMED_MEDIA_FAILURE_RETRY_APPROVED"
+            )
+            if len(already) == len(job_ids):
+                return already
+            if len(selected) != len(job_ids):
+                raise ProductionPermissionDenied("confirmed media retry job identity changed")
+            try:
+                tuple(job.retry_after_confirmed_failure() for job in selected)
+            except ValueError as error:
+                raise ProductionPermissionDenied(
+                    "media failure is not a confirmed terminal provider outcome"
+                ) from error
+            if any(
+                job.id not in selected_ids
+                and job.status not in {GenerationJobStatus.READY, GenerationJobStatus.SUCCEEDED}
+                for job in jobs
+            ):
+                raise ProductionPermissionDenied("media job set is not safely retryable")
+            for job in jobs:
+                expected_route = (
+                    decision.image_route_version
+                    if job.kind is MediaKind.IMAGE
+                    else decision.video_route_version
+                )
+                expected_pricing = (
+                    decision.image_pricing_version
+                    if job.kind is MediaKind.IMAGE
+                    else decision.video_pricing_version
+                )
+                if job.route_version != expected_route or job.pricing_version != expected_pricing:
+                    raise ProductionPricingChanged(
+                        "GenerationJob no longer matches its exact approval binding"
+                    )
+                try:
+                    route = self.media_router.resolve_execution(
+                        job.media_profile,
+                        job.route_version,
+                        job.provider,
+                        job.model,
+                        job.pricing_version,
+                    )
+                except InvalidProductionPlan as error:
+                    raise ProductionPricingChanged(
+                        "approved media execution route is unavailable"
+                    ) from error
+                if route.capabilities.media_kind is not job.kind:
+                    raise ProductionPricingChanged("approved media route kind changed")
+            await uow.production.validate_spend_cap_retry(plan)
+            requirement = await uow.production.spend_requirement(plan_id, self.live_spend_cap)
+            retry_reservation = sum((job.reserved_cost for job in selected), Decimal(0))
+            minimum_required_cap = requirement.committed_product_spend + retry_reservation
+            if minimum_required_cap > requirement.configured_cap:
+                raise ProductionPermissionDenied(
+                    "LIVE_E2E_MAX_USD is below confirmed media retry spend"
+                )
+            requeued, attempts = await uow.production.retry_confirmed_failed_media_jobs(
+                plan_id,
+                job_ids,
+                transition_id=transition_id,
+                operator_user_id=context.actor.id,
+            )
+            event_type = "production.media.failed_retry_requested.v1"
+            event_inserted = await uow.outbox.append_idempotent(
+                tenant_event(
+                    context,
+                    event_type=event_type,
+                    schema_version=1,
+                    aggregate_type="production_plan",
+                    aggregate_id=plan.id,
+                    payload={
+                        "production_plan_id": str(plan.id),
+                        "transition_id": str(transition_id),
+                        "generation_job_ids": [str(job.id) for job in requeued],
+                        "provider_attempt_ids": [str(attempt.id) for attempt in attempts],
+                        "retry_reason": "CONFIRMED_PROVIDER_FAILURE",
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+                    occurred_at=datetime.now(UTC),
+                    agent_run_id=plan.agent_run_id,
+                    event_id=transition_id,
+                )
+            )
+            if event_inserted:
+                await uow.audit.append(
+                    tenant_audit(
+                        context,
+                        action="production.media.confirmed_failure_retry_approved",
+                        outcome=AuditOutcome.SUCCESS,
+                        reason_code="CONFIRMED_MEDIA_FAILURE_RETRY_APPROVED",
+                        resource_type="production_plan",
+                        resource_id=str(plan.id),
+                        agent_run_id=plan.agent_run_id,
+                        metadata=safe_metadata(
+                            {
+                                "generation_job_ids": [str(value) for value in job_ids],
+                                "provider_attempt_ids": [str(attempt.id) for attempt in attempts],
+                                "retry_reservation": str(retry_reservation),
+                                "historical_unknown_cost": str(
+                                    sum((job.unknown_cost for job in selected), Decimal(0))
+                                ),
+                                "minimum_required_cap": str(minimum_required_cap),
+                                "provider_execution_occurred": False,
+                                "jobs_created": 0,
+                                "reservations_created": 0,
+                            }
+                        ),
+                    )
+                )
             await uow.commit()
             return requeued
 

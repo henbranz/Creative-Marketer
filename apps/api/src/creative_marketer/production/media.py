@@ -25,6 +25,10 @@ class MediaProviderInsufficientCredits(MediaProviderError):
     code = "MEDIA_PROVIDER_INSUFFICIENT_CREDITS"
 
 
+class MediaProviderAuthenticationError(MediaProviderError):
+    code = "MEDIA_PROVIDER_AUTHENTICATION_FAILED"
+
+
 class MediaProviderBadRequest(MediaProviderError):
     code = "MEDIA_PROVIDER_BAD_REQUEST"
 

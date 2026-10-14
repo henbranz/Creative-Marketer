@@ -147,7 +147,7 @@ async def test_generation_authority_job_lookup_and_prepared_state_fail_closed(mo
 async def test_live_spend_cap_is_product_scoped_and_checked_under_lock() -> None:
     tenant_id, product_id = uuid4(), uuid4()
     session = SimpleNamespace(
-        execute=AsyncMock(), scalar=AsyncMock(side_effect=["0.8", "1.2", "1.2"])
+        execute=AsyncMock(), scalar=AsyncMock(side_effect=["0.8", "1.2", "0", "1.2"])
     )
     authority = SqlAlchemyGenerationAuthority(
         object(),
@@ -160,7 +160,7 @@ async def test_live_spend_cap_is_product_scoped_and_checked_under_lock() -> None
     session.execute.assert_awaited_once()
     with pytest.raises(ProductionPermissionDenied, match="outside LIVE_E2E_PRODUCT_ID"):
         await authority._enforce_live_spend_cap(session, tenant_id, uuid4())
-    session.scalar = AsyncMock(side_effect=["1.1", "1.0", "1.0"])
+    session.scalar = AsyncMock(side_effect=["1.1", "1.0", "0", "1.0"])
     with pytest.raises(ProductionPermissionDenied, match="spend cap reached"):
         await authority._enforce_live_spend_cap(session, tenant_id, product_id)
 
@@ -175,7 +175,7 @@ async def test_exact_live_spend_accounting_allows_twenty_and_rejects_fifteen() -
     tenant_id, product_id = uuid4(), uuid4()
     session = SimpleNamespace(
         execute=AsyncMock(),
-        scalar=AsyncMock(side_effect=["10", "5.871015", "4.158675"]),
+        scalar=AsyncMock(side_effect=["10", "5.871015", "0", "4.158675"]),
     )
     allowed = SqlAlchemyGenerationAuthority(
         object(),
@@ -186,7 +186,7 @@ async def test_exact_live_spend_accounting_allows_twenty_and_rejects_fifteen() -
     )
     await allowed._enforce_live_spend_cap(session, tenant_id, product_id)
 
-    session.scalar = AsyncMock(side_effect=["10", "5.871015", "4.158675"])
+    session.scalar = AsyncMock(side_effect=["10", "5.871015", "0", "4.158675"])
     rejected = SqlAlchemyGenerationAuthority(
         object(),
         object(),

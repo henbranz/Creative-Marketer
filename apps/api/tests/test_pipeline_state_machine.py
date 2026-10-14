@@ -283,6 +283,7 @@ def test_only_provider_actions_are_marked_as_permitted_and_billable() -> None:
             PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE,
         ),
         (MediaPipelineState.FAILED, PipelineAction.RECOVER_MEDIA_FAILURE),
+        (MediaPipelineState.RETRYABLE_FAILED, PipelineAction.RETRY_FAILED_MEDIA),
         (MediaPipelineState.OUTCOME_UNKNOWN, PipelineAction.RECONCILE_MEDIA_OUTCOME),
         (
             MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
@@ -319,6 +320,7 @@ def test_media_transition_matrix_covers_every_declared_state() -> None:
         MediaPipelineState.STRANDED_START,
         MediaPipelineState.BLOCKED_SPEND_CAP,
         MediaPipelineState.FAILED,
+        MediaPipelineState.RETRYABLE_FAILED,
         MediaPipelineState.OUTCOME_UNKNOWN,
         MediaPipelineState.RETRYABLE_OUTCOME_UNKNOWN,
         MediaPipelineState.INVARIANT_VIOLATION,

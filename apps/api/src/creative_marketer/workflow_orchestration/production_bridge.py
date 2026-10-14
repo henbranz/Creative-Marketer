@@ -56,6 +56,7 @@ class StartMediaProductionWorkflow:
                 "production.plan.approved_for_generation.v1",
                 "production.media.retry_requested.v1",
                 "production.media.ambiguity_retry_requested.v1",
+                "production.media.failed_retry_requested.v1",
                 "production.media.workflow_restart_requested.v1",
             }
             or event.scope_kind is not EventScopeKind.TENANT
@@ -72,11 +73,17 @@ class StartMediaProductionWorkflow:
         )
         if event.event_type != "production.plan.approved_for_generation.v1":
             raw_job_ids = event.payload.get("generation_job_ids")
-            if (
-                not isinstance(raw_job_ids, (list, tuple))
-                or any(not isinstance(value, str) for value in raw_job_ids)
-                or {UUID(value) for value in raw_job_ids} != set(ready_jobs)
+            if not isinstance(raw_job_ids, (list, tuple)) or any(
+                not isinstance(value, str) for value in raw_job_ids
             ):
+                raise ValueError("Production recovery event READY job identity mismatch")
+            event_job_ids = {UUID(value) for value in raw_job_ids}
+            identities_match = (
+                bool(event_job_ids) and event_job_ids.issubset(set(ready_jobs))
+                if event.event_type == "production.media.failed_retry_requested.v1"
+                else event_job_ids == set(ready_jobs)
+            )
+            if not identities_match:
                 raise ValueError("Production recovery event READY job identity mismatch")
         request = MediaProductionWorkflowInput(
             str(event.tenant_id),
@@ -87,6 +94,7 @@ class StartMediaProductionWorkflow:
         )
         if event.event_type in {
             "production.media.ambiguity_retry_requested.v1",
+            "production.media.failed_retry_requested.v1",
             "production.media.workflow_restart_requested.v1",
         }:
             await self.client.restart_media_production(request)

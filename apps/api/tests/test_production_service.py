@@ -35,6 +35,7 @@ from creative_marketer.production.application import (
 )
 from creative_marketer.production.domain import (
     GenerationJobStatus,
+    GenerationProviderAttempt,
     MediaSpendRequirement,
     ProductionCreativeRefreshRequired,
     ProductionDecisionConflict,
@@ -43,6 +44,7 @@ from creative_marketer.production.domain import (
     ProductionPlanDecisionState,
     ProductionPricingChanged,
     ProductionRejectionFeedbackRequired,
+    ProductionRightsChanged,
     ProductionSpendCapReached,
 )
 from creative_marketer.production.execution import (
@@ -63,6 +65,7 @@ from creative_marketer.production.infrastructure import (
 from creative_marketer.production.media import (
     ImageGenerationRequest,
     InvalidMediaResult,
+    MediaProviderAuthenticationError,
     MediaProviderError,
     MediaProviderOutcomeUnknown,
     MediaProviderTransientFailure,
@@ -107,6 +110,8 @@ class Repository:
         self.record = record
         self.jobs: tuple[Any, ...] = ()
         self.committed_spend = Decimal("0")
+        self.provider_attempts: list[GenerationProviderAttempt] = []
+        self.retry_validation_error: Exception | None = None
 
     async def get_plan(self, plan_id, *, for_update=False):
         return self.record if plan_id == self.record.plan.id else None
@@ -149,6 +154,8 @@ class Repository:
         return tuple(job for job in self.jobs if job.status is GenerationJobStatus.READY)
 
     async def validate_spend_cap_retry(self, _plan):
+        if self.retry_validation_error is not None:
+            raise self.retry_validation_error
         return None
 
     async def recover_stranded_starts(self, _plan_id, job_ids):
@@ -176,6 +183,40 @@ class Repository:
             for job in self.jobs
         )
         return tuple(job for job in self.jobs if job.id in selected)
+
+    async def retry_confirmed_failed_media_jobs(
+        self, _plan_id, job_ids, *, transition_id, operator_user_id
+    ):
+        selected = set(job_ids)
+        attempts = []
+        changed = []
+        updated = []
+        for job in self.jobs:
+            if job.id not in selected:
+                updated.append(job)
+                continue
+            assert job.provider_operation_ref is not None
+            assert job.failure_code is not None
+            attempt = GenerationProviderAttempt(
+                tenant_id=job.tenant_id,
+                generation_job_id=job.id,
+                retry_transition_id=transition_id,
+                provider_operation_ref=job.provider_operation_ref,
+                failure_code=job.failure_code,
+                provider=job.provider,
+                model=job.model,
+                terminal_status=job.status.value,
+                actual_cost=job.actual_cost,
+                historical_unknown_cost=job.unknown_cost,
+                operator_user_id=operator_user_id,
+            )
+            retried = job.retry_after_confirmed_failure()
+            attempts.append(attempt)
+            changed.append(retried)
+            updated.append(retried)
+        self.jobs = tuple(updated)
+        self.provider_attempts.extend(attempts)
+        return tuple(changed), tuple(attempts)
 
 
 class Uow:
@@ -342,6 +383,147 @@ async def test_stranded_start_recovery_then_explicit_ambiguity_retry_is_governed
     assert events[0].event_id == transition_id
     assert events[0].payload["duplicate_provider_risk_accepted"] is True
     EventContractRegistry().validate_event(events[0])
+
+
+@pytest.mark.asyncio
+async def test_confirmed_provider_failure_retry_preserves_attempt_and_reuses_job() -> None:
+    service, repository, uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    image, video = repository.jobs
+    image = (
+        image.transition(GenerationJobStatus.STARTING)
+        .transition(GenerationJobStatus.IMPORTING)
+        .transition(GenerationJobStatus.SUCCEEDED, output_asset_id=uuid4())
+    )
+    prior_task = "cgt-confirmed-failed-task"
+    failed = replace(
+        video.transition(GenerationJobStatus.STARTING)
+        .transition(GenerationJobStatus.PROCESSING, provider_operation_ref=prior_task)
+        .transition(
+            GenerationJobStatus.FAILED,
+            actual_cost=Decimal("0"),
+            failure_code="BYTEPLUS_MODELARK_SET_LIMIT_EXCEEDED",
+        ),
+        unknown_cost=video.reserved_cost,
+    )
+    repository.jobs = (image, failed)
+    repository.committed_spend = Decimal("10")
+    service.live_spend_cap = Decimal("20")
+    transition_id = uuid4()
+
+    first, second = await asyncio.gather(
+        *(
+            service.retry_confirmed_failed_media(
+                owner,
+                repository.record.plan.id,
+                job_ids=(failed.id,),
+                transition_id=transition_id,
+            )
+            for _ in range(2)
+        )
+    )
+
+    assert first == second
+    retried = first[0]
+    assert retried.id == failed.id
+    assert retried.status is GenerationJobStatus.READY
+    assert retried.provider_operation_ref is None
+    assert retried.failure_code == "CONFIRMED_MEDIA_FAILURE_RETRY_APPROVED"
+    assert retried.unknown_cost == failed.unknown_cost
+    assert repository.jobs[0] == image
+    assert len(repository.jobs) == 2
+    assert len(repository.provider_attempts) == 1
+    attempt = repository.provider_attempts[0]
+    assert attempt.provider_operation_ref == prior_task
+    assert attempt.failure_code == "BYTEPLUS_MODELARK_SET_LIMIT_EXCEEDED"
+    assert attempt.historical_unknown_cost == failed.unknown_cost
+    assert attempt.retry_transition_id == transition_id
+    events = [
+        event
+        for event in uow.outbox.values
+        if event.event_type == "production.media.failed_retry_requested.v1"
+    ]
+    assert len(events) == 1
+    assert events[0].event_id == transition_id
+    assert events[0].payload["generation_job_ids"] == (str(failed.id),)
+    assert events[0].payload["provider_attempt_ids"] == (str(attempt.id),)
+    EventContractRegistry().validate_event(events[0])
+
+
+@pytest.mark.asyncio
+async def test_confirmed_provider_failure_retry_guards_fail_closed() -> None:
+    service, repository, _uow = service_fixture()
+    owner = execution_context(repository.record.plan.tenant_id)
+    await service.decide(
+        owner,
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    _image, video = repository.jobs
+    service.live_spend_cap = Decimal("20")
+    with pytest.raises(ProductionPermissionDenied, match="confirmed terminal"):
+        await service.retry_confirmed_failed_media(
+            owner,
+            repository.record.plan.id,
+            job_ids=(video.id,),
+            transition_id=uuid4(),
+        )
+
+    unknown = replace(
+        video.transition(GenerationJobStatus.STARTING).transition(
+            GenerationJobStatus.OUTCOME_UNKNOWN,
+            failure_code="MEDIA_PROVIDER_OUTCOME_UNKNOWN",
+        ),
+        provider_operation_ref=None,
+    )
+    repository.jobs = (unknown,)
+    with pytest.raises(ProductionPermissionDenied, match="confirmed terminal"):
+        await service.retry_confirmed_failed_media(
+            owner,
+            repository.record.plan.id,
+            job_ids=(unknown.id,),
+            transition_id=uuid4(),
+        )
+
+    failed = video.transition(GenerationJobStatus.STARTING).transition(
+        GenerationJobStatus.FAILED,
+        provider_operation_ref="cgt-failed",
+        failure_code="BYTEPLUS_MODELARK_TASK_FAILED",
+    )
+    repository.jobs = (failed,)
+    repository.committed_spend = Decimal("19")
+    with pytest.raises(ProductionPermissionDenied, match="confirmed media retry spend"):
+        await service.retry_confirmed_failed_media(
+            owner,
+            repository.record.plan.id,
+            job_ids=(failed.id,),
+            transition_id=uuid4(),
+        )
+
+    repository.committed_spend = Decimal("0")
+    repository.jobs = (replace(failed, route_version="retired-route"),)
+    with pytest.raises(ProductionPricingChanged, match="approval binding"):
+        await service.retry_confirmed_failed_media(
+            owner,
+            repository.record.plan.id,
+            job_ids=(failed.id,),
+            transition_id=uuid4(),
+        )
+
+    repository.jobs = (failed,)
+    repository.retry_validation_error = ProductionRightsChanged("generation rights changed")
+    with pytest.raises(ProductionRightsChanged, match="rights changed"):
+        await service.retry_confirmed_failed_media(
+            owner,
+            repository.record.plan.id,
+            job_ids=(failed.id,),
+            transition_id=uuid4(),
+        )
 
 
 @pytest.mark.asyncio
@@ -1048,6 +1230,40 @@ async def test_media_tool_executor_terminal_and_failure_paths() -> None:
         )
     assert resumable.execution.job.provider_operation_ref == "fake-seedance-task"
     assert resumable.states == []
+
+
+@pytest.mark.asyncio
+async def test_authoritative_modelark_auth_rejection_is_failed_pre_effect_not_unknown() -> None:
+    service, repository, _uow = service_fixture()
+    await service.decide(
+        execution_context(repository.record.plan.tenant_id),
+        repository.record.plan.id,
+        ProductionPlanDecisionState.APPROVED_FOR_GENERATION,
+    )
+    video_job = repository.jobs[1]
+    authority = Authority(
+        ExecutableGeneration(
+            video_job,
+            {"resolution": "720p", "aspect_ratio": "9:16", "generate_audio": True},
+            (),
+            12,
+        )
+    )
+
+    class RejectedProvider:
+        async def start(self, _request):
+            raise MediaProviderAuthenticationError("bounded authentication rejection")
+
+    with pytest.raises(PreEffectFailure):
+        await VideoStartToolExecutor(authority, RejectedProvider()).execute(
+            tool_context(video_job.tenant_id),
+            NormalizedToolInput.from_trusted_value({"generation_job_id": str(video_job.id)}),
+        )
+
+    assert authority.states == [
+        ("started", None),
+        ("failed", "MEDIA_PROVIDER_AUTHENTICATION_FAILED"),
+    ]
 
 
 class Gateway:

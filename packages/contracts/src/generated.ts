@@ -3474,6 +3474,7 @@ export interface components {
       | "STRANDED_START"
       | "SUCCEEDED"
       | "FAILED"
+      | "RETRYABLE_FAILED"
       | "OUTCOME_UNKNOWN"
       | "RETRYABLE_OUTCOME_UNKNOWN"
       | "INVARIANT_VIOLATION";
@@ -3611,6 +3612,7 @@ export interface components {
       | "RECOVER_STRANDED_MEDIA_START"
       | "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE"
       | "RECOVER_MEDIA_FAILURE"
+      | "RETRY_FAILED_MEDIA"
       | "RECONCILE_MEDIA_OUTCOME"
       | "ABANDON_UNKNOWN_MEDIA_AND_RETRY"
       | "RECOVER_MEDIA_INVARIANT"

@@ -1397,11 +1397,17 @@ def live_next(
         if action in {
             "RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE",
             "ABANDON_UNKNOWN_MEDIA_AND_RETRY",
+            "RETRY_FAILED_MEDIA",
         }:
             if not isinstance(spend, dict):
                 raise RuntimeError("LIVE_MEDIA_SPEND_REQUIREMENT_MISSING")
             provider, model = "approved media providers", "immutable approved routes"
-            maximum = Decimal(str(spend["reserved_media_amount"]))
+            maximum = (
+                Decimal(str(spend["minimum_required_cap"]))
+                - Decimal(str(spend["committed_product_spend"]))
+                if action == "RETRY_FAILED_MEDIA"
+                else Decimal(str(spend["reserved_media_amount"]))
+            )
             currency = str(spend["currency"])
         else:
             provider, model, maximum, currency = _paid_action_exposure(action)

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import DBAPIError
 
 from creative_marketer.agent_governance.application import ResolveActiveAgentVersion
 from creative_marketer.agent_runtime.application import (
@@ -61,6 +62,7 @@ from creative_marketer.infrastructure.database.production_authority import (
 )
 from creative_marketer.infrastructure.database.production_schema import (
     generation_jobs,
+    generation_provider_attempts,
     media_budget_usage,
 )
 from creative_marketer.infrastructure.database.production_uow import (
@@ -80,6 +82,7 @@ from creative_marketer.orchestration.application import (
     MediaWorkflowExecutionState,
     PipelineStateService,
 )
+from creative_marketer.orchestration.domain import PipelineApprovalRequired
 from creative_marketer.orchestration.execution import (
     PipelineActionExecutor,
     pipeline_approval_phrase,
@@ -239,7 +242,9 @@ class _ChangedAuthorityOutputs:
         return result
 
 
-async def _media_executor(sessions, store) -> GovernedProductionJobExecutor:
+async def _media_executor(
+    sessions, store, video_provider: FakeSeedanceMediaProvider | None = None
+) -> GovernedProductionJobExecutor:
     authority = SqlAlchemyGenerationAuthority(
         sessions,
         store,
@@ -249,7 +254,7 @@ async def _media_executor(sessions, store) -> GovernedProductionJobExecutor:
     image_importer = ApplicationGeneratedAssetImporter(assets, sessions, local_demo=True)
     video_importer = ApplicationGeneratedAssetImporter(assets, sessions, local_demo=True)
     image_provider = FakeImageProvider()
-    video_provider = FakeSeedanceMediaProvider()
+    video_provider = video_provider or FakeSeedanceMediaProvider()
     tool_resolver = ResolveActiveTool(SqlAlchemyToolRegistryUnitOfWorkFactory(sessions))
     resource_resolver = GenerationJobResourceResolver(authority)
     executors = {
@@ -337,7 +342,8 @@ async def _complete_approved_concept_to_final(
     )
     media = await state.resolve_next_action(context, locator)
     assert media.action is PipelineAction.WAIT_FOR_MEDIA
-    media_executor = await _media_executor(sessions, store)
+    video_provider = FakeSeedanceMediaProvider()
+    media_executor = await _media_executor(sessions, store, video_provider)
 
     if exercise_spend_cap_recovery:
         assert monkeypatch is not None
@@ -574,6 +580,109 @@ async def _complete_approved_concept_to_final(
                 )
             ) == len(original_ids)
 
+        # A provider-confirmed failure is a different recovery class from an
+        # ambiguous start. Preserve the failed task as immutable history, reuse
+        # the same job/reservation, and require the dedicated approval phrase.
+        failed_provider_ref = "fixture-confirmed-modelark-task"
+        async with inspection_sessions.begin() as session:
+            await session.execute(
+                update(generation_jobs)
+                .where(generation_jobs.c.id == video_job.id)
+                .values(
+                    status=GenerationJobStatus.FAILED.value,
+                    provider_operation_ref=failed_provider_ref,
+                    failure_code="BYTEPLUS_MODELARK_TASK_FAILED",
+                    initiated_by_user_id=context.user_id,
+                    executed_by_workload_id="governed-e2e-media-worker",
+                )
+            )
+            before_confirmed_retry_tool_calls = await session.scalar(
+                select(func.count())
+                .select_from(tool_calls)
+                .where(tool_calls.c.tenant_id == context.tenant_id)
+            )
+
+        confirmed_failure = await state.resolve_next_action(context, locator)
+        assert confirmed_failure.action is PipelineAction.RETRY_FAILED_MEDIA
+        assert confirmed_failure.retryable_failed_media_job_ids == (video_job.id,)
+        assert confirmed_failure.media_spend_requirement is not None
+        assert confirmed_failure.media_spend_requirement.minimum_required_cap == (
+            confirmed_failure.media_spend_requirement.committed_product_spend
+            + video_job.reserved_cost
+        )
+        with pytest.raises(PipelineApprovalRequired, match="explicit approval"):
+            await executor.execute(
+                context,
+                locator,
+                expected_action=PipelineAction.RETRY_FAILED_MEDIA,
+            )
+        retried = await executor.execute(
+            context,
+            locator,
+            expected_action=PipelineAction.RETRY_FAILED_MEDIA,
+            explicit_approval="I_APPROVE_RETRY_FAILED_MEDIA",
+        )
+        assert retried.provider_execution_occurred is False
+        retry_ready = await production.get_job(context, video_job.id)
+        assert retry_ready.id == video_job.id
+        assert retry_ready.status is GenerationJobStatus.READY
+        assert retry_ready.provider_operation_ref is None
+        assert retry_ready.output_asset_id is None
+        assert retry_ready.unknown_cost == video_job.reserved_cost
+        async with inspection_sessions.begin() as session:
+            attempt = (
+                (
+                    await session.execute(
+                        select(generation_provider_attempts).where(
+                            generation_provider_attempts.c.generation_job_id == video_job.id
+                        )
+                    )
+                )
+                .one()
+                ._mapping
+            )
+            assert attempt["provider_operation_ref"] == failed_provider_ref
+            assert attempt["failure_code"] == "BYTEPLUS_MODELARK_TASK_FAILED"
+            assert attempt["terminal_status"] == GenerationJobStatus.FAILED.value
+            assert attempt["historical_unknown_cost"] == video_job.reserved_cost
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(media_budget_usage)
+                    .where(
+                        media_budget_usage.c.generation_job_id == video_job.id,
+                        media_budget_usage.c.entry_kind == "RESERVED",
+                    )
+                )
+                == 1
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(outbox_events)
+                    .where(
+                        outbox_events.c.aggregate_id == review.production_plan_id,
+                        outbox_events.c.event_type == "production.media.failed_retry_requested.v1",
+                    )
+                )
+                == 1
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(tool_calls)
+                    .where(tool_calls.c.tenant_id == context.tenant_id)
+                )
+                == before_confirmed_retry_tool_calls
+            )
+        with pytest.raises(DBAPIError, match="immutable"):
+            async with inspection_sessions.begin() as session:
+                await session.execute(
+                    update(generation_provider_attempts)
+                    .where(generation_provider_attempts.c.id == attempt["id"])
+                    .values(failure_code="BYTEPLUS_MODELARK_TASK_FAILED")
+                )
+
     jobs = await production.list_jobs(context, review.production_plan_id)
     for job in jobs:
         for _ in range(6):
@@ -600,6 +709,10 @@ async def _complete_approved_concept_to_final(
                 )
             )
         assert video_start_calls == 1
+        assert video_provider.start_count == 1
+        resumed_video = await production.get_job(context, video_job.id)
+        assert resumed_video.provider_operation_ref == "fake-seedance-task"
+        assert resumed_video.provider_operation_ref != failed_provider_ref
 
     manual_gate = await state.resolve_next_action(context, locator)
     assert manual_gate.action is PipelineAction.BIND_MANUAL_ASSEMBLY_INPUT
@@ -718,7 +831,9 @@ async def test_database_backed_governed_pipeline_reaches_persisted_final_creativ
         SqlAlchemyProductionUnitOfWorkFactory(sessions), initial_media_router()
     )
     assembly = AssemblyService(SqlAlchemyAssemblyUnitOfWorkFactory(sessions))
-    state = PipelineStateService(SqlAlchemyOrchestrationUnitOfWorkFactory(sessions))
+    state = PipelineStateService(
+        SqlAlchemyOrchestrationUnitOfWorkFactory(sessions, live_spend_cap=Decimal("100"))
+    )
     executor = PipelineActionExecutor(state, runtime, creative, production, assembly)
     locator = PipelineLocator(bootstrap_demo.PRODUCT_ID, use_latest_when_unbound=False)
 

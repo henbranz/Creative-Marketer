@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from creative_marketer.production.domain import MediaSpendRequirement
 
 from .agent_runtime_schema import agent_runs
-from .production_schema import generation_jobs, production_plans
+from .production_schema import generation_jobs, generation_provider_attempts, production_plans
 
 
 async def product_media_spend_requirement(
@@ -53,7 +53,10 @@ async def product_media_spend_requirement(
                             generation_jobs.c.status == "OUTCOME_UNKNOWN",
                             generation_jobs.c.unknown_cost,
                         ),
-                        (generation_jobs.c.status == "FAILED", generation_jobs.c.unknown_cost),
+                        (
+                            generation_jobs.c.status == "FAILED",
+                            generation_jobs.c.actual_cost + generation_jobs.c.unknown_cost,
+                        ),
                         else_=(generation_jobs.c.reserved_cost + generation_jobs.c.unknown_cost),
                     )
                 ),
@@ -68,6 +71,23 @@ async def product_media_spend_requirement(
         )
         .where(
             generation_jobs.c.tenant_id == tenant_id,
+            production_plans.c.product_id == product_id,
+            generation_jobs.c.currency == "USD",
+        )
+    )
+    historical_attempt_actual = await session.scalar(
+        select(func.coalesce(func.sum(generation_provider_attempts.c.actual_cost), 0))
+        .select_from(
+            generation_provider_attempts.join(
+                generation_jobs,
+                generation_provider_attempts.c.generation_job_id == generation_jobs.c.id,
+            ).join(
+                production_plans,
+                generation_jobs.c.production_plan_id == production_plans.c.id,
+            )
+        )
+        .where(
+            generation_provider_attempts.c.tenant_id == tenant_id,
             production_plans.c.product_id == product_id,
             generation_jobs.c.currency == "USD",
         )
@@ -96,7 +116,11 @@ async def product_media_spend_requirement(
             ),
         )
     )
-    committed = Decimal(model_amount or 0) + Decimal(media_amount or 0)
+    committed = (
+        Decimal(model_amount or 0)
+        + Decimal(media_amount or 0)
+        + Decimal(historical_attempt_actual or 0)
+    )
     return MediaSpendRequirement(
         configured_cap=configured_cap,
         committed_product_spend=committed,

@@ -74,6 +74,7 @@ from creative_marketer.production.media import (
     InvalidMediaResult,
     MaterializedReference,
     MediaProviderActivationRequired,
+    MediaProviderAuthenticationError,
     MediaProviderBadRequest,
     MediaProviderError,
     MediaProviderInsufficientCredits,
@@ -734,6 +735,27 @@ def test_generation_job_unknown_and_lineage() -> None:
     assert unknown.unknown_cost == Decimal("1.2")
     retry = unknown.transition(GenerationJobStatus.READY)
     assert retry.unknown_cost == Decimal("1.2")
+    second_unknown = retry.transition(GenerationJobStatus.STARTING).transition(
+        GenerationJobStatus.OUTCOME_UNKNOWN
+    )
+    assert second_unknown.unknown_cost == Decimal("2.4")
+    failed = replace(
+        job.transition(GenerationJobStatus.READY)
+        .transition(GenerationJobStatus.STARTING)
+        .transition(
+            GenerationJobStatus.FAILED,
+            provider_operation_ref="cgt-terminal-failure",
+            failure_code="BYTEPLUS_MODELARK_TASK_FAILED",
+        ),
+        unknown_cost=Decimal("1.2"),
+    )
+    confirmed_retry = failed.retry_after_confirmed_failure()
+    assert confirmed_retry.id == failed.id
+    assert confirmed_retry.status is GenerationJobStatus.READY
+    assert confirmed_retry.provider_operation_ref is None
+    assert confirmed_retry.actual_cost == 0
+    assert confirmed_retry.unknown_cost == Decimal("1.2")
+    assert confirmed_retry.failure_code == "CONFIRMED_MEDIA_FAILURE_RETRY_APPROVED"
     with pytest.raises(ValueError, match="workload identity"):
         replace(job, executed_by_workload_id=" ")
     assert (
@@ -1042,6 +1064,7 @@ async def test_modelark_seedance_rejects_malformed_requests_and_provider_respons
 @pytest.mark.parametrize(
     ("status", "code", "error"),
     [
+        (401, "AuthenticationError", MediaProviderAuthenticationError),
         (404, "ModelNotOpen", MediaProviderActivationRequired),
         (403, "OperationDenied.ServiceNotOpen", MediaProviderActivationRequired),
         (403, "AccountOverdueError", MediaProviderInsufficientCredits),
@@ -1067,6 +1090,28 @@ async def test_modelark_polling_requires_matching_authoritative_task_identity() 
     )
     with pytest.raises(InvalidMediaResult, match="identity"):
         await provider.status("cgt-authoritative")
+
+
+@pytest.mark.asyncio
+async def test_modelark_polling_persists_bounded_terminal_failure_code() -> None:
+    provider = BytePlusModelArkVideoProvider(
+        "real-key-value",
+        transport=FakeTransport(
+            [
+                (
+                    200,
+                    b'{"id":"cgt-failed","status":"failed","error":'
+                    b'{"code":"SetLimitExceeded","message":"account-sensitive detail"}}',
+                )
+            ]
+        ),
+    )
+
+    result = await provider.status("cgt-failed")
+
+    assert result.state is ProviderGenerationState.FAILED
+    assert result.failure_code == "BYTEPLUS_MODELARK_SET_LIMIT_EXCEEDED"
+    assert "account-sensitive" not in result.failure_code
 
 
 @pytest.mark.asyncio

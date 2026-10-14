@@ -402,6 +402,48 @@ async def test_exact_unknown_media_start_exposes_explicit_ambiguity_action() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("workflow_state", "expected"),
+    [
+        (MediaWorkflowExecutionState.ACTIVE, PipelineAction.RECOVER_MEDIA_FAILURE),
+        (MediaWorkflowExecutionState.TERMINAL, PipelineAction.RETRY_FAILED_MEDIA),
+        (MediaWorkflowExecutionState.MISSING, PipelineAction.RETRY_FAILED_MEDIA),
+    ],
+)
+async def test_confirmed_media_failure_retry_requires_terminal_workflow(
+    workflow_state, expected
+) -> None:
+    ctx = context()
+    repository = MemoryRepository(ctx)
+    plan_id, job_id = uuid4(), uuid4()
+    repository.pipeline_observation = PipelineObservation(
+        uuid4(),
+        ResearchPipelineState.SUCCEEDED_CURRENT,
+        CreativePipelineState.APPROVED_FOR_PRODUCTION,
+        ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.FAILED,
+        retryable_failed_media_job_ids=(job_id,),
+    )
+
+    class Workflows:
+        async def status(self, tenant_id, production_plan_id):
+            assert (tenant_id, production_plan_id) == (ctx.tenant_id, plan_id)
+            return MediaWorkflowExecution(workflow_state, "failed-workflow-run-1")
+
+    result = await PipelineStateService(
+        lambda _tenant: MemoryUow(repository), Workflows()
+    ).resolve_next_action(ctx, PipelineLocator(repository.pipeline_observation.product_id))
+
+    assert result.action is expected
+    assert result.retryable_failed_media_job_ids == (job_id,)
+    if workflow_state is not MediaWorkflowExecutionState.ACTIVE:
+        assert result.human_approval_required is True
+        assert result.provider_execution_permitted is True
+        assert result.media_workflow_execution_ref == "failed-workflow-run-1"
+
+
+@pytest.mark.asyncio
 async def test_service_start_transition_report_get_and_cancel_are_auditable() -> None:
     ctx = context()
     repository = MemoryRepository(ctx)

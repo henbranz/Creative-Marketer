@@ -49,6 +49,7 @@ def action_state(
     media=MediaPipelineState.NOT_OBSERVED,
     stranded_media_start_job_ids=(),
     retryable_unknown_media_job_ids=(),
+    retryable_failed_media_job_ids=(),
     ready_media_job_ids=(),
     media_workflow_execution_ref=None,
 ) -> NextPipelineAction:
@@ -76,6 +77,7 @@ def action_state(
         media_state=media,
         stranded_media_start_job_ids=stranded_media_start_job_ids,
         retryable_unknown_media_job_ids=retryable_unknown_media_job_ids,
+        retryable_failed_media_job_ids=retryable_failed_media_job_ids,
         ready_media_job_ids=ready_media_job_ids,
         media_workflow_execution_ref=media_workflow_execution_ref,
     )
@@ -136,6 +138,7 @@ class Production:
         self.stranded_calls: list[tuple[object, object]] = []
         self.ambiguity_calls: list[tuple[object, object, object]] = []
         self.redispatch_calls: list[tuple[object, object, object]] = []
+        self.failed_retry_calls: list[tuple[object, object, object]] = []
 
     async def get_plan(self, _context, _plan_id):
         return SimpleNamespace(decision=SimpleNamespace(rejection_feedback=self.feedback))
@@ -154,6 +157,10 @@ class Production:
 
     async def redispatch_ready_media_workflow(self, _context, plan_id, *, job_ids, transition_id):
         self.redispatch_calls.append((plan_id, job_ids, transition_id))
+        return (SimpleNamespace(id=job_ids[0]),)
+
+    async def retry_confirmed_failed_media(self, _context, plan_id, *, job_ids, transition_id):
+        self.failed_retry_calls.append((plan_id, job_ids, transition_id))
         return (SimpleNamespace(id=job_ids[0]),)
 
 
@@ -679,3 +686,53 @@ async def test_unknown_media_retry_requires_action_bound_risk_acceptance() -> No
     )
     assert production.ambiguity_calls[0][:2] == (plan_id, (job_id,))
     assert result.provider_execution_occurred is False
+
+
+@pytest.mark.asyncio
+async def test_confirmed_failed_media_retry_requires_exact_approval_and_reuses_job() -> None:
+    ctx, plan_id, job_id = context(uuid4()), uuid4(), uuid4()
+    before = action_state(
+        PipelineAction.RETRY_FAILED_MEDIA,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.RETRYABLE_FAILED,
+        retryable_failed_media_job_ids=(job_id,),
+        media_workflow_execution_ref="terminal-failed-run-1",
+    )
+    after = action_state(
+        PipelineAction.WAIT_FOR_MEDIA,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=plan_id,
+        media=MediaPipelineState.READY,
+    )
+    production = Production()
+    with pytest.raises(PipelineApprovalRequired):
+        await PipelineActionExecutor(
+            State(before, after), Agents(), Creative(), production
+        ).execute(
+            ctx,
+            PipelineLocator(uuid4()),
+            expected_action=PipelineAction.RETRY_FAILED_MEDIA,
+        )
+    assert not production.failed_retry_calls
+
+    result = await PipelineActionExecutor(
+        State(before, after), Agents(), Creative(), production
+    ).execute(
+        ctx,
+        PipelineLocator(uuid4()),
+        expected_action=PipelineAction.RETRY_FAILED_MEDIA,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RETRY_FAILED_MEDIA),
+    )
+
+    assert production.failed_retry_calls[0][:2] == (plan_id, (job_id,))
+    assert result.resource_type == "generation_job"
+    assert result.resource_id == job_id
+    assert result.provider_execution_occurred is False
+    definition = EXECUTION_BEHAVIOR_REGISTRY[PipelineAction.RETRY_FAILED_MEDIA]
+    assert definition.operation == "retry_confirmed_failed_media"
+    assert (
+        definition.provider_cost,
+        definition.explicit_approval_required,
+        definition.provider_execution_permitted,
+    ) == (True, True, True)

@@ -15,6 +15,7 @@ from creative_marketer.production.application import SEEDANCE_MODEL
 from creative_marketer.production.media import (
     InvalidMediaResult,
     MediaProviderActivationRequired,
+    MediaProviderAuthenticationError,
     MediaProviderBadRequest,
     MediaProviderError,
     MediaProviderInsufficientCredits,
@@ -87,6 +88,8 @@ def _error_code(raw: bytes) -> str | None:
 
 def _classified_error(status: int, raw: bytes) -> MediaProviderError:
     code = (_error_code(raw) or "").casefold()
+    if status == 401 or code in {"authenticationerror", "unauthorized"}:
+        return MediaProviderAuthenticationError("ModelArk authentication was rejected")
     if code in {
         "modelnotopen",
         "operationdenied.servicenotopen",
@@ -104,6 +107,20 @@ def _classified_error(status: int, raw: bytes) -> MediaProviderError:
     if status in {408, 409, 425, 429} or status >= 500:
         return MediaProviderTransientFailure("ModelArk is temporarily unavailable")
     return MediaProviderError("ModelArk request was rejected")
+
+
+def _task_failure_code(value: Mapping[str, object]) -> str:
+    error = value.get("error")
+    raw_code = error.get("code") if isinstance(error, dict) else None
+    code = raw_code.casefold() if isinstance(raw_code, str) else ""
+    return {
+        "setlimitexceeded": "BYTEPLUS_MODELARK_SET_LIMIT_EXCEEDED",
+        "balancenotenough": "BYTEPLUS_MODELARK_INSUFFICIENT_CREDITS",
+        "accountoverdueerror": "BYTEPLUS_MODELARK_ACCOUNT_OVERDUE",
+        "operationdenied.serviceoverdue": "BYTEPLUS_MODELARK_ACCOUNT_OVERDUE",
+        "modelnotopen": "BYTEPLUS_MODELARK_MODEL_ACTIVATION_REQUIRED",
+        "operationdenied.servicenotopen": "BYTEPLUS_MODELARK_MODEL_ACTIVATION_REQUIRED",
+    }.get(code, "BYTEPLUS_MODELARK_TASK_FAILED")
 
 
 def _https_url(value: str, *, label: str) -> str:
@@ -278,7 +295,7 @@ class BytePlusModelArkVideoProvider:
             locator,
             duration_value if isinstance(duration_value, int) else None,
             resolution_value if isinstance(resolution_value, str) else None,
-            "BYTEPLUS_MODELARK_TASK_FAILED"
+            _task_failure_code(value)
             if state is ProviderGenerationState.FAILED
             else "BYTEPLUS_MODELARK_TASK_EXPIRED"
             if state is ProviderGenerationState.EXPIRED

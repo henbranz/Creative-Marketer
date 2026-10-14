@@ -355,6 +355,9 @@ def test_event_contracts_are_versioned_closed_language_neutral_schemas() -> None
 
 def test_published_v1_event_contract_digests_are_immutable() -> None:
     expected = {
+        "production.media.failed_retry_requested.v1": (
+            "sha256:3a842027ee1e65ecdc31fc9dfe76274b2c357b2a30b501a80c892d97705d26f9"
+        ),
         "production.media.workflow_restart_requested.v1": (
             "sha256:d06b377d12fb06b6d8f7661d00f5a079150221547be8fb7aabf74cbb5d676646"
         ),
@@ -514,6 +517,6 @@ def test_migrations_have_one_linear_head() -> None:
     script = ScriptDirectory.from_config(config)
     revisions = list(script.walk_revisions())
     files = list((API_ROOT / "migrations" / "versions").glob("*.py"))
-    assert script.get_heads() == ["20261010_0038"]
+    assert script.get_heads() == ["20261015_0039"]
     assert len(revisions) == len(files)
     assert all(not revision.is_branch_point for revision in revisions)

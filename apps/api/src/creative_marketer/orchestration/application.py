@@ -464,6 +464,32 @@ class PipelineStateService:
                     "GENERATION_START_OUTCOME_UNKNOWN_REQUIRES_DUPLICATE_RISK_ACCEPTANCE"
                 ),
             )
+        elif (
+            observation.media is MediaPipelineState.FAILED
+            and observation.retryable_failed_media_job_ids
+        ):
+            if self.media_workflows is None:
+                raise CycleNotReady("Media workflow status is unavailable")
+            if observation.production_plan_id is None:
+                raise CycleNotReady("Media failure is missing ProductionPlan authority")
+            workflow = await self.media_workflows.status(
+                context.tenant_id, observation.production_plan_id
+            )
+            if workflow.state in {
+                MediaWorkflowExecutionState.TERMINAL,
+                MediaWorkflowExecutionState.MISSING,
+            }:
+                observation = replace(
+                    observation,
+                    media=MediaPipelineState.RETRYABLE_FAILED,
+                    blocking_reason="CONFIRMED_PROVIDER_MEDIA_FAILURE_RETRY_AVAILABLE",
+                    media_workflow_execution_ref=workflow.execution_reference,
+                )
+            else:
+                observation = replace(
+                    observation,
+                    blocking_reason="CONFIRMED_PROVIDER_MEDIA_FAILURE_WORKFLOW_ACTIVE",
+                )
         return self.resolver.resolve(observation)
 
 

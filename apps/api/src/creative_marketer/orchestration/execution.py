@@ -401,6 +401,21 @@ class PipelineActionExecutor:
                 locator,
             )
 
+        if action is PipelineAction.RETRY_FAILED_MEDIA:
+            if before.production_plan_id is None:
+                raise PipelineExecutionInvariant("media retry requires a ProductionPlan")
+            jobs = await self.production.retry_confirmed_failed_media(
+                context,
+                before.production_plan_id,
+                job_ids=before.retryable_failed_media_job_ids,
+                transition_id=transition_id,
+            )
+            return (
+                "generation_job",
+                jobs[0].id,
+                locator,
+            )
+
         raise PipelineExecutionInvariant(f"no executable operation for {action.value}")
 
     @staticmethod

@@ -117,6 +117,21 @@ generation_jobs = _table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
+generation_provider_attempts = _table(
+    "generation_provider_attempts",
+    Column("generation_job_id", UUID(as_uuid=True), nullable=False),
+    Column("retry_transition_id", UUID(as_uuid=True), nullable=False),
+    Column("provider_operation_ref", String(256), nullable=False),
+    Column("failure_code", String(64), nullable=False),
+    Column("provider", String(64), nullable=False),
+    Column("model", String(128), nullable=False),
+    Column("terminal_status", String(16), nullable=False),
+    Column("actual_cost", Numeric(20, 6), nullable=False),
+    Column("historical_unknown_cost", Numeric(20, 6), nullable=False),
+    Column("operator_user_id", UUID(as_uuid=True), nullable=False),
+    Column("retry_reason", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
 media_budget_usage = _table(
     "media_budget_usage",
     Column("generation_job_id", UUID(as_uuid=True), nullable=False),

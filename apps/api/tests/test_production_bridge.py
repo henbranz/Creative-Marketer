@@ -178,6 +178,57 @@ async def test_ambiguity_retry_uses_recovery_specific_temporal_restart() -> None
 
 
 @pytest.mark.asyncio
+async def test_confirmed_failure_retry_restarts_full_job_set_from_exact_retried_subset() -> None:
+    tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()
+    context = ExecutionContext(
+        tenant_id,
+        Actor(ActorKind.USER, user_id),
+        user_id,
+        MembershipRole.OWNER,
+        MembershipStatus.ACTIVE,
+        "test",
+        AuthenticationAssurance(datetime.now(UTC), "test", "mfa"),
+        uuid4(),
+    )
+    event_type = "production.media.failed_retry_requested.v1"
+    transition_id, ready_sibling, retried_video = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+    )
+    event = tenant_event(
+        context,
+        event_type=event_type,
+        schema_version=1,
+        aggregate_type="production_plan",
+        aggregate_id=plan_id,
+        occurred_at=datetime.now(UTC),
+        payload_schema_digest=EventContractRegistry().schema_digest(event_type),
+        payload={
+            "production_plan_id": str(plan_id),
+            "transition_id": str(transition_id),
+            "generation_job_ids": [str(retried_video)],
+            "provider_attempt_ids": [str(uuid4())],
+            "retry_reason": "CONFIRMED_PROVIDER_FAILURE",
+        },
+        event_id=transition_id,
+    )
+    starter = Starter()
+    resolver = Resolver(
+        ready_sibling,
+        retried_video,
+        ready_jobs=(retried_video, ready_sibling),
+    )
+
+    await StartMediaProductionWorkflow(starter, resolver)(event, object())  # type: ignore[arg-type]
+
+    assert not starter.requests
+    assert len(starter.restarts) == 1
+    assert starter.restarts[0].image_job_ids == (str(ready_sibling),)
+    assert starter.restarts[0].video_job_ids == (str(retried_video),)
+
+
+@pytest.mark.asyncio
 async def test_workflow_restart_event_uses_recovery_start_and_exact_ready_jobs() -> None:
     tenant_id, user_id, plan_id = uuid4(), uuid4(), uuid4()
     context = ExecutionContext(

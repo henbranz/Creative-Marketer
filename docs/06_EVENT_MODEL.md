@@ -211,7 +211,11 @@ responses are forbidden from all three contracts.
 ## Production facts
 
 Production publishes `production.plan.created.v1`, `production.plan.approved_for_generation.v1`,
-and `production.generation.completed.v1`. Payloads contain IDs, digests, version evidence, media
+`production.generation.completed.v1`, and the recovery facts
+`production.media.retry_requested.v1`, `production.media.workflow_restart_requested.v1`, and
+`production.media.failed_retry_requested.v1`. The confirmed-failure retry event binds the exact
+reused GenerationJob and immutable provider-attempt history IDs; it never carries provider task
+identities or error messages. Payloads contain IDs, digests, version evidence, media
 kind, and decimal cost strings—never plan text, generation specs/prompts, provider operation refs,
 or result URLs.
 
