@@ -41,7 +41,6 @@ from creative_marketer.production.domain import (
 )
 from creative_marketer.production.service import ProductionPlanRecord
 
-from .event_delivery_schema import outbox_events
 from .production_schema import (
     generation_jobs,
     generation_segments,
@@ -461,18 +460,6 @@ class SqlAlchemyProductionRepository:
         jobs = await self.list_jobs(plan_id)
         selected = set(job_ids)
         return tuple(job for job in jobs if job.id in selected)
-
-    async def workflow_restart_requested(self, plan_id: UUID, transition_id: UUID) -> bool:
-        return (
-            await self._session.scalar(
-                select(outbox_events.c.event_id).where(
-                    outbox_events.c.event_id == transition_id,
-                    outbox_events.c.event_type == "production.media.workflow_restart_requested.v1",
-                    outbox_events.c.aggregate_type == "production_plan",
-                    outbox_events.c.aggregate_id == plan_id,
-                )
-            )
-        ) is not None
 
     async def validate_spend_cap_retry(self, plan: ProductionPlan) -> None:
         product_snapshot = (

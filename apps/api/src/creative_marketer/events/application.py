@@ -17,6 +17,10 @@ class OutboxWriter(Protocol):
     async def append(self, event: DomainEvent) -> None: ...
 
 
+class IdempotentOutboxWriter(OutboxWriter, Protocol):
+    async def append_idempotent(self, event: DomainEvent) -> bool: ...
+
+
 class EventTransport(Protocol):
     async def publish(self, event: DomainEvent, trace_context: "TraceContext | None") -> None: ...
 

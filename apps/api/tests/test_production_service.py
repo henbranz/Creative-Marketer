@@ -89,6 +89,12 @@ class Writer:
     async def append(self, value) -> None:
         self.values.append(value)
 
+    async def append_idempotent(self, value) -> bool:
+        if any(existing.event_id == value.event_id for existing in self.values):
+            return False
+        await self.append(value)
+        return True
+
 
 class ContractValidatingWriter(Writer):
     async def append(self, value) -> None:
@@ -101,7 +107,6 @@ class Repository:
         self.record = record
         self.jobs: tuple[Any, ...] = ()
         self.committed_spend = Decimal("0")
-        self.outbox = None
 
     async def get_plan(self, plan_id, *, for_update=False):
         return self.record if plan_id == self.record.plan.id else None
@@ -172,21 +177,12 @@ class Repository:
         )
         return tuple(job for job in self.jobs if job.id in selected)
 
-    async def workflow_restart_requested(self, plan_id, transition_id):
-        return any(
-            event.event_id == transition_id
-            and event.aggregate_id == plan_id
-            and event.event_type == "production.media.workflow_restart_requested.v1"
-            for event in (self.outbox.values if self.outbox is not None else ())
-        )
-
 
 class Uow:
     def __init__(self, repository) -> None:
         self.production = repository
         self.audit = Writer()
         self.outbox = ContractValidatingWriter()
-        repository.outbox = self.outbox
         self.committed = False
         self.lock = asyncio.Lock()
 

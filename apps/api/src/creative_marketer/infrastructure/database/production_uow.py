@@ -5,7 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction, async_sessionmaker
 
 from creative_marketer.audit.application import AuditWriter
-from creative_marketer.events.application import OutboxWriter
+from creative_marketer.events.application import IdempotentOutboxWriter
 from creative_marketer.production.service import ProductionRepository, ProductionUnitOfWork
 
 from .audit import PostgresAuditWriter
@@ -16,7 +16,7 @@ from .production_repositories import SqlAlchemyProductionRepository
 class SqlAlchemyProductionUnitOfWork:
     production: ProductionRepository
     audit: AuditWriter
-    outbox: OutboxWriter
+    outbox: IdempotentOutboxWriter
 
     def __init__(self, factory: async_sessionmaker[AsyncSession], tenant_id: UUID) -> None:
         self._factory, self._tenant_id = factory, tenant_id

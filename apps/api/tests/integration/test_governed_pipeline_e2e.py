@@ -525,8 +525,14 @@ async def _complete_approved_concept_to_final(
             locator,
             expected_action=PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
         )
+        duplicate_restart = await executor.execute(
+            context,
+            locator,
+            expected_action=PipelineAction.RESTART_READY_MEDIA_WORKFLOW,
+        )
         assert restarted.provider_execution_occurred is False
         assert restarted.resource_id == review.production_plan_id
+        assert duplicate_restart.resource_id == review.production_plan_id
         async with inspection_sessions.begin() as session:
             assert (
                 await session.scalar(

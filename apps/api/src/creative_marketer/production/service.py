@@ -12,7 +12,7 @@ from creative_marketer.audit.application import AuditWriter
 from creative_marketer.audit.builders import tenant_audit
 from creative_marketer.audit.domain import AuditOutcome
 from creative_marketer.audit.safety import safe_metadata
-from creative_marketer.events.application import OutboxWriter
+from creative_marketer.events.application import IdempotentOutboxWriter
 from creative_marketer.events.contracts import EventContractRegistry
 from creative_marketer.events.domain import tenant_event
 from creative_marketer.identity.application.authentication import ExecutionContext
@@ -66,13 +66,12 @@ class ProductionRepository(Protocol):
     async def retry_unknown_media_jobs(
         self, plan_id: UUID, job_ids: tuple[UUID, ...]
     ) -> tuple[GenerationJob, ...]: ...
-    async def workflow_restart_requested(self, plan_id: UUID, transition_id: UUID) -> bool: ...
 
 
 class ProductionUnitOfWork(Protocol):
     production: ProductionRepository
     audit: AuditWriter
-    outbox: OutboxWriter
+    outbox: IdempotentOutboxWriter
 
     async def __aenter__(self) -> ProductionUnitOfWork: ...
     async def __aexit__(
@@ -611,10 +610,8 @@ class ProductionService:
                 if route.capabilities.media_kind is not job.kind:
                     raise ProductionPricingChanged("approved media route kind changed")
             await uow.production.validate_spend_cap_retry(plan)
-            if await uow.production.workflow_restart_requested(plan_id, transition_id):
-                return ready
             event_type = "production.media.workflow_restart_requested.v1"
-            await uow.outbox.append(
+            event_inserted = await uow.outbox.append_idempotent(
                 tenant_event(
                     context,
                     event_type=event_type,
@@ -633,25 +630,26 @@ class ProductionService:
                     event_id=transition_id,
                 )
             )
-            await uow.audit.append(
-                tenant_audit(
-                    context,
-                    action="production.media.ready_workflow_redispatched",
-                    outcome=AuditOutcome.SUCCESS,
-                    reason_code="TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
-                    resource_type="production_plan",
-                    resource_id=str(plan.id),
-                    agent_run_id=plan.agent_run_id,
-                    metadata=safe_metadata(
-                        {
-                            "generation_job_ids": [str(job.id) for job in ready],
-                            "provider_execution_occurred": False,
-                            "jobs_created": 0,
-                            "reservations_created": 0,
-                        }
-                    ),
+            if event_inserted:
+                await uow.audit.append(
+                    tenant_audit(
+                        context,
+                        action="production.media.ready_workflow_redispatched",
+                        outcome=AuditOutcome.SUCCESS,
+                        reason_code="TERMINAL_OR_MISSING_WORKFLOW_WITH_READY_JOBS",
+                        resource_type="production_plan",
+                        resource_id=str(plan.id),
+                        agent_run_id=plan.agent_run_id,
+                        metadata=safe_metadata(
+                            {
+                                "generation_job_ids": [str(job.id) for job in ready],
+                                "provider_execution_occurred": False,
+                                "jobs_created": 0,
+                                "reservations_created": 0,
+                            }
+                        ),
+                    )
                 )
-            )
             await uow.commit()
             return ready
 

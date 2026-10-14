@@ -99,6 +99,28 @@ class PostgresOutboxWriter:
             )
         )
 
+    async def append_idempotent(self, event: DomainEvent) -> bool:
+        """Insert one deterministic transition event using INSERT-only privileges."""
+
+        self._contracts.validate_event(event)
+        now = event.occurred_at
+        trace_context = capture_trace_context()
+        result = await self._session.execute(
+            pg_insert(outbox_events)
+            .values(
+                **_event_values(event),
+                traceparent=trace_context.traceparent if trace_context else None,
+                tracestate=trace_context.tracestate if trace_context else None,
+                publication_state="PENDING",
+                attempt_count=0,
+                next_attempt_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+            .on_conflict_do_nothing(index_elements=["event_id"])
+        )
+        return cast(CursorResult[Any], result).rowcount == 1
+
 
 class PostgresPublisherStore:
     def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:

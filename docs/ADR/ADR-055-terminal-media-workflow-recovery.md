@@ -42,8 +42,10 @@ boundary. Automatic retry would therefore risk duplicate paid generation.
   reloads the complete persisted job set and uses the same recovery-only Temporal start. The event ID
   is the deterministic transition ID bound to the terminal Temporal execution reference, the
   ProductionPlan row serializes concurrent requests, and the Temporal conflict policy rejects a
-  second active workflow. Repeated requests for the same terminal execution collapse to one event;
-  a genuinely later terminal execution receives a distinct transition identity.
+  second active workflow. Repeated requests for the same terminal execution use an INSERT-only,
+  conflict-safe Outbox append and collapse to one event without granting the tenant runtime read
+  access to cross-tenant delivery tables; a genuinely later terminal execution receives a distinct
+  transition identity.
 - A spend-cap denial on a READY retry that retains historical unknown exposure returns the bounded
   `LIVE_E2E_SPEND_CAP_REACHED_WITH_PRESERVED_UNKNOWN_COST` result. It does not attempt the ordinary
   zero-unknown-cost `BLOCKED_SPEND_CAP` transition and therefore cannot mask the real cap failure.
