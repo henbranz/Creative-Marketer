@@ -360,6 +360,8 @@ class SqlAlchemyAssemblyRepository:
                 render_profile_version=plan.render_profile.version,
                 timeline_duration_ms=plan.timeline_duration_ms,
                 semantic_digest=plan.semantic_digest,
+                revision=plan.revision,
+                rerender_of_final_creative_id=plan.rerender_of_final_creative_id,
                 created_by_user_id=plan.created_by_user_id,
                 created_at=plan.created_at,
             )
@@ -445,7 +447,7 @@ class SqlAlchemyAssemblyRepository:
                 await self._session.execute(
                     select(assembly_plans)
                     .where(assembly_plans.c.production_plan_id == production_plan_id)
-                    .order_by(assembly_plans.c.created_at.desc())
+                    .order_by(assembly_plans.c.revision.desc(), assembly_plans.c.created_at.desc())
                 )
             ).mappings()
         )
@@ -550,6 +552,8 @@ class SqlAlchemyAssemblyRepository:
             row["semantic_digest"],
             row["created_by_user_id"],
             id=row["id"],
+            revision=row["revision"],
+            rerender_of_final_creative_id=row["rerender_of_final_creative_id"],
             schema_version=row["schema_version"],
             render_profile=RenderProfile(),
             created_at=row["created_at"],

@@ -158,6 +158,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src tests
+      - name: Install FFmpeg for motion-preservation regression
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y ffmpeg
       - run: uv run pytest
       - run: PGPASSWORD=creative_marketer_migrator psql -h localhost -U creative_marketer_migrator -d creative_marketer -f tests/migration/prepare_lossy_downgrade.sql
       - name: Verify lossy identity downgrade fails closed

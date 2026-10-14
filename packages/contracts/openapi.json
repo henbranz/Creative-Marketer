@@ -703,6 +703,22 @@
             "title": "Render Profile Version",
             "type": "integer"
           },
+          "rerender_of_final_creative_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerender Of Final Creative Id"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
           "semantic_digest": {
             "title": "Semantic Digest",
             "type": "string"
@@ -715,6 +731,8 @@
         "required": [
           "id",
           "production_plan_id",
+          "revision",
+          "rerender_of_final_creative_id",
           "semantic_digest",
           "render_profile_key",
           "render_profile_version",
@@ -4404,6 +4422,7 @@
           "RECOVER_ASSEMBLY_FAILURE",
           "RECOVER_ASSEMBLY_INVARIANT",
           "REVIEW_FINAL_CREATIVE",
+          "RERENDER_FINAL_CREATIVE",
           "RECOVER_REJECTED_FINAL_CREATIVE",
           "FINAL_CREATIVE_READY"
         ],
@@ -6500,6 +6519,19 @@
         },
         "required": ["key", "state", "message", "required", "resource_ref"],
         "title": "RequirementResponse",
+        "type": "object"
+      },
+      "RerenderWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "approval": {
+            "const": "I_APPROVE_RERENDER_FINAL_CREATIVE",
+            "title": "Approval",
+            "type": "string"
+          }
+        },
+        "required": ["approval"],
+        "title": "RerenderWrite",
         "type": "object"
       },
       "ResearchCategory": {
@@ -11350,6 +11382,107 @@
           }
         },
         "summary": "Reject",
+        "tags": ["assembly"]
+      }
+    },
+    "/v1/final-creatives/{final_id}/rerender": {
+      "post": {
+        "operationId": "rerender_v1_final_creatives__final_id__rerender_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "final_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Final Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Tenant-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Tenant-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Correlation-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Correlation-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerenderWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssemblyPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerender",
         "tags": ["assembly"]
       }
     },

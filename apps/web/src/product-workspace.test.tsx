@@ -10,10 +10,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   catalogApi,
   type AgentRun,
+  type AssemblyPlan,
   type Asset,
   type CommerceWorkspace,
   type CreativeConceptSet,
   type IntelligenceReport,
+  type FinalCreative,
   type ProductionJob,
   type ProductionPlan,
   type PublicationDraft,
@@ -925,6 +927,71 @@ const productionJobs: ProductionJob[] = [
   },
 ];
 
+const assemblyPlan: AssemblyPlan = {
+  id: "a3100000-0000-0000-0000-000000000001",
+  production_plan_id: productionPlan.id,
+  revision: 1,
+  rerender_of_final_creative_id: null,
+  semantic_digest: `sha256:${"8".repeat(64)}`,
+  render_profile_key: "social_vertical_v1",
+  render_profile_version: 1,
+  timeline_duration_ms: 5000,
+  items: [
+    {
+      item_key: "item_1",
+      ordinal: 1,
+      source_kind: "GENERATED_VIDEO",
+      source_asset_id: readyAsset.id,
+      source_media_kind: "VIDEO",
+      production_shot_ids: [productionPlan.scenes[0]!.shots[0]!.id],
+      production_shot_keys: ["shot_one"],
+      generation_segment_id: productionPlan.generation_segments[0]!.id,
+      timeline_start_ms: 0,
+      timeline_duration_ms: 5000,
+      fit_mode: "CROP_FILL",
+      audio_behavior: "KEEP",
+      transition_in: "CUT",
+      transition_out: "CUT",
+    },
+  ],
+  captions: [],
+  overlays: [],
+  job: {
+    id: "a3200000-0000-0000-0000-000000000001",
+    assembly_plan_id: "a3100000-0000-0000-0000-000000000001",
+    status: "SUCCEEDED",
+    failure_code: null,
+    output_asset_id: readyAsset.id,
+    final_creative_id: "a3300000-0000-0000-0000-000000000001",
+    renderer: "ffmpeg",
+    renderer_version: "assembly-motion-v2+ffmpeg-7.1.5",
+    updated_at: product.updated_at,
+  },
+  created_at: product.created_at,
+};
+
+const finalCreative: FinalCreative = {
+  id: assemblyPlan.job.final_creative_id!,
+  product_id: product.id,
+  assembly_plan_id: assemblyPlan.id,
+  production_plan_id: productionPlan.id,
+  creative_concept_id: productionPlan.concept_id,
+  output_asset_id: readyAsset.id,
+  semantic_digest: `sha256:${"7".repeat(64)}`,
+  duration_ms: 5000,
+  width: 1080,
+  height: 1920,
+  fps: 24,
+  has_audio: true,
+  source_count: 1,
+  render_profile_key: "social_vertical_v1",
+  render_profile_version: 1,
+  renderer: "ffmpeg",
+  renderer_version: "assembly-motion-v2+ffmpeg-7.1.5",
+  decision_state: null,
+  created_at: product.created_at,
+};
+
 function mocks() {
   vi.spyOn(catalogApi, "listBrands").mockResolvedValue([brand]);
   vi.spyOn(catalogApi, "listProducts").mockResolvedValue([product]);
@@ -1007,6 +1074,21 @@ function mocks() {
     sources: [],
   });
   vi.spyOn(catalogApi, "listAssemblyPlans").mockResolvedValue([]);
+  vi.spyOn(catalogApi, "getFinalCreative").mockResolvedValue(finalCreative);
+  vi.spyOn(catalogApi, "rerenderFinalCreative").mockResolvedValue({
+    ...assemblyPlan,
+    id: "a3100000-0000-0000-0000-000000000002",
+    revision: 2,
+    rerender_of_final_creative_id: finalCreative.id,
+  });
+  vi.spyOn(catalogApi, "approveFinalCreative").mockResolvedValue({
+    ...finalCreative,
+    decision_state: "APPROVED_FOR_PUBLISHING",
+  });
+  vi.spyOn(catalogApi, "rejectFinalCreative").mockResolvedValue({
+    ...finalCreative,
+    decision_state: "REJECTED",
+  });
   vi.spyOn(catalogApi, "listSocialAccounts").mockResolvedValue([socialAccount]);
   vi.spyOn(catalogApi, "listPublicationDrafts").mockResolvedValue([]);
   vi.spyOn(catalogApi, "listPublications").mockResolvedValue([]);
@@ -1699,6 +1781,59 @@ describe("Product Workspace", () => {
       expect(catalogApi.approveProductionPlan).toHaveBeenCalledWith(
         expect.anything(),
         productionPlan.id,
+      ),
+    );
+  });
+
+  it("shows immutable assembly provenance and requests providerless rerender", async () => {
+    vi.mocked(catalogApi.listCreativeConceptSets).mockResolvedValue([
+      {
+        ...creativeSet,
+        concepts: [
+          {
+            ...creativeSet.concepts[0]!,
+            decision_state: "APPROVED_FOR_PRODUCTION",
+          },
+        ],
+      },
+    ]);
+    vi.mocked(catalogApi.listProductionPlans).mockResolvedValue([
+      productionPlan,
+    ]);
+    vi.mocked(catalogApi.listProductionJobs).mockResolvedValue(
+      productionJobs.map((job) => ({
+        ...job,
+        status: "SUCCEEDED",
+        failure_code: null,
+        output_asset_id: readyAsset.id,
+      })),
+    );
+    vi.mocked(catalogApi.getAssemblyReadiness).mockResolvedValue({
+      status: "READY",
+      ready: true,
+      sources: [],
+    });
+    vi.mocked(catalogApi.listAssemblyPlans).mockResolvedValue([assemblyPlan]);
+
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Production" }));
+
+    expect(
+      await screen.findByText(/Assembly revision 1 · Renderer/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText(readyAsset.id).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "Re-rendering uses the existing generated media and does not call image/video providers.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Re-render assembly" }));
+    await waitFor(() =>
+      expect(catalogApi.rerenderFinalCreative).toHaveBeenCalledWith(
+        expect.anything(),
+        finalCreative.id,
       ),
     );
   });

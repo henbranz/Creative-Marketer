@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from types import TracebackType
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from creative_marketer.agent_runtime.domain import canonical_digest
 from creative_marketer.audit.application import AuditWriter
@@ -482,6 +483,94 @@ class AssemblyService:
             if value is None:
                 raise AssemblyNotFound("FinalCreative not found")
             return value
+
+    async def rerender_final(self, context: ExecutionContext, final_id: UUID) -> AssemblyPlanRecord:
+        """Create one immutable assembly revision from an existing FinalCreative's sources."""
+        self._require_mutation(context)
+        async with self.uow_factory(context.tenant_id) as uow:
+            final_record = await uow.assembly.get_final(final_id, for_update=True)
+            if final_record is None:
+                raise AssemblyNotFound("FinalCreative not found")
+            final = final_record.final_creative
+            records = await uow.assembly.list_plans(final.production_plan_id)
+            original = next(
+                (record for record in records if record.plan.id == final.assembly_plan_id), None
+            )
+            if original is None:
+                raise AssemblyNotFound("FinalCreative AssemblyPlan not found")
+            existing = next(
+                (
+                    record
+                    for record in records
+                    if record.plan.rerender_of_final_creative_id == final.id
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+
+            source = await uow.assembly.production_input(final.production_plan_id)
+            if source is None:
+                raise AssemblyNotFound("ProductionPlan not found")
+            current = build_assembly_plan(source, context.user_id)
+            if current.semantic_digest != original.plan.semantic_digest:
+                raise AssemblyNotReady("assembly sources are no longer current")
+
+            revision = max(record.plan.revision for record in records) + 1
+            plan = replace(
+                original.plan,
+                id=uuid4(),
+                revision=revision,
+                rerender_of_final_creative_id=final.id,
+                created_by_user_id=context.user_id,
+                created_at=datetime.now(UTC),
+            )
+            job = AssemblyJob(
+                context.tenant_id,
+                plan.id,
+                f"{context.tenant_id}:{final.id}:assembly-motion-v2",
+                context.user_id,
+            )
+            await uow.assembly.add_plan(plan, job)
+            await uow.audit.append(
+                tenant_audit(
+                    context,
+                    action="assembly.rerender.requested",
+                    outcome=AuditOutcome.SUCCESS,
+                    resource_type="assembly_plan",
+                    resource_id=str(plan.id),
+                    before_digest=final.semantic_digest,
+                    after_digest=plan.semantic_digest,
+                    metadata=safe_metadata(
+                        {
+                            "final_creative_id": str(final.id),
+                            "production_plan_id": str(final.production_plan_id),
+                            "revision": revision,
+                            "provider_execution": False,
+                        }
+                    ),
+                )
+            )
+            await uow.outbox.append(
+                tenant_event(
+                    context,
+                    event_type="assembly.plan.created.v1",
+                    schema_version=1,
+                    aggregate_type="assembly_plan",
+                    aggregate_id=plan.id,
+                    payload={
+                        "assembly_plan_id": str(plan.id),
+                        "assembly_job_id": str(job.id),
+                        "assembly_plan_digest": plan.semantic_digest,
+                    },
+                    payload_schema_digest=EventContractRegistry().schema_digest(
+                        "assembly.plan.created.v1"
+                    ),
+                    occurred_at=plan.created_at,
+                )
+            )
+            await uow.commit()
+            return AssemblyPlanRecord(plan, job)
 
     async def decide_final(
         self,

@@ -5,10 +5,12 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
 from creative_marketer.assembly.domain import (
+    AssemblyNormalizedClipInvalid,
     AssemblyOutputInvalid,
     AssemblyPlan,
     AssemblyRenderFailed,
@@ -17,6 +19,20 @@ from creative_marketer.assembly.domain import (
     OverlayStyle,
 )
 from creative_marketer.assembly.rendering import MaterializedSource, RenderResult
+
+
+@dataclass(frozen=True, slots=True)
+class VideoProbe:
+    codec: str
+    pixel_format: str
+    width: int
+    height: int
+    avg_frame_rate: str
+    real_frame_rate: str
+    time_base: str
+    start_time: float
+    duration_ms: int
+    frame_count: int | None
 
 
 class FFmpegAssemblyRenderer:
@@ -110,12 +126,15 @@ class FFmpegAssemblyRenderer:
                 item.fit_mode, plan.render_profile.width, plan.render_profile.height
             )
             video_filter = (
-                f"{fit},fps={plan.render_profile.fps},format={plan.render_profile.pixel_format}"
+                f"setpts=PTS-STARTPTS,{fit},fps={plan.render_profile.fps},"
+                f"format={plan.render_profile.pixel_format}"
             )
             args = [self.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
             if source.media_kind == "IMAGE":
                 args += ["-loop", "1", "-i", str(source_path)]
             else:
+                if item.source_in_ms:
+                    args += ["-ss", f"{item.source_in_ms / 1000:.3f}"]
                 args += ["-i", str(source_path)]
             if any_audio and not source.has_audio:
                 args += ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
@@ -133,13 +152,13 @@ class FFmpegAssemblyRenderer:
                 "-pix_fmt",
                 "yuv420p",
                 "-r",
-                "24",
+                str(plan.render_profile.fps),
             ]
             if any_audio:
                 if source.has_audio:
                     args += [
                         "-af",
-                        "aresample=48000:async=1:first_pts=0,apad",
+                        "asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,apad",
                         "-map",
                         "0:v:0",
                         "-map",
@@ -152,34 +171,55 @@ class FFmpegAssemblyRenderer:
                 args += ["-an"]
             args += ["-movflags", "+faststart", str(clip)]
             await self._run(tuple(args), timeout=self._timeout(plan.timeline_duration_ms))
-        concat = root / "concat.txt"
-        concat.write_text(
-            "".join(f"file 'clip-{index:03d}.mp4'\n" for index in range(len(clips))),
-            encoding="utf-8",
-        )
+            if source.media_kind == "VIDEO":
+                await self._validate_video_clip(
+                    clip,
+                    expected_duration_ms=item.timeline_duration_ms,
+                    width=plan.render_profile.width,
+                    height=plan.render_profile.height,
+                    fps=plan.render_profile.fps,
+                )
         joined = root / "joined.mp4"
-        await self._run(
-            (
-                self.ffmpeg,
-                "-nostdin",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-protocol_whitelist",
-                "file,pipe",
-                "-f",
-                "concat",
-                "-safe",
-                "1",
-                "-i",
-                str(concat),
-                "-c",
-                "copy",
-                str(joined),
-            ),
-            timeout=self._timeout(plan.timeline_duration_ms),
-        )
+        join_args = [self.ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+        for clip in clips:
+            join_args += ["-i", str(clip)]
+        if any_audio:
+            inputs = "".join(
+                f"[{index}:v:0]setpts=PTS-STARTPTS[v{index}];"
+                f"[{index}:a:0]asetpts=PTS-STARTPTS[a{index}];"
+                for index in range(len(clips))
+            )
+            pads = "".join(f"[v{index}][a{index}]" for index in range(len(clips)))
+            graph = f"{inputs}{pads}concat=n={len(clips)}:v=1:a=1[outv][outa]"
+            maps = ["-map", "[outv]", "-map", "[outa]"]
+        else:
+            inputs = "".join(
+                f"[{index}:v:0]setpts=PTS-STARTPTS[v{index}];" for index in range(len(clips))
+            )
+            pads = "".join(f"[v{index}]" for index in range(len(clips)))
+            graph = f"{inputs}{pads}concat=n={len(clips)}:v=1:a=0[outv]"
+            maps = ["-map", "[outv]"]
+        join_args += [
+            "-filter_complex",
+            graph,
+            *maps,
+            "-c:v",
+            "libx264",
+            "-preset",
+            self.encoding_preset,
+            "-crf",
+            "18",
+            "-pix_fmt",
+            plan.render_profile.pixel_format,
+            "-r",
+            str(plan.render_profile.fps),
+        ]
+        if any_audio:
+            join_args += ["-c:a", "aac", "-ar", "48000", "-ac", "2"]
+        else:
+            join_args += ["-an"]
+        join_args += ["-movflags", "+faststart", str(joined)]
+        await self._run(tuple(join_args), timeout=self._timeout(plan.timeline_duration_ms))
         final = root / "final.mp4"
         ass = root / "overlays.ass"
         self._write_ass(plan, ass)
@@ -214,7 +254,7 @@ class FFmpegAssemblyRenderer:
             args += ["-an"]
         args += ["-movflags", "+faststart", str(final)]
         await self._run(tuple(args), timeout=self._timeout(plan.timeline_duration_ms))
-        return await self._inspect(final, plan, version, any_audio)
+        return await self._inspect(final, plan, f"assembly-motion-v2+ffmpeg-{version}", any_audio)
 
     async def _render_fake_placeholders(
         self,
@@ -364,7 +404,97 @@ class FFmpegAssemblyRenderer:
             ),
             timeout=self._timeout(plan.timeline_duration_ms),
         )
-        return await self._inspect(final, plan, version, False)
+        return await self._inspect(final, plan, f"fake-placeholder-v1+ffmpeg-{version}", False)
+
+    async def _validate_video_clip(
+        self,
+        path: Path,
+        *,
+        expected_duration_ms: int,
+        width: int,
+        height: int,
+        fps: int,
+    ) -> None:
+        probe = await self._probe_video(path)
+        checks = (
+            (probe.codec == "h264", "codec"),
+            (probe.pixel_format == "yuv420p", "pixel_format"),
+            ((probe.width, probe.height) == (width, height), "dimensions"),
+            (abs(self._rate(probe.avg_frame_rate) - fps) < 0.01, "average_frame_rate"),
+            (abs(self._rate(probe.real_frame_rate) - fps) < 0.01, "real_frame_rate"),
+            (abs(probe.start_time) <= 0.05, "start_time"),
+            (abs(probe.duration_ms - expected_duration_ms) <= 250, "duration"),
+            (probe.frame_count is not None and probe.frame_count > 1, "frame_count"),
+        )
+        failure = next((name for valid, name in checks if not valid), None)
+        if failure is not None:
+            # Only bounded stream metadata is surfaced; paths and media content stay private.
+            diagnostic = json.dumps(
+                {
+                    "field": failure,
+                    "codec": probe.codec[:16],
+                    "pixel_format": probe.pixel_format[:16],
+                    "dimensions": [probe.width, probe.height],
+                    "avg_frame_rate": probe.avg_frame_rate[:24],
+                    "r_frame_rate": probe.real_frame_rate[:24],
+                    "time_base": probe.time_base[:24],
+                    "start_time": round(probe.start_time, 6),
+                    "duration_ms": probe.duration_ms,
+                    "frame_count": probe.frame_count,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            raise AssemblyNormalizedClipInvalid(diagnostic)
+
+    async def _probe_video(self, path: Path) -> VideoProbe:
+        raw = await self._run(
+            (
+                self.ffprobe,
+                "-v",
+                "error",
+                "-count_frames",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                (
+                    "stream=codec_name,pix_fmt,width,height,avg_frame_rate,r_frame_rate,"
+                    "time_base,start_time,duration,nb_frames,nb_read_frames:format=duration"
+                ),
+                "-of",
+                "json",
+                str(path),
+            ),
+            timeout=20,
+        )
+        try:
+            value = json.loads(raw)
+            stream = value["streams"][0]
+            duration = stream.get("duration") or value["format"]["duration"]
+            raw_frames = stream.get("nb_read_frames") or stream.get("nb_frames")
+            frame_count = None if raw_frames in {None, "N/A"} else int(raw_frames)
+            return VideoProbe(
+                codec=str(stream["codec_name"]),
+                pixel_format=str(stream["pix_fmt"]),
+                width=int(stream["width"]),
+                height=int(stream["height"]),
+                avg_frame_rate=str(stream["avg_frame_rate"]),
+                real_frame_rate=str(stream["r_frame_rate"]),
+                time_base=str(stream["time_base"]),
+                start_time=float(stream.get("start_time", 0)),
+                duration_ms=round(float(duration) * 1000),
+                frame_count=frame_count,
+            )
+        except (KeyError, ValueError, TypeError, IndexError) as error:
+            raise AssemblyNormalizedClipInvalid("probe") from error
+
+    @staticmethod
+    def _rate(value: str) -> float:
+        try:
+            numerator, denominator = value.split("/", 1)
+            return int(numerator) / int(denominator)
+        except (ValueError, ZeroDivisionError) as error:
+            raise AssemblyNormalizedClipInvalid("frame_rate") from error
 
     def _fit_filter(self, mode: FitMode, width: int, height: int) -> str:
         if mode is FitMode.CROP_FILL:

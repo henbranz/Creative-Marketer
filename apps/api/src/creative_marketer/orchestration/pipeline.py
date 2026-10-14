@@ -150,6 +150,7 @@ class PipelineAction(StrEnum):
     RECOVER_ASSEMBLY_FAILURE = "RECOVER_ASSEMBLY_FAILURE"
     RECOVER_ASSEMBLY_INVARIANT = "RECOVER_ASSEMBLY_INVARIANT"
     REVIEW_FINAL_CREATIVE = "REVIEW_FINAL_CREATIVE"
+    RERENDER_FINAL_CREATIVE = "RERENDER_FINAL_CREATIVE"
     RECOVER_REJECTED_FINAL_CREATIVE = "RECOVER_REJECTED_FINAL_CREATIVE"
     FINAL_CREATIVE_READY = "FINAL_CREATIVE_READY"
 
@@ -494,6 +495,13 @@ _EXECUTION_BEHAVIOR_REGISTRY: dict[PipelineAction, PipelineActionExecution] = {
         "POST /v1/final-creatives/{final_creative_id}/approve-publishing|reject",
         explicit_approval_required=True,
         resulting_states=("FinalCreative:APPROVED", "FinalCreative:REJECTED"),
+    ),
+    PipelineAction.RERENDER_FINAL_CREATIVE: _execution(
+        PipelineExecutionBehavior.EXECUTE,
+        "rerender_final_creative",
+        "POST /v1/final-creatives/{final_creative_id}/rerender",
+        explicit_approval_required=True,
+        resulting_states=("Assembly:RUNNING", "FinalCreative:NOT_STARTED"),
     ),
     PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE: _execution(
         PipelineExecutionBehavior.RECOVERY_GATE,
@@ -943,7 +951,7 @@ class PipelineStateResolver:
             ),
             FinalCreativePipelineState.REJECTED: (
                 PipelineStage.ASSEMBLY_RECOVERY,
-                PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE,
+                PipelineAction.RERENDER_FINAL_CREATIVE,
                 "FINAL_CREATIVE_REJECTED",
             ),
             FinalCreativePipelineState.APPROVED: (

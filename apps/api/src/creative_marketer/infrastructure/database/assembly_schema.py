@@ -31,6 +31,8 @@ assembly_plans = _table(
     Column("render_profile_version", Integer, nullable=False),
     Column("timeline_duration_ms", BigInteger, nullable=False),
     Column("semantic_digest", String(71), nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("rerender_of_final_creative_id", UUID(as_uuid=True)),
     Column("created_by_user_id", UUID(as_uuid=True), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )

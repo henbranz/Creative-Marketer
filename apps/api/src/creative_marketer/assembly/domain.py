@@ -51,6 +51,10 @@ class AssemblyOutputInvalid(AssemblyError):
     code = "ASSEMBLY_OUTPUT_INVALID"
 
 
+class AssemblyNormalizedClipInvalid(AssemblyOutputInvalid):
+    code = "ASSEMBLY_NORMALIZED_CLIP_INVALID"
+
+
 class AssemblyReadiness(StrEnum):
     READY = "READY"
     MISSING_GENERATED_MEDIA = "MISSING_GENERATED_MEDIA"
@@ -305,11 +309,17 @@ class AssemblyPlan:
     semantic_digest: str
     created_by_user_id: UUID
     id: UUID = field(default_factory=uuid4)
+    revision: int = 1
+    rerender_of_final_creative_id: UUID | None = None
     schema_version: int = 1
     render_profile: RenderProfile = field(default_factory=RenderProfile)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:
+        if self.revision < 1 or (self.revision == 1) != (
+            self.rerender_of_final_creative_id is None
+        ):
+            raise AssemblyInvalidTimeline("assembly revision provenance is invalid")
         if not self.items or [item.ordinal for item in self.items] != list(
             range(1, len(self.items) + 1)
         ):

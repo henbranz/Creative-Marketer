@@ -259,8 +259,8 @@ services:
       OBJECT_STORAGE_SECRET_ACCESS_KEY: ${OBJECT_STORAGE_SECRET_ACCESS_KEY:-creative-marketer-local-secret}
       TEMPORAL_ADDRESS: temporal:7233
       ASSEMBLY_WORKLOAD_ID: local-assembly-worker
-      MEDIA_IMAGE_PROVIDER: fake
-      MEDIA_VIDEO_PROVIDER: fake
+      MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}
+      MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}
       ALLOW_BILLABLE_MEDIA: "false"
     depends_on:
       migrate:

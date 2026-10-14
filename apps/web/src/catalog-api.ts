@@ -138,6 +138,8 @@ export interface AssemblyJob {
 export interface AssemblyPlan {
   id: string;
   production_plan_id: string;
+  revision: number;
+  rerender_of_final_creative_id: string | null;
   semantic_digest: string;
   render_profile_key: string;
   render_profile_version: number;
@@ -788,6 +790,11 @@ export const catalogApi = {
     request<AssemblyJob>(session, `/v1/assembly/jobs/${jobId}`),
   getFinalCreative: (session: Session, finalId: string) =>
     request<FinalCreative>(session, `/v1/final-creatives/${finalId}`),
+  rerenderFinalCreative: (session: Session, finalId: string) =>
+    request<AssemblyPlan>(session, `/v1/final-creatives/${finalId}/rerender`, {
+      method: "POST",
+      body: JSON.stringify({ approval: "I_APPROVE_RERENDER_FINAL_CREATIVE" }),
+    }),
   approveFinalCreative: (session: Session, finalId: string) =>
     request<FinalCreative>(
       session,

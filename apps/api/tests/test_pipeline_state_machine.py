@@ -389,7 +389,7 @@ def test_assembly_transition_matrix_covers_every_declared_state() -> None:
         ),
         (
             FinalCreativePipelineState.REJECTED,
-            PipelineAction.RECOVER_REJECTED_FINAL_CREATIVE,
+            PipelineAction.RERENDER_FINAL_CREATIVE,
         ),
         (FinalCreativePipelineState.APPROVED, PipelineAction.FINAL_CREATIVE_READY),
     ],

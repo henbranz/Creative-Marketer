@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from creative_marketer.agent_runtime.domain import canonical_digest
 from creative_marketer.assembly.application import (
     AssemblySceneInput,
     AssemblySegmentInput,
@@ -25,11 +26,14 @@ from creative_marketer.assembly.application import (
 )
 from creative_marketer.assembly.domain import (
     AssemblyInvalidTimeline,
+    AssemblyItem,
     AssemblyJob,
     AssemblyJobStatus,
     AssemblyNotFound,
     AssemblyNotReady,
+    AssemblyOutputInvalid,
     AssemblyPermissionDenied,
+    AssemblyPlan,
     AssemblyReadiness,
     AssemblyRenderFailed,
     AssemblyRenderTimeout,
@@ -42,10 +46,11 @@ from creative_marketer.assembly.domain import (
     OverlayInstruction,
     OverlayStyle,
     RenderProfile,
+    SourceKind,
     Transition,
     final_creative_digest,
 )
-from creative_marketer.assembly.infrastructure.ffmpeg import FFmpegAssemblyRenderer
+from creative_marketer.assembly.infrastructure.ffmpeg import FFmpegAssemblyRenderer, VideoProbe
 from creative_marketer.assembly.rendering import MaterializedSource, RenderResult
 from creative_marketer.identity.domain import MembershipRole
 from creative_marketer.workflow_orchestration.contracts import (
@@ -55,6 +60,35 @@ from creative_marketer.workflow_orchestration.contracts import (
 from tests.integration.test_catalog import owner_context
 
 DIGEST = "sha256:" + "a" * 64
+
+
+def rebuild_plan(plan: AssemblyPlan, items: tuple[AssemblyItem, ...]) -> AssemblyPlan:
+    semantic = {
+        "schema_version": plan.schema_version,
+        "production_plan_digest": plan.production_plan_digest,
+        "creative_concept_digest": plan.creative_concept_digest,
+        "render_profile": plan.render_profile.primitive(),
+        "timeline_duration_ms": sum(item.timeline_duration_ms for item in items),
+        "items": [item.primitive() for item in items],
+        "captions": [cue.primitive() for cue in plan.captions],
+        "overlays": [item.primitive() for item in plan.overlays],
+        "audio_policy": {"version": 1, "source_audio": "KEEP", "silent_allowed": True},
+    }
+    return AssemblyPlan(
+        plan.tenant_id,
+        plan.product_id,
+        plan.production_plan_id,
+        plan.production_plan_digest,
+        plan.creative_concept_id,
+        plan.creative_concept_digest,
+        items,
+        plan.captions,
+        plan.overlays,
+        semantic["timeline_duration_ms"],
+        canonical_digest(semantic),
+        plan.created_by_user_id,
+        render_profile=plan.render_profile,
+    )
 
 
 def candidate(
@@ -372,7 +406,8 @@ async def test_ffmpeg_mixed_media_unicode_audio_render_is_browser_playable(
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         pytest.skip("FFmpeg integration binaries are unavailable")
     image = tmp_path / "source.png"
-    video = tmp_path / "source.mp4"
+    video_a = tmp_path / "source-a.mp4"
+    video_b = tmp_path / "source-b.mp4"
     subprocess.run(
         [
             "ffmpeg",
@@ -402,47 +437,127 @@ async def test_ffmpeg_mixed_media_unicode_audio_render_is_browser_playable(
             "-f",
             "lavfi",
             "-i",
-            "color=c=orange:s=320x240:r=24",
+            "testsrc2=s=320x240:r=30",
             "-f",
             "lavfi",
             "-i",
             "sine=frequency=440:sample_rate=48000",
             "-t",
             "2.5",
+            "-output_ts_offset",
+            "5",
             "-c:v",
             "libx264",
             "-pix_fmt",
             "yuv420p",
             "-c:a",
             "aac",
-            str(video),
+            str(video_a),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=s=320x240:r=30:d=2.5",
+            "-vf",
+            "select=not(mod(n\\,3))",
+            "-fps_mode",
+            "vfr",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            str(video_b),
         ],
         check=True,
     )
     source = production_input(manual=candidate())
     image_candidate = candidate(media_kind="image")
-    source = replace(
-        source,
-        segments=(replace(source.segments[0], media_kind="IMAGE", output=image_candidate),),
-    )
     plan = build_assembly_plan(source, uuid4())
-    renderer = FFmpegAssemblyRenderer()
+    generated_source = source.segments[0].output
     manual_source = source.scenes[1].shots[0].manual_source
-    assert manual_source is not None
+    assert generated_source is not None and manual_source is not None
+    first = replace(plan.items[0], timeline_duration_ms=2000, source_out_ms=2000)
+    middle = replace(
+        plan.items[1],
+        source_kind=SourceKind.GENERATED_IMAGE,
+        source_asset_id=image_candidate.asset_id,
+        source_media_kind="image",
+        generation_segment_id=uuid4(),
+        timeline_start_ms=2000,
+        timeline_duration_ms=1000,
+        source_out_ms=1000,
+    )
+    third = replace(
+        plan.items[1],
+        ordinal=3,
+        item_key="item_3",
+        production_shot_ids=(uuid4(),),
+        production_shot_keys=("motion_b",),
+        timeline_start_ms=3000,
+        timeline_duration_ms=2000,
+        source_out_ms=2000,
+    )
+    plan = rebuild_plan(plan, (first, middle, third))
+    renderer = FFmpegAssemblyRenderer()
 
     result = await renderer.render(
         plan,
         (
+            MaterializedSource(str(generated_source.asset_id), str(video_a), "VIDEO", True),
             MaterializedSource(str(image_candidate.asset_id), str(image), "IMAGE", False),
-            MaterializedSource(str(manual_source.asset_id), str(video), "VIDEO", True),
+            MaterializedSource(str(manual_source.asset_id), str(video_b), "VIDEO", False),
         ),
         str(tmp_path),
     )
 
     assert (result.width, result.height, result.fps) == (1080, 1920, 24)
     assert result.has_audio and result.duration_ms == pytest.approx(5000, abs=250)
+    assert result.renderer_version.startswith("assembly-motion-v2+ffmpeg-")
     with Path(result.path).open("rb") as handle:
         assert handle.read(8)[4:8] == b"ftyp"
+
+    def hashes_at(timestamps: tuple[float, ...]) -> list[str]:
+        hashes: list[str] = []
+        for timestamp in timestamps:
+            frame = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-nostdin",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-ss",
+                    str(timestamp),
+                    "-i",
+                    result.path,
+                    "-frames:v",
+                    "1",
+                    "-f",
+                    "hash",
+                    "-hash",
+                    "sha256",
+                    "-",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            hashes.append(frame.stdout.strip())
+        return hashes
+
+    assert len(set(hashes_at((0.25, 1.0, 1.75)))) == 3
+    assert len(set(hashes_at((2.6, 2.75, 2.9)))) == 1
+    assert len(set(hashes_at((3.6, 4.1, 4.7)))) == 3
 
 
 @pytest.mark.asyncio
@@ -466,6 +581,26 @@ async def test_ffmpeg_renderer_builds_bounded_commands_and_inspects_output(
         calls.append((argv, timeout))
         if argv[0] == "ffprobe":
             if "-select_streams" in argv:
+                if "-count_frames" in argv:
+                    return json.dumps(
+                        {
+                            "streams": [
+                                {
+                                    "codec_name": "h264",
+                                    "pix_fmt": "yuv420p",
+                                    "width": 1080,
+                                    "height": 1920,
+                                    "avg_frame_rate": "24/1",
+                                    "r_frame_rate": "24/1",
+                                    "time_base": "1/12288",
+                                    "start_time": "0.000000",
+                                    "duration": "2.500000",
+                                    "nb_read_frames": "60",
+                                }
+                            ],
+                            "format": {"duration": "2.500000"},
+                        }
+                    ).encode()
                 return b'{"streams":[{"index":1}]}'
             return json.dumps(
                 {
@@ -502,8 +637,17 @@ async def test_ffmpeg_renderer_builds_bounded_commands_and_inspects_output(
         ),
         str(tmp_path),
     )
-    assert result.has_audio and result.renderer_version.startswith("7.1.5")
+    assert result.has_audio and result.renderer_version.startswith(
+        "assembly-motion-v2+ffmpeg-7.1.5"
+    )
     assert any("anullsrc=r=48000:cl=stereo" in call[0] for call in calls)
+    video_calls = [argv for argv, _ in calls if str(video) in argv]
+    assert video_calls and all("-loop" not in argv for argv in video_calls)
+    assert any(
+        "-filter_complex" in argv and any("concat=n=2" in value for value in argv)
+        for argv, _ in calls
+    )
+    assert not (tmp_path / "concat.txt").exists()
     assert "Dialogue:" in (tmp_path / "overlays.ass").read_text()
     assert renderer._fit_filter(FitMode.FIT_WITH_BACKGROUND, 1080, 1920).startswith("scale")
     assert renderer._filter_path(Path("a:b'c")).count("\\") >= 2
@@ -565,7 +709,12 @@ async def test_fake_placeholder_renderer_bakes_boundaries_and_packet_loops(tmp_p
     assert any(
         any("setpts=PTS+" in value and "ass=" in value for value in argv) for argv, _ in calls
     )
-    inspect.assert_awaited_once_with(tmp_path / "final.mp4", plan, "fake-ffmpeg", False)
+    inspect.assert_awaited_once_with(
+        tmp_path / "final.mp4",
+        plan,
+        "fake-placeholder-v1+ffmpeg-fake-ffmpeg",
+        False,
+    )
 
 
 @pytest.mark.asyncio
@@ -613,6 +762,45 @@ async def test_ffmpeg_process_boundary_maps_spawn_timeout_and_exit(monkeypatch) 
     assert process.killed
 
 
+@pytest.mark.asyncio
+async def test_normalized_video_clip_validation_is_structural_and_bounded(
+    monkeypatch,
+) -> None:
+    renderer = FFmpegAssemblyRenderer()
+    valid = VideoProbe(
+        "h264",
+        "yuv420p",
+        1080,
+        1920,
+        "24/1",
+        "24/1",
+        "1/12288",
+        0.0,
+        2500,
+        60,
+    )
+    monkeypatch.setattr(renderer, "_probe_video", AsyncMock(return_value=valid))
+    await renderer._validate_video_clip(
+        Path("bounded-local-clip.mp4"),
+        expected_duration_ms=2500,
+        width=1080,
+        height=1920,
+        fps=24,
+    )
+    monkeypatch.setattr(
+        renderer, "_probe_video", AsyncMock(return_value=replace(valid, frame_count=1))
+    )
+    with pytest.raises(AssemblyOutputInvalid, match="frame_count") as failure:
+        await renderer._validate_video_clip(
+            Path("private-name-must-not-leak.mp4"),
+            expected_duration_ms=2500,
+            width=1080,
+            height=1920,
+            fps=24,
+        )
+    assert "private-name" not in str(failure.value)
+
+
 def test_temporal_locator_contains_only_stable_ids() -> None:
     request = FinalCreativeAssemblyWorkflowInput(
         str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
@@ -655,9 +843,15 @@ class MemoryAssemblyRepository:
 
     async def list_plans(self, production_plan_id):
         return tuple(
-            record
-            for record in self.records
-            if record.plan.production_plan_id == production_plan_id
+            sorted(
+                (
+                    record
+                    for record in self.records
+                    if record.plan.production_plan_id == production_plan_id
+                ),
+                key=lambda record: record.plan.revision,
+                reverse=True,
+            )
         )
 
     async def get_plan(self, plan_id):
@@ -768,6 +962,17 @@ async def test_assembly_service_is_idempotent_audited_and_fail_closed() -> None:
 
     repository.finals[final.id] = FinalCreativeRecord(final, None)
     assert (await service.get_final(context, final.id)).final_creative == final
+    rerendered = await service.rerender_final(context, final.id)
+    assert rerendered.plan.id != created.plan.id
+    assert rerendered.plan.revision == 2
+    assert rerendered.plan.rerender_of_final_creative_id == final.id
+    assert rerendered.plan.semantic_digest == created.plan.semantic_digest
+    assert [item.source_asset_id for item in rerendered.plan.items] == [
+        item.source_asset_id for item in created.plan.items
+    ]
+    assert await service.rerender_final(context, final.id) == rerendered
+    assert len(repository.records) == 2
+    assert repository.finals[final.id].final_creative == final
     approved = await service.decide_final(
         context, final.id, FinalCreativeDecisionState.APPROVED_FOR_PUBLISHING
     )
@@ -784,4 +989,4 @@ async def test_assembly_service_is_idempotent_audited_and_fail_closed() -> None:
         await service.get_final(context, uuid4())
     with pytest.raises(AssemblyNotFound):
         await service.decide_final(context, uuid4(), FinalCreativeDecisionState.REJECTED)
-    assert len(uow.audit.records) == 5 and len(uow.outbox.events) == 2
+    assert len(uow.audit.records) == 6 and len(uow.outbox.events) == 3

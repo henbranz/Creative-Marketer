@@ -343,6 +343,24 @@ class PipelineActionExecutor:
                 replace(locator, assembly_plan_id=record.plan.id),
             )
 
+        if action is PipelineAction.RERENDER_FINAL_CREATIVE:
+            if before.final_creative_id is None:
+                raise PipelineExecutionInvariant(
+                    "Assembly rerender requires exact FinalCreative authority"
+                )
+            if self.assembly is None:
+                raise PipelineExecutionInvariant("Assembly executor is not configured")
+            record = await self.assembly.rerender_final(context, before.final_creative_id)
+            return (
+                "assembly_plan",
+                record.plan.id,
+                replace(
+                    locator,
+                    assembly_plan_id=record.plan.id,
+                    final_creative_id=None,
+                ),
+            )
+
         if action is PipelineAction.RETRY_MEDIA_AFTER_SPEND_CAP_INCREASE:
             if before.production_plan_id is None:
                 raise PipelineExecutionInvariant("media recovery requires a ProductionPlan")

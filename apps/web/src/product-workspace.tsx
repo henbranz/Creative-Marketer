@@ -2824,6 +2824,10 @@ function ProductionPanel({
             {assemblyPlans[0] && (
               <>
                 <h4>Assembly timeline</h4>
+                <p>
+                  Assembly revision {assemblyPlans[0].revision} · Renderer{" "}
+                  {assemblyPlans[0].job.renderer_version ?? "pending"}
+                </p>
                 <ol className="timeline-list">
                   {assemblyPlans[0].items.map((item) => (
                     <li key={item.item_key}>
@@ -2831,6 +2835,8 @@ function ProductionPanel({
                         {(item.timeline_start_ms / 1000).toFixed(1)}s
                       </strong>{" "}
                       {item.production_shot_keys.join(", ")} ·{" "}
+                      {item.source_media_kind} · Asset{" "}
+                      <code>{item.source_asset_id}</code> ·{" "}
                       {item.source_kind.replaceAll("_", " ").toLowerCase()} ·{" "}
                       {(item.timeline_duration_ms / 1000).toFixed(1)}s ·{" "}
                       {item.transition_out} · Audio{" "}
@@ -2964,6 +2970,20 @@ function ProductionPanel({
                       >
                         Reject
                       </button>
+                      <button
+                        className="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                          void act(() =>
+                            catalogApi.rerenderFinalCreative(
+                              session,
+                              finalCreative.id,
+                            ),
+                          )
+                        }
+                      >
+                        Re-render assembly
+                      </button>
                     </>
                   )}
                   {workspace.product.can_edit &&
@@ -3008,6 +3028,10 @@ function ProductionPanel({
                 <small>
                   Approval accepts this exact immutable render as a publishing
                   candidate. It does not publish anything.
+                </small>
+                <small>
+                  Re-rendering uses the existing generated media and does not
+                  call image/video providers.
                 </small>
               </article>
             )}

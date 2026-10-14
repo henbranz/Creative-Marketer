@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -574,6 +575,33 @@ async def test_final_assembly_vertical_is_private_idempotent_and_cross_tenant_sa
             await http.get(f"/v1/assembly/jobs/{record.job.id}", headers=auth)
         ).status_code == 200
         assert (await http.get(f"/v1/final-creatives/{final.id}", headers=auth)).status_code == 200
+        rerender, concurrent_rerender = await asyncio.gather(
+            *(
+                http.post(
+                    f"/v1/final-creatives/{final.id}/rerender",
+                    headers=auth,
+                    json={"approval": "I_APPROVE_RERENDER_FINAL_CREATIVE"},
+                )
+                for _ in range(2)
+            )
+        )
+        assert rerender.status_code == 202, rerender.text
+        assert concurrent_rerender.status_code == 202, concurrent_rerender.text
+        assert concurrent_rerender.json()["id"] == rerender.json()["id"]
+        assert rerender.json()["revision"] == 2
+        assert rerender.json()["rerender_of_final_creative_id"] == str(final.id)
+        assert [item["source_asset_id"] for item in rerender.json()["items"]] == [
+            str(item.source_asset_id) for item in record.plan.items
+        ]
+        repeated_rerender = await http.post(
+            f"/v1/final-creatives/{final.id}/rerender",
+            headers=auth,
+            json={"approval": "I_APPROVE_RERENDER_FINAL_CREATIVE"},
+        )
+        assert repeated_rerender.json()["id"] == rerender.json()["id"]
+        assert (await http.get(f"/v1/final-creatives/{final.id}", headers=auth)).json()[
+            "output_asset_id"
+        ] == str(final.output_asset_id)
         performance = await http.get(
             f"/v1/publications/{publications[0].id}/performance", headers=auth
         )

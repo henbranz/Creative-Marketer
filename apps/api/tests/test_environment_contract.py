@@ -60,6 +60,16 @@ def test_active_modelark_configuration_has_no_las_endpoint_or_secret_contract() 
     assert "- path: .env" in production_worker
 
 
+def test_assembly_worker_uses_root_provider_selection_instead_of_forcing_fake() -> None:
+    compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assembly_worker = compose.split("  assembly-worker:", 1)[1].split("\n  web:", 1)[0]
+    assert "- path: .env" in assembly_worker
+    assert "MEDIA_IMAGE_PROVIDER: ${MEDIA_IMAGE_PROVIDER:-disabled}" in assembly_worker
+    assert "MEDIA_VIDEO_PROVIDER: ${MEDIA_VIDEO_PROVIDER:-disabled}" in assembly_worker
+    assert "MEDIA_IMAGE_PROVIDER: fake" not in assembly_worker
+    assert "MEDIA_VIDEO_PROVIDER: fake" not in assembly_worker
+
+
 @pytest.mark.parametrize(
     "name",
     ["OPENAI_API_KEY", "BYTEPLUS_ARK_API_KEY", "CM_API_TOKEN"],

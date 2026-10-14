@@ -25,6 +25,12 @@ the existing authoritative mapping. Reassembly creates a new plan, job, Asset, a
 history is retained. `FinalCreativeDecision` is append-only. `APPROVED_FOR_PUBLISHING` means only
 that this exact render is accepted as a candidate for a future publisher—it never publishes.
 
+Assembly plans have a monotonic revision per ProductionPlan. A governed re-render binds the prior
+FinalCreative as its cause, reuses the exact immutable source Asset identities and digests, creates
+a new AssemblyJob, and emits the normal assembly workflow event. It creates no GenerationJob and
+does not call an image, video, or model provider. The prior FinalCreative and output Asset remain
+readable and immutable.
+
 ## Render profile
 
 `social_vertical_v1@1` produces MP4/H.264/yuv420p at 1080×1920 and 24 fps. Audio, when present, is
@@ -32,6 +38,11 @@ AAC stereo at 48 kHz and normalized to the profile target; silent output is vali
 use packaged Noto fonts for scripted captions, CTA, and required disclaimer overlays. The renderer
 never receives an arbitrary filter graph or command string. Temporary workspaces are private,
 bounded, and removed on success, error, and timeout.
+
+Production video normalization rebases video and audio timestamps to zero, converts video to the
+pinned CFR profile, validates every normalized video clip structurally, and joins normalized clips
+through FFmpeg's concat filter with a deterministic re-encode. Image looping is permitted only for
+IMAGE sources. The production renderer revision is recorded in `renderer_version`.
 
 ## Security and privacy
 

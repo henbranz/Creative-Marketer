@@ -167,9 +167,14 @@ class Production:
 class Assembly:
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self.rerender_calls: list[object] = []
 
     async def create_plan(self, _context, production_plan_id):
         self.calls.append(production_plan_id)
+        return SimpleNamespace(plan=SimpleNamespace(id=uuid4()))
+
+    async def rerender_final(self, _context, final_creative_id):
+        self.rerender_calls.append(final_creative_id)
         return SimpleNamespace(plan=SimpleNamespace(id=uuid4()))
 
 
@@ -498,6 +503,59 @@ async def test_free_assembly_plan_creation_uses_exact_plan_and_never_calls_provi
 
     assert assembly.calls == [plan_id]
     assert result.resource_type == "assembly_plan"
+    assert result.locator.assembly_plan_id == result.resource_id
+    assert result.provider_execution_occurred is False
+    assert not agents.calls
+
+
+@pytest.mark.asyncio
+async def test_final_creative_rerender_is_approved_free_and_providerless() -> None:
+    ctx = context(uuid4())
+    final_id = uuid4()
+    old_plan_id = uuid4()
+    new_plan_id = uuid4()
+    before = action_state(
+        PipelineAction.RERENDER_FINAL_CREATIVE,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=uuid4(),
+        assembly_plan_id=old_plan_id,
+        final_creative_id=final_id,
+        assembly=AssemblyPipelineState.SUCCEEDED,
+    )
+    after = action_state(
+        PipelineAction.WAIT_FOR_ASSEMBLY,
+        producer=ProducerPipelineState.APPROVED_FOR_GENERATION,
+        production_plan_id=before.production_plan_id,
+        assembly_plan_id=new_plan_id,
+        assembly=AssemblyPipelineState.RUNNING,
+    )
+    agents = Agents()
+    assembly = Assembly()
+    executor = PipelineActionExecutor(
+        State(before, before, after), agents, Creative(), Production(), assembly
+    )
+    locator = PipelineLocator(
+        uuid4(),
+        production_plan_id=before.production_plan_id,
+        assembly_plan_id=old_plan_id,
+        final_creative_id=final_id,
+    )
+
+    with pytest.raises(PipelineApprovalRequired):
+        await executor.execute(
+            ctx,
+            locator,
+            expected_action=PipelineAction.RERENDER_FINAL_CREATIVE,
+        )
+    result = await executor.execute(
+        ctx,
+        locator,
+        expected_action=PipelineAction.RERENDER_FINAL_CREATIVE,
+        explicit_approval=pipeline_approval_phrase(PipelineAction.RERENDER_FINAL_CREATIVE),
+    )
+
+    assert assembly.rerender_calls == [final_id]
+    assert result.locator.final_creative_id is None
     assert result.locator.assembly_plan_id == result.resource_id
     assert result.provider_execution_occurred is False
     assert not agents.calls

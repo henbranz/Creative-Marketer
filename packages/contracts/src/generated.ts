@@ -602,6 +602,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/v1/final-creatives/{final_id}/rerender": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Rerender */
+    post: operations["rerender_v1_final_creatives__final_id__rerender_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/v1/intelligence/experiments/{proposal_id}/creative-cycle": {
     parameters: {
       query?: never;
@@ -2089,6 +2106,10 @@ export interface components {
       render_profile_key: string;
       /** Render Profile Version */
       render_profile_version: number;
+      /** Rerender Of Final Creative Id */
+      rerender_of_final_creative_id: string | null;
+      /** Revision */
+      revision: number;
       /** Semantic Digest */
       semantic_digest: string;
       /** Timeline Duration Ms */
@@ -3623,6 +3644,7 @@ export interface components {
       | "RECOVER_ASSEMBLY_FAILURE"
       | "RECOVER_ASSEMBLY_INVARIANT"
       | "REVIEW_FINAL_CREATIVE"
+      | "RERENDER_FINAL_CREATIVE"
       | "RECOVER_REJECTED_FINAL_CREATIVE"
       | "FINAL_CREATIVE_READY";
     /**
@@ -4416,6 +4438,14 @@ export interface components {
       resource_ref: string | null;
       /** State */
       state: string;
+    };
+    /** RerenderWrite */
+    RerenderWrite: {
+      /**
+       * Approval
+       * @constant
+       */
+      approval: "I_APPROVE_RERENDER_FINAL_CREATIVE";
     };
     /**
      * ResearchCategory
@@ -6358,6 +6388,45 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["FinalCreativeResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  rerender_v1_final_creatives__final_id__rerender_post: {
+    parameters: {
+      query?: never;
+      header?: {
+        authorization?: string | null;
+        "X-Tenant-ID"?: string | null;
+        "X-Correlation-ID"?: string | null;
+      };
+      path: {
+        final_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["RerenderWrite"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AssemblyPlanResponse"];
         };
       };
       /** @description Validation Error */

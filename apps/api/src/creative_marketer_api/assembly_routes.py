@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -42,6 +42,10 @@ class Contract(BaseModel):
 
 class ManualSourceWrite(Contract):
     asset_id: UUID
+
+
+class RerenderWrite(Contract):
+    approval: Literal["I_APPROVE_RERENDER_FINAL_CREATIVE"]
 
 
 class ReadinessItemResponse(Contract):
@@ -102,6 +106,8 @@ class AssemblyJobResponse(Contract):
 class AssemblyPlanResponse(Contract):
     id: UUID
     production_plan_id: UUID
+    revision: int
+    rerender_of_final_creative_id: UUID | None
     semantic_digest: str
     render_profile_key: str
     render_profile_version: int
@@ -164,6 +170,8 @@ def _plan(value: AssemblyPlanRecord) -> AssemblyPlanResponse:
     return AssemblyPlanResponse(
         id=plan.id,
         production_plan_id=plan.production_plan_id,
+        revision=plan.revision,
+        rerender_of_final_creative_id=plan.rerender_of_final_creative_id,
         semantic_digest=plan.semantic_digest,
         render_profile_key=plan.render_profile.key,
         render_profile_version=plan.render_profile.version,
@@ -332,6 +340,17 @@ def create_assembly_router(
     async def get_final(final_id: UUID, ctx: Context) -> FinalCreativeResponse:
         try:
             return _final(await service.get_final(ctx, final_id))
+        except AssemblyError as error:
+            raise failure(error) from error
+
+    @router.post(
+        "/final-creatives/{final_id}/rerender",
+        response_model=AssemblyPlanResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def rerender(final_id: UUID, value: RerenderWrite, ctx: Context) -> AssemblyPlanResponse:
+        try:
+            return _plan(await service.rerender_final(ctx, final_id))
         except AssemblyError as error:
             raise failure(error) from error
 
