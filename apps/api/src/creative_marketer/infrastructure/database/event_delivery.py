@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from creative_marketer.events.application import (
@@ -100,26 +101,41 @@ class PostgresOutboxWriter:
         )
 
     async def append_idempotent(self, event: DomainEvent) -> bool:
-        """Insert one deterministic transition event using INSERT-only privileges."""
+        """Insert one deterministic transition event using INSERT-only privileges.
+
+        PostgreSQL requires table SELECT privilege for ``ON CONFLICT`` conflict
+        arbitration. Runtime writers intentionally do not have that privilege, so
+        isolate the ordinary insert in a savepoint and recognize only the outbox
+        primary-key collision as an already-appended event.
+        """
 
         self._contracts.validate_event(event)
         now = event.occurred_at
         trace_context = capture_trace_context()
-        result = await self._session.execute(
-            pg_insert(outbox_events)
-            .values(
-                **_event_values(event),
-                traceparent=trace_context.traceparent if trace_context else None,
-                tracestate=trace_context.tracestate if trace_context else None,
-                publication_state="PENDING",
-                attempt_count=0,
-                next_attempt_at=now,
-                created_at=now,
-                updated_at=now,
-            )
-            .on_conflict_do_nothing(index_elements=["event_id"])
-        )
-        return cast(CursorResult[Any], result).rowcount == 1
+        try:
+            async with self._session.begin_nested():
+                await self._session.execute(
+                    insert(outbox_events).values(
+                        **_event_values(event),
+                        traceparent=trace_context.traceparent if trace_context else None,
+                        tracestate=trace_context.tracestate if trace_context else None,
+                        publication_state="PENDING",
+                        attempt_count=0,
+                        next_attempt_at=now,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+        except IntegrityError as error:
+            original = error.orig
+            diagnostic = getattr(original, "diag", None)
+            if (
+                getattr(original, "sqlstate", None) == "23505"
+                and getattr(diagnostic, "constraint_name", None) == "outbox_events_pkey"
+            ):
+                return False
+            raise
+        return True
 
 
 class PostgresPublisherStore:

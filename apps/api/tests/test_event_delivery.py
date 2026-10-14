@@ -7,6 +7,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 
 from creative_marketer.events.application import (
     ClaimedEvent,
@@ -39,6 +41,7 @@ from creative_marketer.identity.application.authentication import (
     ExecutionContext,
 )
 from creative_marketer.identity.domain import MembershipRole, MembershipStatus
+from creative_marketer.infrastructure.database.event_delivery import PostgresOutboxWriter
 from creative_marketer.observability.ports import NullTelemetry
 
 NOW = datetime(2026, 9, 5, 12, tzinfo=UTC)
@@ -333,6 +336,77 @@ def test_caused_event_requires_tenant_source_and_worker_fails_closed() -> None:
     assert source_actor.kind is ActorKind.SYSTEM
     with pytest.raises(SystemExit, match="No event transport"):
         worker_main()
+
+
+class _NestedTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _InsertOnlySession:
+    def __init__(self, error=None):
+        self.error = error
+        self.statement = None
+        self.nested_transactions = 0
+
+    def begin_nested(self):
+        self.nested_transactions += 1
+        return _NestedTransaction()
+
+    async def execute(self, statement):
+        self.statement = statement
+        if self.error is not None:
+            raise self.error
+
+
+class _DatabaseDiagnostic:
+    def __init__(self, constraint_name):
+        self.constraint_name = constraint_name
+
+
+class _DatabaseError(Exception):
+    def __init__(self, *, sqlstate, constraint_name):
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+        self.diag = _DatabaseDiagnostic(constraint_name)
+
+
+@pytest.mark.asyncio
+async def test_idempotent_outbox_append_uses_insert_only_savepoint() -> None:
+    session = _InsertOnlySession()
+
+    inserted = await PostgresOutboxWriter(session).append_idempotent(event())
+
+    assert inserted is True
+    assert session.nested_transactions == 1
+    assert session.statement is not None
+    statement = str(session.statement.compile(dialect=postgresql.dialect()))
+    assert "ON CONFLICT" not in statement
+    assert statement.startswith("INSERT INTO event_delivery.outbox_events")
+
+
+@pytest.mark.asyncio
+async def test_idempotent_outbox_append_recognizes_only_event_id_collision() -> None:
+    event_id_conflict = IntegrityError(
+        "insert",
+        {},
+        _DatabaseError(sqlstate="23505", constraint_name="outbox_events_pkey"),
+    )
+    session = _InsertOnlySession(event_id_conflict)
+
+    assert await PostgresOutboxWriter(session).append_idempotent(event()) is False
+    assert session.nested_transactions == 1
+
+    other_conflict = IntegrityError(
+        "insert",
+        {},
+        _DatabaseError(sqlstate="23505", constraint_name="some_other_constraint"),
+    )
+    with pytest.raises(IntegrityError):
+        await PostgresOutboxWriter(_InsertOnlySession(other_conflict)).append_idempotent(event())
 
 
 class MemoryPublisherStore:
