@@ -29,6 +29,7 @@ from creative_marketer.assembly.domain import (
     AssemblyItem,
     AssemblyJob,
     AssemblyJobStatus,
+    AssemblyNormalizedClipInvalid,
     AssemblyNotFound,
     AssemblyNotReady,
     AssemblyOutputInvalid,
@@ -841,6 +842,49 @@ async def test_normalized_video_clip_validation_is_structural_and_bounded(
     assert "private-name" not in str(failure.value)
 
 
+@pytest.mark.asyncio
+async def test_ffmpeg_probe_and_output_inspection_fail_closed(tmp_path: Path, monkeypatch) -> None:
+    renderer = FFmpegAssemblyRenderer()
+    plan = build_assembly_plan(production_input(manual=candidate()), uuid4())
+
+    monkeypatch.setattr(renderer, "_run", AsyncMock(return_value=b"{}"))
+    with pytest.raises(AssemblyNormalizedClipInvalid, match="probe"):
+        await renderer._probe_video(tmp_path / "malformed.mp4")
+    with pytest.raises(AssemblyNormalizedClipInvalid, match="frame_rate"):
+        renderer._rate("24/0")
+
+    with pytest.raises(AssemblyOutputInvalid):
+        await renderer._inspect(tmp_path / "missing.mp4", plan, "test", False)
+    output = tmp_path / "output.mp4"
+    output.write_bytes(b"not-an-mp4")
+    with pytest.raises(AssemblyOutputInvalid):
+        await renderer._inspect(output, plan, "test", False)
+
+    output.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"0" * 32)
+    monkeypatch.setattr(renderer, "_run", AsyncMock(return_value=b"not-json"))
+    with pytest.raises(AssemblyOutputInvalid):
+        await renderer._inspect(output, plan, "test", False)
+
+    invalid_stream = {
+        "streams": [
+            {
+                "codec_type": "video",
+                "codec_name": "av1",
+                "pix_fmt": "yuv420p",
+                "width": 1080,
+                "height": 1920,
+                "avg_frame_rate": "24/1",
+            }
+        ],
+        "format": {"duration": str(plan.timeline_duration_ms / 1000)},
+    }
+    monkeypatch.setattr(
+        renderer, "_run", AsyncMock(return_value=json.dumps(invalid_stream).encode())
+    )
+    with pytest.raises(AssemblyOutputInvalid):
+        await renderer._inspect(output, plan, "test", False)
+
+
 def test_temporal_locator_contains_only_stable_ids() -> None:
     request = FinalCreativeAssemblyWorkflowInput(
         str(uuid4()), str(uuid4()), str(uuid4()), str(uuid4())
@@ -944,6 +988,9 @@ async def test_assembly_service_is_idempotent_audited_and_fail_closed() -> None:
     uow = MemoryAssemblyUnitOfWork(repository)
     service = AssemblyService(lambda _tenant_id: uow)
 
+    with pytest.raises(AssemblyNotFound):
+        await service.rerender_final(context, uuid4())
+
     with pytest.raises(AssemblyPermissionDenied):
         await service.create_plan(
             replace(context, membership_role=MembershipRole.MEMBER), source.production_plan_id
@@ -1002,6 +1049,32 @@ async def test_assembly_service_is_idempotent_audited_and_fail_closed() -> None:
 
     repository.finals[final.id] = FinalCreativeRecord(final, None)
     assert (await service.get_final(context, final.id)).final_creative == final
+
+    orphan = replace(final, id=uuid4(), assembly_plan_id=uuid4())
+    repository.finals[orphan.id] = FinalCreativeRecord(orphan, None)
+    with pytest.raises(AssemblyNotFound):
+        await service.rerender_final(context, orphan.id)
+
+    repository.source = replace(source, production_plan_id=uuid4())
+    with pytest.raises(AssemblyNotFound):
+        await service.rerender_final(context, final.id)
+    repository.source = source
+
+    generated = source.segments[0].output
+    assert generated is not None
+    repository.source = replace(
+        source,
+        segments=(
+            replace(
+                source.segments[0],
+                output=replace(generated, digest="sha256:" + "b" * 64),
+            ),
+        ),
+    )
+    with pytest.raises(AssemblyNotReady):
+        await service.rerender_final(context, final.id)
+    repository.source = source
+
     rerendered = await service.rerender_final(context, final.id)
     assert rerendered.plan.id != created.plan.id
     assert rerendered.plan.revision == 2
