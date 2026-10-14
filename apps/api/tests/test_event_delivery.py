@@ -393,7 +393,7 @@ async def test_idempotent_outbox_append_recognizes_only_event_id_collision() -> 
     event_id_conflict = IntegrityError(
         "insert",
         {},
-        _DatabaseError(sqlstate="23505", constraint_name="outbox_events_pkey"),
+        _DatabaseError(sqlstate="23505", constraint_name="pk_outbox_events"),
     )
     session = _InsertOnlySession(event_id_conflict)
 

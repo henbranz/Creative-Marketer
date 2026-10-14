@@ -131,7 +131,7 @@ class PostgresOutboxWriter:
             diagnostic = getattr(original, "diag", None)
             if (
                 getattr(original, "sqlstate", None) == "23505"
-                and getattr(diagnostic, "constraint_name", None) == "outbox_events_pkey"
+                and getattr(diagnostic, "constraint_name", None) == "pk_outbox_events"
             ):
                 return False
             raise
