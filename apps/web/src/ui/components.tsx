@@ -7,6 +7,34 @@ function classes(...values: Array<string | undefined | false>) {
   return values.filter(Boolean).join(" ");
 }
 
+export function NavigationIcon({ name }: { name: string }) {
+  const paths: Record<string, string> = {
+    "Command Center": "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9",
+    Products: "m12 3 9 5v9l-9 5-9-5V8l9-5Zm0 9v10M3 8l9 4 9-4",
+    Agents: "M8 3v3m8-3v3M5 6h14v14H5V6Zm3 6h1m6 0h1m-7 4h6",
+    Approvals: "M9 3h6v4H9V3Zm-3 2H4v17h16V5h-2M8 14l3 3 5-6",
+    Activity: "M3 12h4l3-8 4 16 3-8h4",
+    Settings: "M4 6h16M4 12h16M4 18h16M8 3v6m8 0v6M9 15v6",
+  };
+  return (
+    <svg
+      className="navigation-icon"
+      viewBox="0 0 24 24"
+      width="20"
+      height="20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={paths[name] ?? paths.Products} />
+    </svg>
+  );
+}
+
 export function BrandMark({ compact = false }: { compact?: boolean }) {
   const artwork = compact
     ? {

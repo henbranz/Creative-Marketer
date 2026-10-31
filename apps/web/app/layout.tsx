@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 
 import "../src/ui/tokens.css";
 import "./styles.css";
+import "../src/ui/workbench.css";
 
 export const metadata: Metadata = {
   title: "Creative Manager",

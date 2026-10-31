@@ -25,3 +25,6 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# Audited local design guidance; reproducible source pins are in docs.
+/.agents/skills/
