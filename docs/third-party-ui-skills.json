@@ -1,0 +1,38 @@
+{
+  "reviewed_at": "2026-10-31",
+  "scope": "project-local, ignored .agents/skills; not application runtime",
+  "policy": "Project/user governance overrides design guidance. No hooks, third-party installers, native engines, browser injection or provider calls are authorized by skill installation.",
+  "skills": [
+    {
+      "name": "frontend-design",
+      "repository": "https://github.com/anthropics/skills",
+      "commit": "ca45fc496a3436251f191354091d557da31c15b5",
+      "path": "skills/frontend-design",
+      "license": "Apache-2.0",
+      "installation": "Trusted skill-installer with exact ref; SKILL.md and LICENSE.txt only",
+      "scripts_dependencies_hooks": "None in installed directory"
+    },
+    {
+      "name": "ui-ux-pro-max",
+      "repository": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+      "commit": "9a3f14f7423037ccb8feeb4fee7482291b9c820e",
+      "path": ".claude/skills/ui-ux-pro-max",
+      "license": "MIT",
+      "installation": "Trusted skill-installer with exact ref; local Python/CSV guidance; root LICENSE copied separately",
+      "scripts_dependencies_hooks": "Search path inspected: Python standard library, CSV reads, closed non-executable reasoning grammar. Optional --persist writes files; not used. No network, subprocess or credential operation found in search path. No hooks installed.",
+      "excluded_installer": "ui-ux-pro-max-cli 2.5.0 uses chalk/commander/ora/prompts, GitHub download and extraction; not executed. No npm dependency added."
+    },
+    {
+      "name": "impeccable",
+      "repository": "https://github.com/pbakaus/impeccable",
+      "commit": "b7a89176e4e87422b40f98adabceb051dbb5448b",
+      "version": "4.8.0",
+      "license": "Apache-2.0",
+      "installation": "Reduced instruction-only selection: SKILL.md, Operate/craft-floor/distill/polish references, LICENSE and NOTICE. Manual context fallback; not the full automated suite.",
+      "scripts_dependencies_hooks": "Excluded. Upstream launcher can download/execute a native engine and registers PostToolUse/Stop hooks; CLI optional platform binaries and AI SDK/browser development dependencies are not needed for this task. No executable or hook was installed or run.",
+      "limitation": "Other command references and automated critique/detector are unavailable. Do not run missing commands or auto-download an engine; audit separately before expanding."
+    }
+  ],
+  "reproduction": "Use skill-installer with the repository, commit and path above for the first two. For Impeccable copy only the documented Markdown subset and license notices from the exact commit. Never run docs/install_codex_ui_skills.sh without a new audit: its npx dependencies are unpinned.",
+  "diff_review": "No skill files or hooks are committed in this PR; only this manifest and .gitignore rule. Installation does not change CI or runtime dependencies."
+}

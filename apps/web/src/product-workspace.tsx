@@ -68,6 +68,7 @@ import {
   Button,
   EmptyState,
   Metric,
+  NavigationIcon,
   StatusBadge,
 } from "./ui/components";
 import { ProductClaims } from "./product-claims";
@@ -80,14 +81,6 @@ const navigation = [
   "Activity",
   "Settings",
 ];
-const navigationIcons: Record<string, string> = {
-  "Command Center": "⌂",
-  Products: "◇",
-  Agents: "✦",
-  Approvals: "✓",
-  Activity: "↗",
-  Settings: "⚙",
-};
 const tabs = [
   "Overview",
   "Brief",
@@ -184,7 +177,7 @@ function AccessScreen({
         </form>
         <small>
           Production identity-provider selection remains intentionally deferred.
-          These credentials are never stored by the application.
+          Credentials remain in this browser tab’s session until you disconnect.
         </small>
       </section>
     </main>
@@ -5529,6 +5522,9 @@ export function ProductWorkspaceApp() {
     <div
       className={`app-shell ${navigationOpen ? "navigation-open" : ""} ${tab === "Claims" ? "claims-workspace" : ""}`}
     >
+      <a className="skip-link" href="#workspace-main">
+        Skip to workspace
+      </a>
       <aside className="sidebar">
         <div className="logo-row">
           <BrandLockup compact />
@@ -5587,7 +5583,7 @@ export function ProductWorkspaceApp() {
                 }
               }}
             >
-              <i aria-hidden="true">{navigationIcons[item]}</i>
+              <NavigationIcon name={item} />
               <b>{item}</b>
               {!["Command Center", "Products", "Approvals"].includes(item) && (
                 <span>Soon</span>
@@ -5626,7 +5622,7 @@ export function ProductWorkspaceApp() {
           onClick={() => setNavigationOpen(false)}
         />
       )}
-      <main className="workspace">
+      <main className="workspace" id="workspace-main" tabIndex={-1}>
         <header className="topbar">
           <button
             className="mobile-menu"
@@ -5767,6 +5763,7 @@ export function ProductWorkspaceApp() {
                           <button
                             key={name}
                             className={tab === name ? "active" : ""}
+                            aria-current={tab === name ? "page" : undefined}
                             onClick={() => {
                               if (
                                 claimsDirty &&
