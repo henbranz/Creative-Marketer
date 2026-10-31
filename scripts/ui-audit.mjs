@@ -135,6 +135,13 @@ try {
               currentTabBorder: getComputedStyle(
                 document.querySelector(".tabs button.active"),
               ).borderImageSource,
+              clippedAssetControls: [
+                ...document.querySelectorAll(".asset-card > button"),
+              ].filter((button) => {
+                const bounds = button.getBoundingClientRect();
+                const card = button.parentElement.getBoundingClientRect();
+                return bounds.left < card.left || bounds.right > card.right;
+              }).length,
             };
           },
           { tab, width },
@@ -158,6 +165,11 @@ try {
           current.currentTabBorder,
           "none",
           `${tab}: legacy gradient tab border`,
+        );
+        assert.equal(
+          current.clippedAssetControls,
+          0,
+          `${tab}: clipped Asset actions`,
         );
       }
     }

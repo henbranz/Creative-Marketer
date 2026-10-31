@@ -329,6 +329,10 @@
   }
   .asset-card {
     min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .asset-card > * {
+    min-width: 0;
   }
   .asset-card strong {
     overflow-wrap: anywhere;
