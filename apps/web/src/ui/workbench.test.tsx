@@ -49,7 +49,9 @@ describe("creative workbench foundation", () => {
       "aria-hidden",
       "true",
     );
-    expect(container.querySelector("svg path")).toHaveAttribute("d");
+    expect(
+      container.querySelector("svg path, svg rect, svg line, svg circle"),
+    ).not.toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
   });
 });

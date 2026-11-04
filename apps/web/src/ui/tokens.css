@@ -5,62 +5,75 @@
   --font-body: 1rem;
   --font-heading: 1.5rem;
   --font-ui: "Open Sans", ui-sans-serif, system-ui, sans-serif;
-  --action: #145ac2;
+  --action: #0f766e;
+  --action-hover: #115e59;
+  --sky: #bae6fd;
+  --mint: #bbf7d0;
+  --turquoise: #5eead4;
+  --action-soft: #ccfbf1;
+  --chart-current: #0f766e;
+  --chart-compared: #0284c7;
+  --chart-benchmark: #64748b;
+  --channel-meta: #2563eb;
+  --channel-youtube: #dc2626;
+  --channel-tiktok: #020617;
+  --channel-google: #059669;
 
   /* Creative Manager brand */
-  --brand-navy: #0b1026;
-  --brand-blue: #3b82f6;
-  --brand-purple: #8b5cf6;
-  --brand-magenta: #ec4899;
+  --brand-navy: #0f172a;
+  --brand-blue: #bae6fd;
+  /* Legacy names retained only as aliases for existing panel contracts. */
+  --brand-purple: #5eead4;
+  --brand-magenta: #bbf7d0;
   --brand-orange: #f59e0b;
-  --brand-cyan: #06b6d4;
-  --brand-light: #f8faff;
+  --brand-cyan: #0f766e;
+  --brand-light: #f8fafc;
 
   /* Semantic surfaces and text */
-  --background: #f4f6f8;
+  --background: #f8fafc;
   --surface: #ffffff;
   --surface-elevated: #ffffff;
-  --surface-muted: #eaf0f5;
-  --text-primary: #152334;
+  --surface-muted: #f1f5f9;
+  --text-primary: #0f172a;
   --text-secondary: #475569;
   --text-muted: #475569;
-  --text-on-dark: #f8faff;
-  --border: #c4ced9;
-  --border-strong: #8494a7;
-  --success: #138a64;
-  --warning: #b66a0a;
-  --danger: #bd3455;
-  --info: #2563d9;
-  --focus-ring: #145ac2;
+  --text-on-dark: #f8fafc;
+  --border: #e2e8f0;
+  --border-strong: #64748b;
+  --success: #047857;
+  --warning: #92400e;
+  --danger: #be123c;
+  --info: #0369a1;
+  --focus-ring: #0f766e;
 
   /* Controlled brand treatments */
   --gradient-brand-main: linear-gradient(
     120deg,
-    #3b82f6 0%,
-    #8b5cf6 50%,
-    #ec4899 100%
+    #bae6fd 0%,
+    #5eead4 50%,
+    #bbf7d0 100%
   );
-  --gradient-brand-warm: linear-gradient(120deg, #ec4899 0%, #f59e0b 100%);
+  --gradient-brand-warm: linear-gradient(120deg, #5eead4 0%, #bbf7d0 100%);
   --gradient-brand-cool: linear-gradient(
     120deg,
-    #06b6d4 0%,
-    #3b82f6 48%,
-    #8b5cf6 100%
+    #bae6fd 0%,
+    #7dd3fc 48%,
+    #5eead4 100%
   );
   --gradient-brand-subtle: linear-gradient(
     135deg,
-    rgba(59, 130, 246, 0.1),
-    rgba(139, 92, 246, 0.08) 55%,
-    rgba(236, 72, 153, 0.08)
+    #f0f9ff,
+    #f0fdfa 55%,
+    #f0fdf4
   );
 
   --radius-sm: 8px;
   --radius-md: 12px;
-  --radius-lg: 12px;
-  --radius-xl: 12px;
-  --shadow-sm: 0 1px 2px rgba(11, 16, 38, 0.05);
-  --shadow-md: 0 12px 32px rgba(20, 28, 67, 0.08);
-  --shadow-lg: 0 28px 80px rgba(20, 28, 67, 0.14);
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 24px 80px rgba(15, 23, 42, 0.25);
 
   /* Compatibility aliases for the existing domain panels. */
   --ink: var(--text-primary);
@@ -69,6 +82,6 @@
   --paper: var(--surface);
   --canvas: var(--background);
   --accent: var(--action);
-  --accent-soft: #eaf0f5;
+  --accent-soft: var(--action-soft);
   --shadow: var(--shadow-lg);
 }

@@ -80,6 +80,10 @@ try {
     throw new Error("UI reads did not settle; capture refused");
   }
   await page.goto(base);
+  await settle();
+  await page.locator(".cm-brand-mark img").evaluate(async (img) => {
+    await img.decode();
+  });
   await page.screenshot({
     path: path.join(out, "access-1440.png"),
     fullPage: true,
@@ -135,6 +139,9 @@ try {
               currentTabBorder: getComputedStyle(
                 document.querySelector(".tabs button.active"),
               ).borderImageSource,
+              brandTextColor: getComputedStyle(
+                document.querySelector(".brand-wordmark strong"),
+              ).color,
               clippedAssetControls: [
                 ...document.querySelectorAll(".asset-card > button"),
               ].filter((button) => {
@@ -165,6 +172,11 @@ try {
           current.currentTabBorder,
           "none",
           `${tab}: legacy gradient tab border`,
+        );
+        assert.equal(
+          current.brandTextColor,
+          "rgb(15, 23, 42)",
+          "Wordmark must remain readable on the light sidebar",
         );
         assert.equal(
           current.clippedAssetControls,

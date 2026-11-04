@@ -64,7 +64,6 @@ import {
 } from "./brief-draft";
 import {
   BrandLockup,
-  BrandMark,
   Button,
   EmptyState,
   Metric,
@@ -72,6 +71,10 @@ import {
   StatusBadge,
 } from "./ui/components";
 import { ProductClaims } from "./product-claims";
+import { UIIcon } from "./ui/icons";
+import { Overlay } from "./ui/overlay";
+import { AssetDrawer } from "./ui/asset-drawer";
+import { ReadError, SuccessNotice, WorkspaceSkeleton } from "./ui/feedback";
 
 const navigation = [
   "Command Center",
@@ -489,9 +492,20 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
   const [progress, setProgress] = useState<number | null>(null);
   const [filter, setFilter] = useState("all");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<Asset | null>(null);
+  const [notice, setNotice] = useState("");
+  const [archiving, setArchiving] = useState<string | null>(null);
   const session = useMemo(() => readSession(), []);
   const refresh = useCallback(async () => {
-    setAssets(await catalogApi.listAssets(session, workspace.product.id));
+    setLoading(true);
+    setError("");
+    try {
+      setAssets(await catalogApi.listAssets(session, workspace.product.id));
+    } finally {
+      setLoading(false);
+    }
   }, [session, workspace.product.id]);
   useEffect(() => {
     queueMicrotask(
@@ -525,14 +539,43 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
       await refresh();
       setFile(null);
       setProgress(null);
+      setNotice("Asset uploaded and verified.");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Upload failed.");
       setProgress(null);
     }
   };
   const shown = assets.filter(
-    (asset) => filter === "all" || asset.kind === filter,
+    (asset) =>
+      (filter === "all" || asset.kind === filter) &&
+      `${asset.original_filename} ${asset.role.replaceAll("_", " ")}`
+        .toLocaleLowerCase()
+        .includes(search.trim().toLocaleLowerCase()),
   );
+  const reload = () =>
+    void refresh().catch(() => setError("Assets could not be loaded."));
+  const archive = async (asset: Asset) => {
+    if (
+      !window.confirm(
+        `Archive ${asset.original_filename}? Existing immutable references are preserved.`,
+      )
+    )
+      return;
+    setArchiving(asset.id);
+    setError("");
+    setNotice("");
+    try {
+      await catalogApi.archiveAsset(session, asset.id);
+      await refresh();
+      setNotice("Asset archived.");
+    } catch {
+      setError(
+        "The asset could not be archived. Refresh the library before trying again.",
+      );
+    } finally {
+      setArchiving(null);
+    }
+  };
   return (
     <div className="assets-workspace">
       <section className="upload-card">
@@ -586,30 +629,59 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
           </p>
         )}
       </section>
-      {error && (
-        <p className="error-banner" role="alert">
-          {error}
-        </p>
-      )}
+      {error && <ReadError message={error} onRetry={reload} />}
+      {notice && <SuccessNotice>{notice}</SuccessNotice>}
       <div className="asset-toolbar">
         <strong>{shown.length} assets</strong>
-        <select
-          aria-label="Filter assets"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-        >
-          <option value="all">All types</option>
-          <option value="image">Images</option>
-          <option value="video">Videos</option>
-          <option value="document">Documents</option>
-        </select>
+        <div className="filter-pills" role="group" aria-label="Filter assets">
+          {[
+            ["all", "All types"],
+            ["image", "Images"],
+            ["video", "Videos"],
+            ["document", "Documents"],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value!)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <input
+          type="search"
+          aria-label="Search asset names and roles"
+          placeholder="Search assets"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setSearch("");
+          }}
+        />
+        {(filter !== "all" || search) && (
+          <button
+            className="secondary"
+            onClick={() => {
+              setFilter("all");
+              setSearch("");
+            }}
+          >
+            Reset
+          </button>
+        )}
       </div>
-      {shown.length ? (
+      <p className="filter-scope">
+        Search covers filenames and roles in this product’s asset library.
+      </p>
+      {loading && !assets.length ? (
+        <WorkspaceSkeleton label="Loading assets…" />
+      ) : shown.length ? (
         <div className="asset-grid">
           {shown.map((asset) => (
             <article className="asset-card" key={asset.id}>
               <div className={`asset-preview ${asset.kind}`} aria-hidden="true">
-                {asset.kind.slice(0, 1).toUpperCase()}
+                <UIIcon name={asset.kind} size={36} />
               </div>
               <div>
                 <strong title={asset.original_filename}>
@@ -627,13 +699,7 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
               {asset.status === "ready" && (
                 <button
                   className="secondary"
-                  onClick={async () => {
-                    const grant = await catalogApi.downloadAsset(
-                      session,
-                      asset.id,
-                    );
-                    window.open(grant.url, "_blank", "noopener,noreferrer");
-                  }}
+                  onClick={() => setSelected(asset)}
                 >
                   Preview
                 </button>
@@ -642,12 +708,10 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
                 ["ready", "rejected"].includes(asset.status) && (
                   <button
                     className="text-danger"
-                    onClick={async () => {
-                      await catalogApi.archiveAsset(session, asset.id);
-                      await refresh();
-                    }}
+                    disabled={archiving !== null}
+                    onClick={() => void archive(asset)}
                   >
-                    Archive
+                    {archiving === asset.id ? "Archiving…" : "Archive"}
                   </button>
                 )}
             </article>
@@ -655,13 +719,29 @@ function AssetsPanel({ workspace }: { workspace: Workspace }) {
         </div>
       ) : (
         <section className="empty-panel">
-          <span className="empty-glyph">A</span>
-          <h2>No assets yet</h2>
+          <span className="empty-glyph">
+            <UIIcon name="image" />
+          </span>
+          <h2>
+            {filter !== "all" || search
+              ? "No matching assets"
+              : "No assets yet"}
+          </h2>
           <p>
-            Add approved product media to create a reusable, traceable shared
-            asset library.
+            {filter !== "all" || search
+              ? "Clear the search or reset the filters to see more assets."
+              : "Add approved product media to create a reusable, traceable shared asset library."}
           </p>
         </section>
+      )}
+      {loading && assets.length > 0 && <p role="status">Updating assets…</p>}
+      {selected && (
+        <AssetDrawer
+          key={`${workspace.product.id}:${selected.id}`}
+          asset={selected}
+          session={session}
+          onClose={() => setSelected(null)}
+        />
       )}
     </div>
   );
@@ -1202,7 +1282,7 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
         </section>
       )}
       {researchView === "results" && !snapshots[0] && (
-        <EmptyState icon="R" title="No research results yet">
+        <EmptyState icon="research" title="No research results yet">
           Add trusted evidence, then run the Researcher to create
           evidence-grounded findings.
         </EmptyState>
@@ -1701,7 +1781,9 @@ function ResearchPanel({ workspace }: { workspace: Workspace }) {
             </div>
           ) : (
             <section className="empty-panel">
-              <span className="empty-glyph">R</span>
+              <span className="empty-glyph">
+                <UIIcon name="research" />
+              </span>
               <h2>No research sources yet</h2>
               <p>Add a public page to establish traceable product evidence.</p>
             </section>
@@ -1873,6 +1955,7 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
     setRuns(nextRuns);
     setSets(nextSets);
     setResearch(nextResearch);
+    return nextSets;
   }, [session, workspace.product.id]);
   useEffect(() => {
     queueMicrotask(
@@ -1894,12 +1977,23 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
     concept: CreativeConcept,
     state: "SHORTLISTED" | "APPROVED_FOR_PRODUCTION" | "REJECTED",
   ) => {
-    await catalogApi.decideCreativeConcept(session, concept.id, state);
-    await refresh();
-    const updated = sets
-      .flatMap((item) => item.concepts)
-      .find((item) => item.id === concept.id);
-    setSelected(updated ?? null);
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await catalogApi.decideCreativeConcept(session, concept.id, state);
+      const nextSets = await refresh();
+      const updated = nextSets
+        .flatMap((item) => item.concepts)
+        .find((item) => item.id === concept.id);
+      setSelected(updated ?? null);
+    } catch {
+      setError(
+        "The decision could not be confirmed. Refresh concepts before trying again.",
+      );
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <div className="creative-workspace">
@@ -2052,202 +2146,216 @@ function CreativesPanel({ workspace }: { workspace: Workspace }) {
           </div>
         </>
       ) : (
-        <EmptyState icon="C" title="No concepts yet">
+        <EmptyState icon="concepts" title="No concepts yet">
           Research the market, complete the Brief, then turn evidence into
           creative directions.
         </EmptyState>
       )}
       {selected && (
-        <section
-          className="concept-detail"
-          aria-label="Creative concept detail"
+        <Overlay
+          title="Creative concept detail"
+          onClose={() => setSelected(null)}
+          busy={busy}
         >
-          <button className="secondary" onClick={() => setSelected(null)}>
-            Close
-          </button>
-          <p className="eyebrow">Structured production direction</p>
-          <h2>
-            {creativeValue(
-              selected.payload as Record<string, unknown>,
-              "title",
-            )}
-          </h2>
-          {obsidianVaultName && (
-            <button
-              className="secondary"
-              onClick={() =>
-                void obsidianOpenUrl(
-                  obsidianVaultName,
-                  "creative_concept",
-                  selected.id,
-                ).then((url) => window.location.assign(url))
-              }
-            >
-              Open concept in Obsidian
-            </button>
-          )}
-          <p>
-            {creativeValue(
-              selected.payload as Record<string, unknown>,
-              "strategic_rationale",
-            )}
-          </p>
-          <h3>Hook</h3>
-          {Object.entries(
-            ((selected.payload as Record<string, unknown>).hook ??
-              {}) as Record<string, unknown>,
-          ).map(([key, value]) =>
-            value ? (
-              <p key={key}>
-                <strong>{key.replaceAll("_", " ")}: </strong>
-                {String(value)}
+          <section className="concept-detail">
+            {error && (
+              <p className="error" role="alert">
+                {error}
               </p>
-            ) : null,
-          )}
-          <h3>Scenes</h3>
-          <ol>
-            {(Array.isArray(selected.payload.scenes)
-              ? selected.payload.scenes
-              : []
-            ).map((scene, index) => {
-              const value = scene as Record<string, unknown>;
-              return (
-                <li key={index}>
-                  <strong>{creativeValue(value, "purpose")}</strong>
-                  <p>{creativeValue(value, "visual_direction")}</p>
-                  <small>{creativeValue(value, "voiceover")}</small>
-                </li>
-              );
-            })}
-          </ol>
-          <h3>Experiment hypothesis</h3>
-          <p>
-            {creativeValue(
-              selected.payload as Record<string, unknown>,
-              "hypothesis",
             )}
-          </p>
-          <h3>CTA</h3>
-          <p>
-            {creativeValue(
-              ((selected.payload as Record<string, unknown>).cta ??
+            <p className="eyebrow">Structured production direction</p>
+            <h2>
+              {creativeValue(
+                selected.payload as Record<string, unknown>,
+                "title",
+              )}
+            </h2>
+            {obsidianVaultName && (
+              <button
+                className="secondary"
+                onClick={() =>
+                  void obsidianOpenUrl(
+                    obsidianVaultName,
+                    "creative_concept",
+                    selected.id,
+                  ).then((url) => window.location.assign(url))
+                }
+              >
+                Open concept in Obsidian
+              </button>
+            )}
+            <p>
+              {creativeValue(
+                selected.payload as Record<string, unknown>,
+                "strategic_rationale",
+              )}
+            </p>
+            <h3>Hook</h3>
+            {Object.entries(
+              ((selected.payload as Record<string, unknown>).hook ??
                 {}) as Record<string, unknown>,
-              "text",
-            )}{" "}
-            <small>
+            ).map(([key, value]) =>
+              value ? (
+                <p key={key}>
+                  <strong>{key.replaceAll("_", " ")}: </strong>
+                  {String(value)}
+                </p>
+              ) : null,
+            )}
+            <h3>Scenes</h3>
+            <ol>
+              {(Array.isArray(selected.payload.scenes)
+                ? selected.payload.scenes
+                : []
+              ).map((scene, index) => {
+                const value = scene as Record<string, unknown>;
+                return (
+                  <li key={index}>
+                    <strong>{creativeValue(value, "purpose")}</strong>
+                    <p>{creativeValue(value, "visual_direction")}</p>
+                    <small>{creativeValue(value, "voiceover")}</small>
+                  </li>
+                );
+              })}
+            </ol>
+            <h3>Experiment hypothesis</h3>
+            <p>
+              {creativeValue(
+                selected.payload as Record<string, unknown>,
+                "hypothesis",
+              )}
+            </p>
+            <h3>CTA</h3>
+            <p>
               {creativeValue(
                 ((selected.payload as Record<string, unknown>).cta ??
                   {}) as Record<string, unknown>,
-                "intent",
-              ).replaceAll("_", " ")}
-            </small>
-          </p>
-          <h3>Message points &amp; claims</h3>
-          <ul>
-            {(Array.isArray(selected.payload.message_points)
-              ? selected.payload.message_points
-              : []
-            ).map((point, index) => {
-              const value = point as Record<string, unknown>;
-              return (
-                <li key={index}>
-                  {creativeValue(value, "text")}{" "}
-                  {creativeValue(value, "kind") === "PRODUCT_FACT" && (
-                    <small>Grounded in Product Brain</small>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          <h3>Research support</h3>
-          <ul>
-            {(Array.isArray(selected.payload.supporting_research_refs)
-              ? selected.payload.supporting_research_refs
-              : []
-            ).map((reference, index) => {
-              const value = reference as Record<string, unknown>;
-              const findingKey = creativeValue(value, "finding_key");
-              const finding = research
-                .flatMap((snapshot) => snapshot.findings)
-                .find((item) => item.key === findingKey);
-              return (
-                <li key={index}>
-                  <strong>{findingKey.replaceAll("_", " ")}</strong>
-                  {finding && <p>{finding.statement}</p>}
-                  <small>
-                    Open Research to inspect its evidence citations.
-                  </small>
-                </li>
-              );
-            })}
-          </ul>
-          <h3>Production assets</h3>
-          <ul>
-            {(Array.isArray(selected.payload.required_assets)
-              ? selected.payload.required_assets
-              : []
-            ).map((requirement, index) => {
-              const value = requirement as Record<string, unknown>;
-              return (
-                <li key={index}>
-                  <strong>
-                    {creativeValue(value, "kind").replaceAll("_", " ")}
-                  </strong>{" "}
-                  {creativeValue(value, "description") ||
-                    creativeValue(value, "intended_role")}
-                  {creativeValue(value, "asset_id") && (
-                    <small> · Asset {creativeValue(value, "asset_id")}</small>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          {Array.isArray(selected.payload.required_disclaimers) &&
-            selected.payload.required_disclaimers.length > 0 && (
-              <>
-                <h3>Required disclaimers</h3>
-                <ul>
-                  {selected.payload.required_disclaimers.map((value, index) => (
-                    <li key={index}>{String(value)}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-          <h3>Production notes</h3>
-          <p>
-            {creativeValue(
-              selected.payload as Record<string, unknown>,
-              "production_notes",
-            )}
-          </p>
-          {workspace.product.can_edit ? (
-            <div className="concept-actions">
-              <button onClick={() => void decide(selected, "SHORTLISTED")}>
-                Shortlist
-              </button>
-              <button
-                className="primary"
-                onClick={() => void decide(selected, "APPROVED_FOR_PRODUCTION")}
-              >
-                Approve for production
-              </button>
-              <button
-                className="danger"
-                onClick={() => void decide(selected, "REJECTED")}
-              >
-                Reject
-              </button>
-            </div>
-          ) : (
-            <p className="readonly-note">
-              Creative review is read-only for members.
+                "text",
+              )}{" "}
+              <small>
+                {creativeValue(
+                  ((selected.payload as Record<string, unknown>).cta ??
+                    {}) as Record<string, unknown>,
+                  "intent",
+                ).replaceAll("_", " ")}
+              </small>
             </p>
-          )}
-          <small>
-            Approval accepts this concept as a future Production input. It does
-            not authorize media spend or publishing.
-          </small>
-        </section>
+            <h3>Message points &amp; claims</h3>
+            <ul>
+              {(Array.isArray(selected.payload.message_points)
+                ? selected.payload.message_points
+                : []
+              ).map((point, index) => {
+                const value = point as Record<string, unknown>;
+                return (
+                  <li key={index}>
+                    {creativeValue(value, "text")}{" "}
+                    {creativeValue(value, "kind") === "PRODUCT_FACT" && (
+                      <small>Grounded in Product Brain</small>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            <h3>Research support</h3>
+            <ul>
+              {(Array.isArray(selected.payload.supporting_research_refs)
+                ? selected.payload.supporting_research_refs
+                : []
+              ).map((reference, index) => {
+                const value = reference as Record<string, unknown>;
+                const findingKey = creativeValue(value, "finding_key");
+                const finding = research
+                  .flatMap((snapshot) => snapshot.findings)
+                  .find((item) => item.key === findingKey);
+                return (
+                  <li key={index}>
+                    <strong>{findingKey.replaceAll("_", " ")}</strong>
+                    {finding && <p>{finding.statement}</p>}
+                    <small>
+                      Open Research to inspect its evidence citations.
+                    </small>
+                  </li>
+                );
+              })}
+            </ul>
+            <h3>Production assets</h3>
+            <ul>
+              {(Array.isArray(selected.payload.required_assets)
+                ? selected.payload.required_assets
+                : []
+              ).map((requirement, index) => {
+                const value = requirement as Record<string, unknown>;
+                return (
+                  <li key={index}>
+                    <strong>
+                      {creativeValue(value, "kind").replaceAll("_", " ")}
+                    </strong>{" "}
+                    {creativeValue(value, "description") ||
+                      creativeValue(value, "intended_role")}
+                    {creativeValue(value, "asset_id") && (
+                      <small> · Asset {creativeValue(value, "asset_id")}</small>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {Array.isArray(selected.payload.required_disclaimers) &&
+              selected.payload.required_disclaimers.length > 0 && (
+                <>
+                  <h3>Required disclaimers</h3>
+                  <ul>
+                    {selected.payload.required_disclaimers.map(
+                      (value, index) => (
+                        <li key={index}>{String(value)}</li>
+                      ),
+                    )}
+                  </ul>
+                </>
+              )}
+            <h3>Production notes</h3>
+            <p>
+              {creativeValue(
+                selected.payload as Record<string, unknown>,
+                "production_notes",
+              )}
+            </p>
+            {workspace.product.can_edit ? (
+              <div className="concept-actions">
+                <button
+                  disabled={busy}
+                  onClick={() => void decide(selected, "SHORTLISTED")}
+                >
+                  Shortlist
+                </button>
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={() =>
+                    void decide(selected, "APPROVED_FOR_PRODUCTION")
+                  }
+                >
+                  Approve for production
+                </button>
+                <button
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => void decide(selected, "REJECTED")}
+                >
+                  Reject
+                </button>
+              </div>
+            ) : (
+              <p className="readonly-note">
+                Creative review is read-only for members.
+              </p>
+            )}
+            <small>
+              Approval accepts this concept as a future Production input. It
+              does not authorize media spend or publishing.
+            </small>
+          </section>
+        </Overlay>
       )}
     </div>
   );
@@ -3031,7 +3139,7 @@ function ProductionPanel({
           </div>
         </section>
       ) : (
-        <EmptyState icon="P" title="No production plan yet">
+        <EmptyState icon="production" title="No production plan yet">
           Approve a current creative concept to begin production planning.
         </EmptyState>
       )}
@@ -3492,7 +3600,7 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
   if (!commerce.mapping)
     return (
       <div className="commerce-workspace">
-        <EmptyState icon="C" title="No commerce mapping yet">
+        <EmptyState icon="concepts" title="No commerce mapping yet">
           Connect the Fake Store and explicitly map this Product to an observed
           commerce product. Names are never matched automatically.
         </EmptyState>
@@ -3854,7 +3962,9 @@ function CommercePanel({ workspace }: { workspace: Workspace }) {
           </div>
           {commerce.proposals.length === 0 && (
             <div className="empty-panel">
-              <span className="empty-glyph">A</span>
+              <span className="empty-glyph">
+                <UIIcon name="Approvals" />
+              </span>
               <h2>No validated proposals yet</h2>
               <p>An AI proposal is never an executed action.</p>
             </div>
@@ -3980,7 +4090,7 @@ function PerformancePanel({ workspace }: { workspace: Workspace }) {
         />
       </section>
       {!publications.length ? (
-        <EmptyState icon="↗" title="No published creative to measure">
+        <EmptyState icon="performance" title="No published creative to measure">
           Publish an approved creative before collecting performance facts.
         </EmptyState>
       ) : (
@@ -4192,7 +4302,7 @@ function InsightsPanel({ workspace }: { workspace: Workspace }) {
         </div>
       )}
       {!latest ? (
-        <EmptyState icon="✦" title="No intelligence report yet">
+        <EmptyState icon="concepts" title="No intelligence report yet">
           Collect performance data, then analyze it to create bounded
           hypotheses.
         </EmptyState>
@@ -5405,7 +5515,7 @@ function ProductCatalog({
                   onClick={() => onOpen(product.id)}
                 >
                   <span className="product-card-art" aria-hidden="true">
-                    {product.name.slice(0, 1)}
+                    <UIIcon name="Products" size={36} />
                   </span>
                   <span className="product-card-body">
                     <span>
@@ -5414,7 +5524,7 @@ function ProductCatalog({
                     </span>
                     <small>{product.category || "Uncategorized product"}</small>
                     <span className="product-card-link">
-                      Open Product Brain <b>→</b>
+                      Open Product Brain <UIIcon name="next" size={16} />
                     </span>
                   </span>
                 </button>
@@ -5533,7 +5643,7 @@ export function ProductWorkspaceApp() {
             aria-label="Close navigation"
             onClick={() => setNavigationOpen(false)}
           >
-            ×
+            <UIIcon name="close" />
           </button>
         </div>
         <nav>
@@ -5630,7 +5740,7 @@ export function ProductWorkspaceApp() {
             aria-expanded={navigationOpen}
             onClick={() => setNavigationOpen(true)}
           >
-            <BrandMark compact />
+            <UIIcon name="menu" />
           </button>
           <div>
             <p className="eyebrow">Creative Manager · Product Brain</p>
@@ -5674,11 +5784,7 @@ export function ProductWorkspaceApp() {
             <button onClick={() => setError("")}>Dismiss</button>
           </div>
         )}
-        {loading && (
-          <div className="loading" role="status">
-            Loading workspace…
-          </div>
-        )}
+        {loading && <WorkspaceSkeleton />}
         {!loading && !brands.length && (
           <section className="first-run">
             <p className="eyebrow">Start with your brand</p>
@@ -5704,7 +5810,7 @@ export function ProductWorkspaceApp() {
                     onClick={() => setDialog("brand")}
                     aria-label="Create brand"
                   >
-                    +
+                    <UIIcon name="add" />
                   </button>
                 </div>
                 {brands.map((brand) => (
@@ -5741,7 +5847,7 @@ export function ProductWorkspaceApp() {
                           setDialog("product");
                         }}
                       >
-                        + Add product
+                        <UIIcon name="add" size={16} /> Add product
                       </button>
                     )}
                   </div>
@@ -5985,23 +6091,16 @@ function CreateDialog({
     }
   };
   return (
-    <div
-      className="dialog-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
+    <Overlay
+      title={`Create ${kind}`}
+      onClose={onClose}
+      mode="dialog"
+      busy={saving}
     >
-      <section
-        className="dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="dialog-title"
-      >
+      <div className="create-form">
         <p className="eyebrow">
           {kind === "brand" ? "Brand setup" : "Product basics"}
         </p>
-        <h2 id="dialog-title">Create {kind}</h2>
         {kind === "product" && (
           <label>
             Brand
@@ -6020,7 +6119,7 @@ function CreateDialog({
         <label>
           {kind === "brand" ? "Brand name" : "Product name"}
           <input
-            autoFocus
+            data-initial-focus
             required
             value={name}
             onChange={(event) => setName(event.target.value)}
@@ -6040,7 +6139,7 @@ function CreateDialog({
           </p>
         )}
         <footer>
-          <button className="secondary" onClick={onClose}>
+          <button className="secondary" onClick={onClose} disabled={saving}>
             Cancel
           </button>
           <button
@@ -6051,7 +6150,7 @@ function CreateDialog({
             {saving ? "Creating…" : `Create ${kind}`}
           </button>
         </footer>
-      </section>
-    </div>
+      </div>
+    </Overlay>
   );
 }

@@ -29,6 +29,15 @@ Object.defineProperty(window, "localStorage", {
   value: new MemoryStorage(),
 });
 
+// jsdom has no top layer. Interaction tests exercise our handlers; browser QA
+// separately verifies native dialog modality and inert background behavior.
+HTMLDialogElement.prototype.showModal = function () {
+  this.setAttribute("open", "");
+};
+HTMLDialogElement.prototype.close = function () {
+  this.removeAttribute("open");
+};
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
