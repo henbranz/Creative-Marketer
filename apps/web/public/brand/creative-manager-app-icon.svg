@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <title>Creative Manager</title>
+  <defs><linearGradient id="c" x1="20" y1="30" x2="170" y2="170" gradientUnits="userSpaceOnUse"><stop stop-color="#7dd3fc"/><stop offset=".5" stop-color="#5eead4"/><stop offset="1" stop-color="#bbf7d0"/></linearGradient></defs>
+  <path fill="url(#c)" d="M18 95c0-40 27-65 60-65 25 0 40 12 62 31l11 10c14 13 7 31-9 32-8 1-14-3-21-8L88 72c-15-10-31-1-31 18v36c0 18 13 26 27 17l38-26c13-9 27-8 34 5 7 12 2 23-10 31l-28 19c-13 9-27 14-41 14-35 0-59-25-59-61V95Z"/>
+  <path fill="#0284c7" d="M18 113c0-18 15-30 39-48 9-7 18-10 27-5-18-2-27 10-27 30v36c0 31 11 47 36 56-5 2-10 4-16 4-35 0-59-25-59-61v-12Z"/>
+  <path fill="#0f766e" d="M82 93c0-5 5-8 9-5l24 15c5 3 5 8 0 11l-24 15c-4 3-9 0-9-5V93Z"/>
+  <path fill="#34d399" d="M174 18c3 16 11 24 25 28-14 4-22 12-25 28-4-16-12-24-26-28 14-4 22-12 26-28Z"/>
+</svg>

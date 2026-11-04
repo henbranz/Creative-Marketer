@@ -9,8 +9,10 @@ export const metadata: Metadata = {
   title: "Creative Manager",
   description: "Creative intelligence for modern growth.",
   icons: {
-    icon: "/brand/creative-manager-app-icon.png",
-    apple: "/brand/creative-manager-app-icon.png",
+    icon: {
+      url: "/brand/creative-manager-app-icon.svg",
+      type: "image/svg+xml",
+    },
   },
 };
 

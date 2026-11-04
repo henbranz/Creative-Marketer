@@ -62,6 +62,12 @@ separate behavior change, not something CSS can fix.
 
 ## Proposed visual system: the creative workbench
 
+**2026-11-04 update:** the user's NEW GENIE playbook and coastal color request
+supersede this section's original blue palette and raster-brand presentation.
+See [DESIGN-GENIE-ADAPTATION](DESIGN-GENIE-ADAPTATION.md) for the active design
+contract, transparent SVG redraw and explicit safety/accessibility adaptations.
+The baseline below remains historical evidence, not the active palette.
+
 A founder reviewing a cut on a laptop in daylight needs legible script, visible media,
 and a clear next decision, not a marketing dashboard. Media is the expressive element;
 the surrounding interface is quiet and precise. Keep the approved Creative Manager logo

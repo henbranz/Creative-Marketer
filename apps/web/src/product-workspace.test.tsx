@@ -1211,7 +1211,7 @@ describe("Product Workspace", () => {
       document.querySelector(".cm-brand-lockup.compact img"),
     ).toHaveAttribute(
       "src",
-      expect.stringContaining("creative-manager-app-icon.png"),
+      expect.stringContaining("creative-manager-app-icon.svg"),
     );
     expect(
       screen.getByRole("button", { name: /Command Center/ }),
@@ -1219,17 +1219,14 @@ describe("Product Workspace", () => {
     expect(screen.getByRole("button", { name: "Products" })).toBeEnabled();
   });
 
-  it("uses the approved Creative Manager lockup on the access screen", () => {
+  it("uses the coastal SVG mark and readable wordmark on the access screen", () => {
     sessionStorage.clear();
     render(<ProductWorkspaceApp />);
-    expect(
-      screen
-        .getByRole("img", { name: "Creative Manager" })
-        .querySelector("img"),
-    ).toHaveAttribute(
+    expect(document.querySelector(".cm-brand-lockup img")).toHaveAttribute(
       "src",
-      expect.stringContaining("creative-manager-lockup-light.png"),
+      expect.stringContaining("creative-manager-mark.svg"),
     );
+    expect(screen.getByText("Creative Manager")).toBeInTheDocument();
   });
 
   it("opens a real overview with completeness progress", async () => {
@@ -1497,7 +1494,7 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByText("Atlas"));
     await screen.findByText("90%");
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
-    expect(screen.getByText("No assets yet")).toBeInTheDocument();
+    expect(await screen.findByText("No assets yet")).toBeInTheDocument();
     expect(screen.getByText(/shared asset library/)).toBeInTheDocument();
   });
 
@@ -1509,10 +1506,41 @@ describe("Product Workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Assets" }));
     expect(await screen.findByText("atlas-hero.png")).toBeInTheDocument();
     expect(screen.getByText(/product hero/)).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Filter assets"), {
-      target: { value: "video" },
+    fireEvent.click(screen.getByRole("button", { name: "Videos" }));
+    expect(screen.getByText("No matching assets")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    fireEvent.change(screen.getByLabelText("Search asset names and roles"), {
+      target: { value: "HERO" },
     });
-    expect(screen.getByText("No assets yet")).toBeInTheDocument();
+    expect(screen.getByText("atlas-hero.png")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Search asset names and roles"), {
+      target: { value: "missing-file" },
+    });
+    expect(screen.getByText("No matching assets")).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByLabelText("Search asset names and roles"), {
+      key: "Escape",
+    });
+    expect(screen.getByText("atlas-hero.png")).toBeInTheDocument();
+    expect(catalogApi.downloadAsset).not.toHaveBeenCalled();
+  });
+
+  it("retries a failed Asset read without issuing a write or preview request", async () => {
+    vi.mocked(catalogApi.listAssets).mockRejectedValue(
+      new Error("private-error"),
+    );
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Assets" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Assets could not be loaded",
+    );
+    expect(document.body.textContent).not.toContain("private-error");
+    vi.mocked(catalogApi.listAssets).mockResolvedValue([readyAsset]);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("atlas-hero.png")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(catalogApi.downloadAsset).not.toHaveBeenCalled();
   });
 
   it("keeps member asset uploads read-only", async () => {
@@ -1624,6 +1652,37 @@ describe("Product Workspace", () => {
     expect(
       await screen.findByRole("button", { name: "Generate 5 concepts" }),
     ).toBeDisabled();
+  });
+
+  it("keeps a failed decision visible inside the drawer without claiming approval", async () => {
+    vi.mocked(catalogApi.listCreativeConceptSets).mockResolvedValue([
+      creativeSet,
+    ]);
+    vi.mocked(catalogApi.decideCreativeConcept).mockRejectedValue(
+      new Error("private-error"),
+    );
+    await renderConnected();
+    fireEvent.click(screen.getByText("Atlas"));
+    await screen.findByText("90%");
+    fireEvent.click(screen.getByRole("button", { name: "Creatives" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Inspect concept" }),
+    );
+    const detail = within(
+      screen.getByRole("dialog", { name: "Creative concept detail" }),
+    );
+    fireEvent.click(
+      detail.getByRole("button", { name: "Approve for production" }),
+    );
+    expect(await detail.findByRole("alert")).toHaveTextContent(
+      "decision could not be confirmed",
+    );
+    expect(document.body.textContent).not.toContain("private-error");
+    expect(catalogApi.decideCreativeConcept).toHaveBeenCalledOnce();
+    expect(catalogApi.startCreativeStrategist).not.toHaveBeenCalled();
+    expect(
+      detail.getByRole("button", { name: "Approve for production" }),
+    ).toBeEnabled();
   });
 
   it("renders a traceable concept detail and persists production review", async () => {

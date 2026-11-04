@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 180" fill="none">
+  <title>Creative Manager</title>
+  <defs>
+    <linearGradient id="ribbon" x1="20" y1="20" x2="158" y2="151" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7dd3fc"/><stop offset=".48" stop-color="#5eead4"/><stop offset="1" stop-color="#bbf7d0"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="25" y1="92" x2="145" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0284c7"/><stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+    <linearGradient id="spark" x1="161" y1="13" x2="193" y2="49" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#bae6fd"/><stop offset="1" stop-color="#34d399"/>
+    </linearGradient>
+  </defs>
+  <!-- Vector redraw of the supplied C/play/spark silhouette. No backdrop or raster. -->
+  <path fill="url(#ribbon)" d="M18 85C18 45 45 20 78 20c25 0 40 12 62 31l11 10c14 13 7 31-9 32-8 1-14-3-21-8L88 62c-15-10-31-1-31 18v36c0 18 13 26 27 17l38-26c13-9 27-8 34 5 7 12 2 23-10 31l-28 19c-13 9-27 14-41 14-35 0-59-25-59-61V85Z"/>
+  <path fill="url(#fold)" d="M18 103c0-18 15-30 39-48 9-7 18-10 27-5-18-2-27 10-27 30v36c0 31 11 47 36 56-5 2-10 4-16 4-35 0-59-25-59-61v-12Z"/>
+  <path fill="#0f766e" d="M82 83c0-5 5-8 9-5l24 15c5 3 5 8 0 11l-24 15c-4 3-9 0-9-5V83Z"/>
+  <path fill="url(#spark)" d="M174 8c3 16 11 24 25 28-14 4-22 12-25 28-4-16-12-24-26-28 14-4 22-12 26-28Z"/>
+</svg>
